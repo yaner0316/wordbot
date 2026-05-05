@@ -1,0 +1,628 @@
+const https = require('https');
+const crypto = require('crypto');
+
+const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+
+const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
+const DIST_TABLE = { appToken: 'GskxbMxMgaDPFRsgqS4cdWvdndb', tableId: 'tbl3EgurgOTXdM3V' };
+const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
+const STATS_TABLE = { appToken: 'Mbh7bK7Jrah7XMsV9lhceE7cnyh', tableId: 'tblQBYKzcQuz8sSq' };
+
+const TRAD_TO_SIMP = {
+    '為':'为','與':'与','過':'过','來':'来','時':'时','們':'们','這':'这',
+    '個':'个','學':'学','國':'国','會':'会','對':'对','麼':'么','沒':'没',
+    '種':'种','經':'经','開':'开','現':'现','長':'长','業':'业','發':'发',
+    '見':'见','關':'关','電':'电','網':'网','場':'场','間':'间','題':'题',
+    '處':'处','應':'应','進':'进','動':'动','運':'运','營':'营','變':'变',
+    '選':'选','門':'门','術':'术','環':'环','說':'说','認':'认','論':'论',
+    '無':'无','機':'机','義':'义','議':'议','護':'护','續':'续','顯':'显',
+    '導':'导','點':'点','讓':'让','證':'证','讀':'读','誤':'误','設':'设',
+    '許':'许','訴':'诉','詞':'词','試':'试','謝':'谢','幾':'几','萬':'万',
+    '參':'参','華':'华','標':'标','錯':'错','雖':'虽','親':'亲','聽':'听',
+    '從':'从','樣':'样','線':'线','風':'风','準':'准','備':'备','創':'创',
+    '極':'极','務':'务','確':'确','單':'单','觀':'观','類':'类','統':'统',
+    '據':'据','層':'层','歷':'历','決':'决','質':'质','號':'号','連':'连',
+    '龍':'龙','隊':'队','農':'农','異':'异','餘':'余','體':'体','島':'岛',
+    '藥':'药','鄉':'乡','錢':'钱','陽':'阳','陰':'阴','雜':'杂','雙':'双',
+    '難':'难','離':'离','靈':'灵','驗':'验','競':'竞','繼':'继','聯':'联',
+    '職':'职','鐵':'铁','歸':'归','寶':'宝','懸':'悬','織':'织','譯':'译',
+    '贊':'赞','輸':'输','辦':'办','鎮':'镇','閉':'闭','陳':'陈','隨':'随',
+    '際':'际','陸':'陆','階':'阶','預':'预','響':'响','謊':'谎','譽':'誉',
+    '計':'计','誇':'夸','寫':'写','愛':'爱','協':'协','歐':'欧','戰':'战',
+    '戲':'戏','興':'兴','積':'积','敗':'败','賽':'赛','贏':'赢','賣':'卖',
+    '買':'买','適':'适','飛':'飞','識':'识','調':'调','貝':'贝','負':'负',
+    '軍':'军','軌':'轨','軟':'软','轉':'转','載':'载','輕':'轻','還':'还',
+    '達':'达','蘇':'苏','彌':'弥','徵':'征','範':'范','髮':'发','麵':'面',
+    '製':'制','鍊':'链','複':'复','韌':'韧','錄':'录'
+};
+
+function toSimp(text) {
+    if (!text || typeof text !== 'string') return text || '';
+    let r = text;
+    for (const [t, s] of Object.entries(TRAD_TO_SIMP)) {
+        if (r.includes(t)) r = r.split(t).join(s);
+    }
+    return r;
+}
+
+function request(method, path, body, token) {
+    return new Promise((resolve, reject) => {
+        const data = body ? JSON.stringify(body) : null;
+        const headers = { 'Content-Type': 'application/json' };
+        if (data) headers['Content-Length'] = Buffer.byteLength(data);
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        const req = https.request({ hostname: 'open.feishu.cn', path, method, headers }, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+                catch { resolve({}); }
+            });
+        });
+        req.on('error', reject);
+        if (data) req.write(data);
+        req.end();
+    });
+}
+
+let cachedToken = null;
+let tokenExpiry = 0;
+
+async function getToken() {
+    if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+    const res = await request('POST', '/open-apis/auth/v3/tenant_access_token/internal', {
+        app_id: APP_ID, app_secret: APP_SECRET
+    });
+    cachedToken = res.tenant_access_token;
+    tokenExpiry = Date.now() + (res.expire || 7200) * 1000 - 60000;
+    return cachedToken;
+}
+
+async function getRecords(table) {
+    const token = await getToken();
+    const res = await request('GET', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records?page_size=500`, null, token);
+    return res.data?.items || [];
+}
+
+async function addRecord(table, fields) {
+    const token = await getToken();
+    console.log('写入表:', table.appToken, table.tableId);
+    console.log('写入字段:', JSON.stringify(fields));
+    const res = await request('POST', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records`, { fields }, token);
+    console.log('API返回:', JSON.stringify(res).substring(0, 200));
+    if (res.code !== 0) {
+        throw new Error(`添加记录失败: ${res.msg || res.code}`);
+    }
+    return res;
+}
+
+async function updateRecord(table, recordId, fields) {
+    const token = await getToken();
+    const res = await request('PUT', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/${recordId}`, { fields }, token);
+    console.log('updateRecord返回:', JSON.stringify(res).substring(0, 200));
+    if (res.code !== 0) {
+        throw new Error(`更新记录失败: ${res.msg || res.code}`);
+    }
+    return res;
+}
+
+function secureRandom(arr, count) {
+    if (arr.length <= count) return [...arr];
+    const pool = [...arr];
+    const result = [];
+    while (result.length < count && pool.length > 0) {
+        const idx = crypto.randomInt(0, pool.length);
+        result.push(pool.splice(idx, 1)[0]);
+    }
+    return result;
+}
+
+async function getDistractorPool() {
+    const records = await getRecords(WORD_TABLE);
+    const pool = {};
+    for (const r of records) {
+        const w = r.fields.Word;
+        if (w) {
+            pool[w.toLowerCase()] = {
+                pos: r.fields.POS,
+                meaning: r.fields.Meaning,
+                distractors: r.fields.Distractors ? r.fields.Distractors.split(',').map(s => s.trim()).filter(s => s) : [],
+                context: r.fields.Context || '',
+                rawContext: r.fields.Context || ''
+            };
+        }
+    }
+    return pool;
+}
+
+async function getPendingWords(userId) {
+    const records = await getRecords(WORD_TABLE);
+    return records
+        .filter(r => r.fields.user === userId && r.fields.Status !== 'optF5P0W3O')
+        .map(r => ({ word: r.fields.Word, record_id: r.record_id }));
+}
+
+function isContextValid(ctx) {
+    if (!ctx || ctx === '___' || ctx.includes('[object Object]')) return false;
+    return true;
+}
+
+function generateQuestion(word, info, distractors, type, allWords) {
+    if (!distractors || distractors.length < 3) {
+        distractors = secureRandom(allWords.filter(w => w !== word.toLowerCase()), 3);
+    }
+    const idx = crypto.randomInt(0, 4);
+    const opts = [...distractors];
+    opts.splice(idx, 0, word);
+    const letters = ['A', 'B', 'C', 'D'];
+    
+    let context = info.context || '';
+    context = context.replace(new RegExp(word, 'gi'), '___');
+    
+    if (type === 1) {
+        return {
+            type: 1,
+            word,
+            context: context,
+            options: opts.map((o, i) => `${letters[i]}. ${o}`),
+            answer: letters[idx]
+        };
+    }
+    if (type === 2) {
+        return {
+            type: 2,
+            word,
+            meaning: info.meaning || '',
+            options: opts.map((o, i) => `${letters[i]}. ${o}`),
+            answer: letters[idx]
+        };
+    }
+    const lastBlank = context.lastIndexOf('___');
+    return {
+        type: 3,
+        word,
+        context: context.substring(0, lastBlank),
+        suffix: context.substring(lastBlank + 3),
+        options: opts.map((o, i) => `${letters[i]}. ${o}`),
+        answer: letters[idx]
+    };
+}
+
+async function generateQuiz(userId) {
+    const pool = await getDistractorPool();
+    const pending = await getPendingWords(userId);
+
+    const valid = pending.filter(w => {
+        const info = pool[w.word.toLowerCase()];
+        return info && info.meaning && (info.distractors || []).filter(d => d).length >= 3;
+    });
+
+    if (valid.length < 2) {
+        return { error: `可用单词不足，当前${valid.length}个，需要至少2个` };
+    }
+
+    const typeCounts = { 1: 6, 2: 2, 3: 2 };
+    const totalQuestions = 10;
+    const selected = secureRandom(valid, Math.min(valid.length, totalQuestions + 2));
+    const usedWords = new Set();
+    const usedDistractors = new Set();
+    const questions = [];
+    const testId = crypto.randomUUID().split('-')[0];
+
+    for (const w of selected) {
+        if (questions.length >= totalQuestions) break;
+        const key = w.word.toLowerCase();
+        if (usedWords.has(key)) continue;
+        usedWords.add(key);
+
+        const info = pool[key];
+        if (!info || !info.meaning) continue;
+        
+        const specificDistrs = (info.distractors || []).filter(d => d !== key);
+        
+        if (specificDistrs.length < 3) continue;
+        
+        const distrs = secureRandom(specificDistrs, 3);
+        distrs.forEach(d => usedDistractors.add(d));
+
+        const idx = crypto.randomInt(0, 4);
+        const letters = ['A', 'B', 'C', 'D'];
+        
+        const typePool = [];
+        for (const [type, count] of Object.entries(typeCounts)) {
+            for (let i = 0; i < count; i++) typePool.push(parseInt(type));
+        }
+        
+        const availableTypes = typePool.filter(t => {
+            if (t === 1) return info.rawContext || info.context;
+            return true;
+        });
+        
+        if (availableTypes.length === 0) continue;
+        
+        const qType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+        
+        let q;
+        if (qType === 1) {
+            const meaning = info.meaning?.split(';')[0]?.trim() || '';
+            const rawContext = info.rawContext || info.context || '';
+            
+            let sentence = rawContext;
+            if (sentence) {
+                const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`\\b${escapedKey}\\b`, 'gi');
+                sentence = sentence.replace(regex, '_____');
+            }
+            
+            let displayContext;
+            if (sentence && sentence.includes('_____')) {
+                displayContext = sentence;
+            } else if (meaning) {
+                displayContext = `[选择正确单词] The word "_____" means: ${meaning}`;
+            } else {
+                displayContext = `[选择正确单词] _____: (${key})`;
+            }
+            
+            const opts = [...distrs];
+            opts.splice(idx, 0, key);
+            q = {
+                type: 1,
+                word: key,
+                context: displayContext,
+                options: opts.map((o, i) => `${letters[i]}. ${o}`),
+                answer: letters[idx]
+            };
+        } else if (qType === 2) {
+            const correctMeaning = info.meaning.split(';')[0].trim();
+            const wordOpts = [key, ...distrs.slice(0, 3)];
+            const shuffledOpts = secureRandom(wordOpts, 4);
+            const correctIdx = shuffledOpts.indexOf(key);
+            q = {
+                type: 2,
+                word: key,
+                context: correctMeaning,
+                options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`),
+                answer: letters[correctIdx]
+            };
+        } else {
+            const correctMeaning = info.meaning.split(';')[0].trim();
+            const meaningOpts = distrs.map(d => pool[d]?.meaning?.split(';')[0]?.trim()).filter(m => m);
+            const allOpts = [correctMeaning, ...meaningOpts.slice(0, 3)];
+            const shuffledOpts = secureRandom(allOpts, 4);
+            const correctIdx = shuffledOpts.indexOf(correctMeaning);
+            q = {
+                type: 3,
+                word: key,
+                context: key,
+                options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`),
+                answer: letters[correctIdx]
+            };
+        }
+        
+        q.testId = testId;
+        questions.push(q);
+    }
+
+    const token = await getToken();
+    for (const q of questions) {
+        await addRecord(TEST_TABLE, {
+            user: userId,
+            test_id: testId,
+            word: q.word,
+            question_type: q.type,
+            correct_answer: q.answer,
+            test_time: Date.now()
+        });
+    }
+
+    return {
+        testId,
+        questions: questions.map(({ testId: _, ...q }) => q)
+    };
+}
+
+async function submitAnswers(userId, testId, answers) {
+    const token = await getToken();
+    const records = await getRecords(TEST_TABLE);
+    const testRecords = records
+        .filter(r => r.fields.user === userId && r.fields.test_id === testId)
+        .sort((a, b) => a.fields.test_time - b.fields.test_time);
+
+    if (testRecords.length === 0) return { error: '未找到测试记录' };
+
+    let correct = 0;
+    const results = [];
+    const wordMap = {};
+
+    const letters = ['A', 'B', 'C', 'D'];
+    for (let i = 0; i < Math.min(testRecords.length, answers.length); i++) {
+        const rec = testRecords[i];
+        const yourAnswerIdx = answers[i];
+        const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
+        const correctAnswer = rec.fields.correct_answer;
+        const isCorrect = yourAnswer === correctAnswer;
+        if (isCorrect) correct++;
+
+        await updateRecord(TEST_TABLE, rec.record_id, {
+            your_answer: yourAnswer || '',
+            is_correct: isCorrect ? ['optHGT7gYf'] : ['optbe4bsQk']
+        });
+
+        const word = rec.fields.word;
+        if (!wordMap[word]) wordMap[word] = { correct: 0, total: 0 };
+        wordMap[word].total++;
+        if (isCorrect) wordMap[word].correct++;
+
+        results.push({ q: i + 1, word, your: yourAnswer, answer: correctAnswer, correct: isCorrect });
+    }
+
+    const masteredWords = [];
+    for (const [word, stats] of Object.entries(wordMap)) {
+        if (stats.correct >= stats.total) {
+            masteredWords.push(word);
+            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId && r.fields.Word === word);
+            if (wordRecords.length > 0) {
+                await updateRecord(WORD_TABLE, wordRecords[0].record_id, { Status: 'optF5P0W3O' });
+            }
+        }
+    }
+
+    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId);
+    const total = wordRecords.length;
+    const mastered = wordRecords.filter(r => r.fields.Status === 'optF5P0W3O').length;
+
+    const statsRecords = await getRecords(STATS_TABLE);
+    const userRecord = statsRecords.find(r => r.fields.user === userId);
+
+    const statsFields = {
+        user: userId,
+        total_words: total,
+        mastered_words: mastered,
+        pending_words: total - mastered,
+        total_tests: Number((userRecord?.fields?.total_tests || 0)) + 1,
+        correct_count: Number((userRecord?.fields?.correct_count || 0)) + correct,
+        last_test_time: Date.now()
+    };
+
+    if (userRecord) {
+        await updateRecord(STATS_TABLE, userRecord.record_id, statsFields);
+    } else {
+        await addRecord(STATS_TABLE, statsFields);
+    }
+
+    console.log('submitAnswers results:', JSON.stringify(results).substring(0, 500));
+    return {
+        results,
+        correct,
+        total: results.length,
+        accuracy: `${((correct / results.length) * 100).toFixed(1)}%`,
+        masteredWords,
+        stats: { total, mastered, pending: total - mastered }
+    };
+}
+
+async function getStats(userId) {
+    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId);
+    const total = wordRecords.length;
+    const mastered = wordRecords.filter(r => r.fields.Status === 'optF5P0W3O').length;
+    const statsRecords = await getRecords(STATS_TABLE);
+    const userRecord = statsRecords.find(r => r.fields.user === userId);
+
+    const acc = (userRecord?.fields?.total_tests || 0) > 0 
+        ? ((userRecord.fields.correct_count / (userRecord.fields.total_tests * 4)) * 100)
+        : 0;
+    return {
+        user: userId,
+        totalWords: total,
+        masteredWords: mastered,
+        pendingWords: total - mastered,
+        totalTests: userRecord?.fields?.total_tests || 0,
+        correctCount: userRecord?.fields?.correct_count || 0,
+        accuracyRate: `${acc.toFixed(1)}%`,
+        lastTestTime: userRecord?.fields?.last_test_time || null
+    };
+}
+
+async function addWord(targetUser, wordData) {
+    const { Word, Meaning, POS, Context } = wordData;
+    if (!Word || !Meaning) {
+        throw new Error('单词和释义不能为空');
+    }
+    const fields = {
+        user: targetUser,
+        Word: toSimp(Word),
+        Meaning: toSimp(Meaning),
+        Status: 'Pending',
+        record_time: Date.now()
+    };
+    if (POS) fields.POS = POS;
+    if (Context) fields.Context = toSimp(Context);
+    
+    await addRecord(WORD_TABLE, fields);
+    return { success: true, word: Word };
+}
+
+async function getAllUsers() {
+    const records = await getRecords(WORD_TABLE);
+    const userSet = new Set(records.map(r => r.fields.user).filter(u => u));
+    return Array.from(userSet).sort();
+}
+
+async function getAllStats() {
+    const users = await getAllUsers();
+    const stats = [];
+    for (const user of users) {
+        const userStats = await getStats(user);
+        stats.push(userStats);
+    }
+    return stats;
+}
+
+async function validateWords(words) {
+    const errors = [];
+    const multiMeanings = [];
+    const distPool = await getDistractorPool();
+    
+    for (const word of words) {
+        const lowerWord = word.toLowerCase();
+        if (!/^[a-z]+$/.test(lowerWord)) {
+            errors.push(word);
+            continue;
+        }
+        
+        let meanings = [];
+        
+        const exists = distPool[lowerWord];
+        if (exists && exists.meaning) {
+            meanings = exists.meaning.split(',').map(m => m.trim()).filter(m => m);
+        } else {
+            const def = await fetchWordDefinition(word);
+            if (def.meaning && def.meaning.includes(';')) {
+                meanings = def.meaning.split(';').map(m => m.trim()).filter(m => m);
+            } else if (def.meaning) {
+                meanings = [def.meaning];
+            }
+        }
+        
+        if (meanings.length > 1) {
+            multiMeanings.push({ word, meanings });
+        }
+    }
+    
+    return { errors, multiMeanings };
+}
+
+function requesthttp(url) {
+    return new Promise((resolve, reject) => {
+        const req = https.request(url, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+                catch { resolve(null); }
+            });
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+async function fetchWordDefinition(word) {
+    try {
+        const wordLower = word.toLowerCase();
+        const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${wordLower}`;
+        const data = await requesthttp(url);
+        
+        if (data && data[0]) {
+            const entry = data[0];
+            const meanings = [];
+            let pos = 'n.';
+            let example = '';
+            
+            for (const meaning of entry.meanings || []) {
+                if (meaning.partOfSpeech) pos = meaning.partOfSpeech;
+                for (const def of meaning.definitions || []) {
+                    meanings.push(def.definition);
+                    if (def.example && !example) {
+                        example = def.example.replace(/"/g, '');
+                    }
+                }
+            }
+            
+            const meaningStr = meanings.slice(0, 3).join('; ');
+            
+            return {
+                meaning: toSimp(meaningStr || word),
+                pos: toSimp(pos),
+                context: example ? example : '',
+                rawContext: example || ''
+            };
+        }
+    } catch (e) { }
+    
+    try {
+        const wordLower = word.toLowerCase();
+        const encoded = encodeURIComponent(wordLower);
+        const url = `https://api.mymemory.translated.net/get?q=${encoded}&langpair=en|zht`;
+        const data = await requesthttp(url);
+        
+        if (data && data.responseStatus === 200) {
+            const translation = data.responseData?.translatedText || '';
+            return {
+                meaning: toSimp(translation || word),
+                pos: toSimp('n.'),
+                context: toSimp(`The word "${word}" is used in context.`)
+            };
+        }
+    } catch (e) { }
+    
+    return {
+        meaning: toSimp(word),
+        pos: toSimp('n.'),
+        context: toSimp(`The word "${word}" is used in context.`)
+    };
+}
+
+async function addWords(targetUser, words) {
+    console.log('addWords 被调用', targetUser, words);
+    let count = 0;
+    const errors = [];
+    
+    for (const word of words) {
+        try {
+            const def = await fetchWordDefinition(word);
+            
+            const distPool = await getDistractorPool();
+            const lowerWord = word.toLowerCase();
+            const allWords = Object.keys(distPool);
+            const distractors = [];
+            
+            while (distractors.length < 3 && allWords.length > 0) {
+                const idx = crypto.randomInt(0, allWords.length);
+                const candidate = allWords[idx];
+                if (candidate !== lowerWord && !distractors.includes(candidate)) {
+                    distractors.push(candidate);
+                }
+                allWords.splice(idx, 1);
+            }
+            
+            const wordFields = {
+                user: targetUser,
+                Word: toSimp(word),
+                Meaning: def.meaning,
+                Distractors: distractors.join(','),
+                Status: 'Pending',
+                record_time: Date.now()
+            };
+            if (def.pos) wordFields.POS = def.pos;
+            
+            await addRecord(WORD_TABLE, wordFields);
+            count++;
+            console.log(`成功写入: ${word}`);
+        } catch (e) {
+            console.log(`写入失败 ${word}: ${e.message}`);
+            errors.push(`${word}: ${e.message}`);
+        }
+    }
+    
+    if (errors.length > 0) {
+        return { count, errors, error: `部分单词录入失败: ${errors.join('; ')}` };
+    }
+    
+    return { count, success: true };
+}
+
+async function updateMultiDefinition(targetUser, words) {
+    console.log('updateMultiDefinition called:', targetUser, words);
+    const records = await getRecords(WORD_TABLE);
+    console.log('总记录数:', records.length);
+    const userRecords = records.filter(r => r.fields.user === targetUser && words.includes(r.fields.Word));
+    console.log('匹配记录:', userRecords.length);
+    for (const record of userRecords) {
+        console.log('更新记录:', record.record_id, record.fields.Word);
+        await updateRecord(WORD_TABLE, record.record_id, { multi_definition: ['opthB7bmkB'] });
+    }
+}
+
+module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition };
