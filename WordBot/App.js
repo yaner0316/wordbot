@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 
-const API = 'http://localhost:3000';
+const API = 'https://wordbot-1-w9il.onrender.com';
 
 export default function App() {
   const [screen, setScreen] = useState('select');
