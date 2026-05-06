@@ -1,6 +1,7 @@
 {
   "scripts": {
-    "start": "cd backend && npm start"
+    "build": "cd backend && npm install",
+    "start": "node backend/server.js"
   },
   "dependencies": {
     "xlsx": "^0.18.5"
