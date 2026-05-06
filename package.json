@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "start": "cd backend && npm start"
+  },
   "dependencies": {
     "xlsx": "^0.18.5"
   }
