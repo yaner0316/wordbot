@@ -518,33 +518,63 @@ function generateDistractorsWithAI(word, meaning) {
     return null;
 }
 
-function generateExampleWithAI(word, meaning) {
+function callMiniMaxAPI(prompt) {
+    return new Promise((resolve, reject) => {
+        if (!MINIMAX_API_KEY) {
+            reject(new Error('MINIMAX_API_KEY not set'));
+            return;
+        }
+        const data = JSON.stringify({
+            model: 'MiniMax-M2.7',
+            messages: [{ role: 'user', content: prompt }]
+        });
+        const options = {
+            hostname: 'api.minimax.chat',
+            path: '/v1/text/chatcompletion_v2',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+                'Content-Length': Buffer.byteLength(data)
+            }
+        };
+        const req = https.request(options, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                try {
+                    const result = JSON.parse(Buffer.concat(chunks).toString());
+                    const content = result.choices?.[0]?.message?.content;
+                    resolve(content);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        req.on('error', reject);
+        req.write(data);
+        req.end();
+    });
+}
+
+async function generateExampleWithAI(word, meaning) {
     const prompt = `为单词 ${word} 生成一个英文例句，返回JSON：{"example": "例句"}`;
     try {
-        const escapedPrompt = prompt.replace(/"/g, '\\"');
-        const result = execSync(`mmx text chat --message "${escapedPrompt}" --output json`, { encoding: 'utf8', timeout: 20000 });
-        const textMatch = result.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        if (textMatch) {
-            const innerJson = textMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
-            const exampleMatch = innerJson.match(/"example"\s*:\s*"([^"]+)"/);
-            if (exampleMatch) {
-                return exampleMatch[1];
-            }
+        const result = await callMiniMaxAPI(prompt);
+        if (result) {
+            const match = result.match(/"example"\s*:\s*"([^"]+)"/);
+            if (match) return match[1];
         }
     } catch (e) { }
     return null;
 }
 
-function translateToCN(text) {
+async function translateToCN(text) {
     if (!text) return null;
     const prompt = `翻译成中文（只返回翻译结果）：${text}`;
     try {
-        const escapedPrompt = prompt.replace(/"/g, '\\"');
-        const result = execSync(`mmx text chat --message "${escapedPrompt}" --output json`, { encoding: 'utf8', timeout: 15000 });
-        const textMatch = result.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        if (textMatch) {
-            return textMatch[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim();
-        }
+        const result = await callMiniMaxAPI(prompt);
+        if (result) return result.trim();
     } catch (e) { }
     return null;
 }
@@ -635,14 +665,14 @@ async function addWords(targetUser, words) {
                 }
             }
             
-            let example = generateExampleWithAI(word, def.meaning);
+            let example = await generateExampleWithAI(word, def.meaning);
             if (!example && def.context) {
                 example = def.context;
             }
             
-            let cnMeaning = translateToCN(def.meaning);
+            let cnMeaning = await translateToCN(def.meaning);
             if (!cnMeaning) {
-                cnMeaning = translateToCN(info.cnMeaning);
+                cnMeaning = await translateToCN(info.cnMeaning);
             }
             
             const wordFields = {
