@@ -1,0 +1,62 @@
+# 单词机器人 App 构建指南
+
+## 一、后端服务（已运行）
+
+后端位于 `backend/` 文件夹，监听 `http://0.0.0.0:3000`
+
+## 二、创建React Native项目
+
+```bash
+cd d:\Personal\XY\word_bot\word_bot
+npx create-expo-app@latest WordBot --template blank
+```
+
+创建完成后，将以下文件覆盖到 `WordBot/` 目录：
+- `App.js`
+- `app.json`
+- `package.json`
+- `babel.config.js`
+
+## 三、安装依赖
+
+```bash
+cd WordBot
+npm install
+```
+
+## 四、配置后端地址
+
+编辑 `App.js`，修改第6行的 `API_URL`：
+```javascript
+const API_URL = 'http://你的电脑IP:3000';
+```
+
+## 五、构建Android应用
+
+### 方式1: 使用EAS Build（推荐）
+```bash
+npx eas login
+npx eas build -p android --profile preview
+```
+
+### 方式2: 本地构建
+```bash
+npx expo run:android
+```
+
+## 六、修改后端地址后需更新
+
+将生成的APK安装到手机后，确保手机与电脑在同一局域网，然后修改App.js中的API_URL为电脑IP地址。
+
+## 文件结构
+
+```
+word_bot/
+├── backend/          # 后端服务（Node.js + Express）
+│   ├── server.js
+│   └── feishu.js
+└── WordBot/          # React Native App
+    ├── App.js         # 主界面
+    ├── app.json       # 配置
+    └── package.json
+```

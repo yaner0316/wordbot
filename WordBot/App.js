@@ -149,7 +149,7 @@ export default function App() {
   if (screen === 'quiz' && quiz) {
     const q = quiz[current];
     const total = quiz.length;
-    const typeName = q.type === 1 ? '语境填空' : q.type === 2 ? '中译英' : '英译中';
+    const typeName = q.type === 1 ? '语境填空' : q.type === 2 ? '英英释义' : '中英释义';
     return (
       <ScrollView style={s.container}>
         <Text style={s.title}>第 {current + 1} / {total} 题</Text>

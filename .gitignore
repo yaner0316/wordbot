@@ -35,3 +35,6 @@ backend/*.log
 # Temporary files
 *.tmp
 *.bak
+
+# Frontend (separate repo)
+wordbot-web/

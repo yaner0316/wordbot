@@ -1,8 +1,9 @@
 const https = require('https');
 const crypto = require('crypto');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
-const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 const DIST_TABLE = { appToken: 'GskxbMxMgaDPFRsgqS4cdWvdndb', tableId: 'tbl3EgurgOTXdM3V' };
@@ -127,6 +128,7 @@ async function getDistractorPool() {
             pool[w.toLowerCase()] = {
                 pos: r.fields.POS,
                 meaning: r.fields.Meaning,
+                CN_Meaning: r.fields.CN_Meaning || '',
                 distractors: r.fields.Distractors ? r.fields.Distractors.split(',').map(s => s.trim()).filter(s => s) : [],
                 context: r.fields.Context || '',
                 rawContext: r.fields.Context || ''
@@ -202,7 +204,7 @@ async function generateQuiz(userId) {
         return { error: `可用单词不足，当前${valid.length}个，需要至少2个` };
     }
 
-    const typeCounts = { 1: 6, 2: 2, 3: 2 };
+    const typeCounts = { 1: 8, 2: 2 };
     const totalQuestions = 10;
     const selected = secureRandom(valid, Math.min(valid.length, totalQuestions + 2));
     const usedWords = new Set();
@@ -236,7 +238,8 @@ async function generateQuiz(userId) {
         
         const availableTypes = typePool.filter(t => {
             if (t === 1) return info.rawContext || info.context;
-            return true;
+            if (t === 2) return info.meaning?.split(';')[0]?.trim();
+            return false;
         });
         
         if (availableTypes.length === 0) continue;
@@ -282,19 +285,6 @@ async function generateQuiz(userId) {
                 type: 2,
                 word: key,
                 context: correctMeaning,
-                options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`),
-                answer: letters[correctIdx]
-            };
-        } else {
-            const correctMeaning = info.meaning.split(';')[0].trim();
-            const meaningOpts = distrs.map(d => pool[d]?.meaning?.split(';')[0]?.trim()).filter(m => m);
-            const allOpts = [correctMeaning, ...meaningOpts.slice(0, 3)];
-            const shuffledOpts = secureRandom(allOpts, 4);
-            const correctIdx = shuffledOpts.indexOf(correctMeaning);
-            q = {
-                type: 3,
-                word: key,
-                context: key,
                 options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`),
                 answer: letters[correctIdx]
             };
@@ -508,6 +498,57 @@ function requesthttp(url) {
     });
 }
 
+function generateDistractorsWithAI(word, meaning) {
+    const prompt = `为单词 ${word} 生成3个含义相近的英文干扰词，返回JSON：{"distractors": ["word1", "word2", "word3"]}`;
+    try {
+        const escapedPrompt = prompt.replace(/"/g, '\\"');
+        const result = execSync(`mmx text chat --message "${escapedPrompt}" --output json`, { encoding: 'utf8', timeout: 20000 });
+        const textMatch = result.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (textMatch) {
+            const innerJson = textMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+            const distMatch = innerJson.match(/"distractors"\s*:\s*\[(.*?)\]/s);
+            if (distMatch) {
+                const words = distMatch[1].match(/"([^"]+)"/g);
+                if (words && words.length >= 3) {
+                    return words.map(w => w.replace(/"/g, ''));
+                }
+            }
+        }
+    } catch (e) { }
+    return null;
+}
+
+function generateExampleWithAI(word, meaning) {
+    const prompt = `为单词 ${word} 生成一个英文例句，返回JSON：{"example": "例句"}`;
+    try {
+        const escapedPrompt = prompt.replace(/"/g, '\\"');
+        const result = execSync(`mmx text chat --message "${escapedPrompt}" --output json`, { encoding: 'utf8', timeout: 20000 });
+        const textMatch = result.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (textMatch) {
+            const innerJson = textMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
+            const exampleMatch = innerJson.match(/"example"\s*:\s*"([^"]+)"/);
+            if (exampleMatch) {
+                return exampleMatch[1];
+            }
+        }
+    } catch (e) { }
+    return null;
+}
+
+function translateToCN(text) {
+    if (!text) return null;
+    const prompt = `翻译成中文（只返回翻译结果）：${text}`;
+    try {
+        const escapedPrompt = prompt.replace(/"/g, '\\"');
+        const result = execSync(`mmx text chat --message "${escapedPrompt}" --output json`, { encoding: 'utf8', timeout: 15000 });
+        const textMatch = result.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (textMatch) {
+            return textMatch[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim();
+        }
+    } catch (e) { }
+    return null;
+}
+
 async function fetchWordDefinition(word) {
     try {
         const wordLower = word.toLowerCase();
@@ -573,37 +614,58 @@ async function addWords(targetUser, words) {
         try {
             const def = await fetchWordDefinition(word);
             
-            const distPool = await getDistractorPool();
-            const lowerWord = word.toLowerCase();
-            const allWords = Object.keys(distPool);
-            const distractors = [];
-            
-            while (distractors.length < 3 && allWords.length > 0) {
-                const idx = crypto.randomInt(0, allWords.length);
-                const candidate = allWords[idx];
-                if (candidate !== lowerWord && !distractors.includes(candidate)) {
-                    distractors.push(candidate);
+            let distractors = generateDistractorsWithAI(word, def.meaning);
+            if (!distractors || distractors.length < 3) {
+                const distPool = await getDistractorPool();
+                const lowerWord = word.toLowerCase();
+                const allWords = Object.keys(distPool);
+                const fallback = [];
+                while (fallback.length < 3 && allWords.length > 0) {
+                    const idx = crypto.randomInt(0, allWords.length);
+                    const candidate = allWords[idx];
+                    if (candidate !== lowerWord && !fallback.includes(candidate)) {
+                        fallback.push(candidate);
+                    }
+                    allWords.splice(idx, 1);
                 }
-                allWords.splice(idx, 1);
+                if (distractors) {
+                    distractors = [...distractors, ...fallback].slice(0, 3);
+                } else {
+                    distractors = fallback;
+                }
+            }
+            
+            let example = generateExampleWithAI(word, def.meaning);
+            if (!example && def.context) {
+                example = def.context;
+            }
+            
+            let cnMeaning = translateToCN(def.meaning);
+            if (!cnMeaning) {
+                cnMeaning = translateToCN(info.cnMeaning);
             }
             
             const wordFields = {
                 user: targetUser,
                 Word: toSimp(word),
                 Meaning: def.meaning,
-                Distractors: distractors.join(','),
+                CN_Meaning: cnMeaning || '',
+                Distractors: Array.isArray(distractors) ? distractors.join(',') : '',
                 Status: 'Pending',
                 record_time: Date.now()
             };
             if (def.pos) wordFields.POS = def.pos;
+            if (example) wordFields.Context = example;
             
             await addRecord(WORD_TABLE, wordFields);
             count++;
-            console.log(`成功写入: ${word}`);
+            console.log(`成功写入: ${word}, 干扰词: ${distractors.join(', ')}, 中文: ${cnMeaning?.substring(0, 15)}...`);
         } catch (e) {
             console.log(`写入失败 ${word}: ${e.message}`);
             errors.push(`${word}: ${e.message}`);
         }
+        
+        await new Promise(r => setTimeout(r, 1000));
     }
     
     if (errors.length > 0) {
