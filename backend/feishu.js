@@ -122,19 +122,32 @@ function secureRandom(arr, count) {
 async function getDistractorPool() {
     const records = await getRecords(WORD_TABLE);
     const pool = {};
+    // 词库统计
+    let stats = { total: 0, hasCN: 0, hasDist3: 0, canType3: 0 };
+    
     for (const r of records) {
-        const w = r.fields.Word;
+        const w = r.fields.Word?.toLowerCase();
         if (w) {
-            pool[w.toLowerCase()] = {
+            const cn = r.fields.CN_Meaning?.trim() || '';
+            const dists = r.fields.Distractors ? r.fields.Distractors.split(',').map(s => s.trim()).filter(s => s) : [];
+            const context = r.fields.Context || '';
+            
+            pool[w] = {
                 pos: r.fields.POS,
                 meaning: r.fields.Meaning,
-                CN_Meaning: r.fields.CN_Meaning || '',
-                distractors: r.fields.Distractors ? r.fields.Distractors.split(',').map(s => s.trim()).filter(s => s) : [],
-                context: r.fields.Context || '',
-                rawContext: r.fields.Context || ''
+                CN_Meaning: cn,
+                distractors: dists,
+                context: context,
+                rawContext: context
             };
+            
+            stats.total++;
+            if (cn) stats.hasCN++;
+            if (dists.length >= 3) stats.hasDist3++;
+            if (cn && dists.length >= 3) stats.canType3++;
         }
     }
+    console.log(`词库: 总数=${stats.total}, 有中文=${stats.hasCN}, 有3个干扰词=${stats.hasDist3}, 可出type3=${stats.canType3}`);
     return pool;
 }
 
@@ -197,20 +210,47 @@ async function generateQuiz(userId) {
 
     const valid = pending.filter(w => {
         const info = pool[w.word.toLowerCase()];
-        return info && info.meaning && (info.distractors || []).filter(d => d).length >= 3;
+        return info && (info.distractors || []).filter(d => d).length >= 3;
     });
 
     if (valid.length < 2) {
         return { error: `可用单词不足，当前${valid.length}个，需要至少2个` };
     }
 
-    const typeCounts = { 1: 8, 2: 2 };
+    // 分离不同类型的单词
+    const withCN = valid.filter(w => {
+        const info = pool[w.word.toLowerCase()];
+        return info.CN_Meaning?.trim();
+    });
+    const withContext = valid.filter(w => {
+        const info = pool[w.word.toLowerCase()];
+        return !info.CN_Meaning?.trim() && info.context?.trim();
+    });
+    const withMeaning = valid.filter(w => {
+        const info = pool[w.word.toLowerCase()];
+        return !info.CN_Meaning?.trim() && !info.context?.trim() && info.meaning?.trim();
+    });
+
+    console.log(`可用: 总=${valid.length}, type3=${withCN.length}, type1=${withContext.length}, type2=${withMeaning.length}`);
+
+    // 严格按 6:2:2 比例选取
+    const targetType3 = 2, targetType1 = 6, targetType2 = 2;
+    const selectedType3 = secureRandom(withCN, Math.min(withCN.length, targetType3));
+    const selectedType1 = secureRandom(withContext, Math.min(withContext.length, targetType1));
+    const selectedType2 = secureRandom(withMeaning, Math.min(withMeaning.length, targetType2));
+
+    const selected = [...selectedType3, ...selectedType1, ...selectedType2];
+    const typeMap = new Map();
+    selectedType3.forEach(w => typeMap.set(w.word.toLowerCase(), 3));
+    selectedType1.forEach(w => typeMap.set(w.word.toLowerCase(), 1));
+    selectedType2.forEach(w => typeMap.set(w.word.toLowerCase(), 2));
+
     const totalQuestions = 10;
-    const selected = secureRandom(valid, Math.min(valid.length, totalQuestions + 2));
     const usedWords = new Set();
     const usedDistractors = new Set();
     const questions = [];
     const testId = crypto.randomUUID().split('-')[0];
+    const letters = ['A', 'B', 'C', 'D'];
 
     for (const w of selected) {
         if (questions.length >= totalQuestions) break;
@@ -219,80 +259,96 @@ async function generateQuiz(userId) {
         usedWords.add(key);
 
         const info = pool[key];
-        if (!info || !info.meaning) continue;
-        
+        const qType = typeMap.get(key);
+
         const specificDistrs = (info.distractors || []).filter(d => d !== key);
-        
         if (specificDistrs.length < 3) continue;
-        
+
         const distrs = secureRandom(specificDistrs, 3);
         distrs.forEach(d => usedDistractors.add(d));
 
         const idx = crypto.randomInt(0, 4);
-        const letters = ['A', 'B', 'C', 'D'];
-        
-        const typePool = [];
-        for (const [type, count] of Object.entries(typeCounts)) {
-            for (let i = 0; i < count; i++) typePool.push(parseInt(type));
-        }
-        
-        const availableTypes = typePool.filter(t => {
-            if (t === 1) return info.rawContext || info.context;
-            if (t === 2) return info.meaning?.split(';')[0]?.trim();
-            return false;
-        });
-        
-        if (availableTypes.length === 0) continue;
-        
-        const qType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-        
+        const wordOpts = [key, ...distrs];
+        const shuffledOpts = secureRandom(wordOpts, 4);
+        const correctIdx = shuffledOpts.indexOf(key);
+
         let q;
         if (qType === 1) {
-            const meaning = info.meaning?.split(';')[0]?.trim() || '';
-            const rawContext = info.rawContext || info.context || '';
-            
-            let sentence = rawContext;
-            if (sentence) {
-                const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const regex = new RegExp(`\\b${escapedKey}\\b`, 'gi');
-                sentence = sentence.replace(regex, '_____');
-            }
-            
-            let displayContext;
-            if (sentence && sentence.includes('_____')) {
-                displayContext = sentence;
-            } else if (meaning) {
-                displayContext = `[选择正确单词] The word "_____" means: ${meaning}`;
-            } else {
-                displayContext = `[选择正确单词] _____: (${key})`;
-            }
-            
-            const opts = [...distrs];
-            opts.splice(idx, 0, key);
-            q = {
-                type: 1,
-                word: key,
-                context: displayContext,
-                options: opts.map((o, i) => `${letters[i]}. ${o}`),
-                answer: letters[idx]
-            };
+            // 处理复数形式，如 opportunity -> opportunities
+            const singular = key.endsWith('y') ? key.slice(0, -1) + 'i' + 'es' : key + 's';
+            const plural = key.endsWith('y') ? key.slice(0, -1) + 'ies' : key + 's';
+            const pattern = new RegExp(`(${key}|${singular}|${plural})`, 'gi');
+            const sentence = (info.context || '').replace(pattern, '_____');
+            q = { type: 1, word: key, context: sentence, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
         } else if (qType === 2) {
-            const correctMeaning = info.meaning.split(';')[0].trim();
-            const wordOpts = [key, ...distrs.slice(0, 3)];
-            const shuffledOpts = secureRandom(wordOpts, 4);
-            const correctIdx = shuffledOpts.indexOf(key);
-            q = {
-                type: 2,
-                word: key,
-                context: correctMeaning,
-                options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`),
-                answer: letters[correctIdx]
-            };
+            const meaning = info.meaning || info.meaning.split(';')[0] || '';
+            q = { type: 2, word: key, context: meaning, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
+        } else if (qType === 3) {
+            const cnMeaning = info.CN_Meaning || '';
+            q = { type: 3, word: key, context: cnMeaning, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
         }
         
+        if (!q.context) continue;
         q.testId = testId;
         questions.push(q);
     }
+
+    // 确保凑满10道题，从剩余单词中补 type1 或 type2
+    const selectedKeys = new Set(selected.map(w => w.word.toLowerCase()));
+    const remaining = valid.filter(w => !selectedKeys.has(w.word.toLowerCase()));
+    const remainingWithContext = remaining.filter(w => pool[w.word.toLowerCase()]?.context?.trim());
+    const remainingWithMeaning = remaining.filter(w => !pool[w.word.toLowerCase()]?.context?.trim() && pool[w.word.toLowerCase()]?.meaning?.trim());
+
+    const currentCounts = { 1: selectedType1.length, 2: selectedType2.length, 3: selectedType3.length };
+
+    while (questions.length < 10) {
+        let nextWord = null;
+        let nextType = null;
+
+        // 优先补 type1
+        if (currentCounts[1] < targetType1 && remainingWithContext.length > 0) {
+            nextWord = remainingWithContext.splice(Math.floor(Math.random() * remainingWithContext.length), 1)[0];
+            nextType = 1;
+            currentCounts[1]++;
+        } else if (currentCounts[2] < targetType2 && remainingWithMeaning.length > 0) {
+            nextWord = remainingWithMeaning.splice(Math.floor(Math.random() * remainingWithMeaning.length), 1)[0];
+            nextType = 2;
+            currentCounts[2]++;
+        } else if (remainingWithContext.length > 0) {
+            nextWord = remainingWithContext.splice(Math.floor(Math.random() * remainingWithContext.length), 1)[0];
+            nextType = 1;
+        } else if (remainingWithMeaning.length > 0) {
+            nextWord = remainingWithMeaning.splice(Math.floor(Math.random() * remainingWithMeaning.length), 1)[0];
+            nextType = 2;
+        }
+
+        if (!nextWord) break;
+
+        const key = nextWord.word.toLowerCase();
+        const info = pool[key];
+        const t = nextType;
+        const distrs = secureRandom((info.distractors || []).filter(d => d !== key), 3);
+        if (distrs.length < 3) continue;
+
+        const shuffledOpts = secureRandom([key, ...distrs], 4);
+        const correctIdx = shuffledOpts.indexOf(key);
+        const letters = ['A', 'B', 'C', 'D'];
+
+        let context = '';
+        if (t === 1 && info.context) {
+            const singular = key.endsWith('y') ? key.slice(0, -1) + 'ies' : key + 's';
+            const pattern = new RegExp(`(${key}|${singular})`, 'gi');
+            context = info.context.replace(pattern, '_____');
+        } else {
+            context = info.meaning || '';
+        }
+
+        if (context) {
+            questions.push({ type: t, word: key, context, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx], testId });
+        }
+    }
+
+    console.log(`生成题目: 总=${questions.length}, type1=${questions.filter(q=>q.type===1).length}, type2=${questions.filter(q=>q.type===2).length}, type3=${questions.filter(q=>q.type===3).length}`);
 
     const token = await getToken();
     for (const q of questions) {
