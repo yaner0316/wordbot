@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 
-const API = 'https://wordbot-1-w9il.onrender.com';
+const API = 'http://localhost:3000';
 
 export default function App() {
   const [screen, setScreen] = useState('select');
@@ -18,6 +18,73 @@ export default function App() {
   const [message, setMessage] = useState('');
   const [multiWords, setMultiWords] = useState([]);
   const [multiSelections, setMultiSelections] = useState([]);
+  const [editStatus, setEditStatus] = useState('');
+  const [editWord, setEditWord] = useState(null);
+  const [editMeaning, setEditMeaning] = useState('');
+  const [editCnMeaning, setEditCnMeaning] = useState('');
+  const [editContext, setEditContext] = useState('');
+  const [editDistractors, setEditDistractors] = useState('');
+  const [searchWord, setSearchWord] = useState('');
+
+  const searchWordAction = async () => {
+    const w = searchWord.trim().toLowerCase();
+    if (!w) { setMessage('请输入要查询的单词'); return; }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/word?userId=${user}&word=${encodeURIComponent(w)}`);
+      const data = await res.json();
+      if (data.word) {
+        setEditWord(data.word);
+        setEditMeaning(data.meaning || '');
+        setEditCnMeaning(data.cnMeaning || '');
+        setEditContext(data.context || '');
+        setEditDistractors(data.distractors || '');
+        setEditStatus(data.status || 'Pending');
+        setScreen('editWord');
+      } else {
+        setMessage('单词不存在，可以直接录入');
+        setNewWord(w);
+        setScreen('addWord');
+      }
+    } catch (e) { setMessage('查询失败'); }
+    setLoading(false);
+  };
+
+  const saveWord = async () => {
+    if (!editWord) return;
+    setLoading(true);
+    try {
+      await fetch(`${API}/api/word`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user,
+          word: editWord,
+          meaning: editMeaning,
+          cnMeaning: editCnMeaning,
+          context: editContext,
+          distractors: editDistractors,
+          status: editStatus
+        })
+      });
+      setMessage('保存成功');
+      setEditWord(null);
+      setScreen('actions');
+    } catch (e) { setMessage('保存失败'); }
+    setLoading(false);
+  };
+
+  const removeWord = async () => {
+    if (!editWord) return;
+    setLoading(true);
+    try {
+      await fetch(`${API}/api/word?userId=${user}&word=${encodeURIComponent(editWord)}`, { method: 'DELETE' });
+      setMessage(`已删除 ${editWord}`);
+      setEditWord(null);
+      setScreen('actions');
+    } catch (e) { setMessage('删除失败'); }
+    setLoading(false);
+  };
 
   const chooseUser = async (u) => {
     setUser(u);
@@ -149,7 +216,7 @@ export default function App() {
   if (screen === 'quiz' && quiz) {
     const q = quiz[current];
     const total = quiz.length;
-    const typeName = q.type === 1 ? '语境填空' : q.type === 2 ? '英英释义' : '中英释义';
+    const typeName = q.type === 1 ? '语境填空' : q.type === 2 ? '英英释义' : q.type === 3 ? '中英释义' : '未知';
     return (
       <ScrollView style={s.container}>
         <Text style={s.title}>第 {current + 1} / {total} 题</Text>
@@ -198,6 +265,35 @@ export default function App() {
     </ScrollView>
   );
 
+  if (screen === 'editWord') return (
+    <ScrollView style={s.container}>
+      <Text style={s.title}>编辑单词</Text>
+      <Text style={s.bigText}>{editWord}</Text>
+      <Text style={s.label}>状态</Text>
+      <View style={s.statusRow}>
+        <TouchableOpacity style={[s.statusBtn, editStatus === 'Pending' ? s.statusActive : null]} onPress={() => setEditStatus('Pending')}>
+          <Text style={[s.statusText, editStatus === 'Pending' ? s.statusTextActive : null]}>待复习</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[s.statusBtn, editStatus === 'optF5P0W3O' ? s.statusActive : null]} onPress={() => setEditStatus('optF5P0W3O')}>
+          <Text style={[s.statusText, editStatus === 'optF5P0W3O' ? s.statusTextActive : null]}>已掌握</Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={s.label}>英文释义</Text>
+      <TextInput style={s.input} value={editMeaning} onChangeText={setEditMeaning} multiline />
+      <Text style={s.label}>中文释义</Text>
+      <TextInput style={s.input} value={editCnMeaning} onChangeText={setEditCnMeaning} multiline />
+      <Text style={s.label}>例句</Text>
+      <TextInput style={s.input} value={editContext} onChangeText={setEditContext} multiline />
+      <Text style={s.label}>干扰词（逗号分隔）</Text>
+      <TextInput style={s.input} value={editDistractors} onChangeText={setEditDistractors} />
+      <View style={s.btnRow}>
+        <TouchableOpacity style={s.redBtn} onPress={removeWord}><Text style={s.btnText}>删除</Text></TouchableOpacity>
+        <TouchableOpacity style={s.grayBtn} onPress={() => { setEditWord(null); setScreen('actions'); }}><Text style={s.btnText}>取消</Text></TouchableOpacity>
+        <TouchableOpacity style={s.greenBtn} onPress={saveWord}><Text style={s.btnText}>保存</Text></TouchableOpacity>
+      </View>
+    </ScrollView>
+  );
+
   if (screen === 'addWord') return (
     <ScrollView style={s.container}>
       <Text style={s.title}>录入单词 - {user}</Text>
@@ -226,14 +322,25 @@ export default function App() {
   );
 
   if (screen === 'actions') return (
-    <View style={s.center}>
+    <ScrollView style={s.container}>
       <Text style={s.title}>{user}</Text>
       {message ? <Text style={s.message}>{message}</Text> : null}
       <TouchableOpacity style={s.greenBtn} onPress={startTest}><Text style={s.btnText}>开始测试</Text></TouchableOpacity>
-      <TouchableOpacity style={s.orangeBtn} onPress={() => setScreen('addWord')}><Text style={s.btnText}>录入单词</Text></TouchableOpacity>
+      <TouchableOpacity style={s.orangeBtn} onPress={() => { setNewWord(''); setMessage(''); setScreen('addWord'); }}><Text style={s.btnText}>录入单词</Text></TouchableOpacity>
+      <TouchableOpacity style={s.blueBtn} onPress={() => setScreen('searchWord')}><Text style={s.btnText}>查询/编辑单词</Text></TouchableOpacity>
       <TouchableOpacity style={s.btn} onPress={showDashboard}><Text style={s.btnText}>看板</Text></TouchableOpacity>
       <TouchableOpacity style={s.grayBtn} onPress={() => { setUser(null); setScreen('select'); }}><Text style={s.btnText}>返回</Text></TouchableOpacity>
-    </View>
+    </ScrollView>
+  );
+
+  if (screen === 'searchWord') return (
+    <ScrollView style={s.container}>
+      <Text style={s.title}>查询单词</Text>
+      <TextInput style={s.input} value={searchWord} onChangeText={setSearchWord} placeholder="输入要查询的单词" />
+      {message ? <Text style={s.message}>{message}</Text> : null}
+      <TouchableOpacity style={s.greenBtn} onPress={searchWordAction}><Text style={s.btnText}>查询</Text></TouchableOpacity>
+      <TouchableOpacity style={s.grayBtn} onPress={() => { setSearchWord(''); setMessage(''); setScreen('actions'); }}><Text style={s.btnText}>返回</Text></TouchableOpacity>
+    </ScrollView>
   );
 
   return (
@@ -262,6 +369,13 @@ const s = StyleSheet.create({
   greenBtn: { backgroundColor: '#4CAF50', padding: 15, borderRadius: 10, marginVertical: 8 },
   orangeBtn: { backgroundColor: '#FF5722', padding: 15, borderRadius: 10, marginVertical: 8 },
   grayBtn: { backgroundColor: '#666', padding: 15, borderRadius: 10, marginVertical: 8 },
+  blueBtn: { backgroundColor: '#2196F3', padding: 15, borderRadius: 10, marginVertical: 8 },
+  redBtn: { backgroundColor: '#F44336', padding: 15, borderRadius: 10, marginVertical: 8 },
+  statusRow: { flexDirection: 'row', marginBottom: 15 },
+  statusBtn: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 2, borderColor: '#ddd', marginRight: 10, alignItems: 'center' },
+  statusActive: { borderColor: '#4CAF50', backgroundColor: '#E8F5E9' },
+  statusText: { fontSize: 16, color: '#666' },
+  statusTextActive: { color: '#4CAF50', fontWeight: 'bold' },
   btnText: { color: '#fff', fontSize: 18, textAlign: 'center', fontWeight: '600' },
   btnRow: { flexDirection: 'row', justifyContent: 'space-between' },
   input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, marginVertical: 10 },

@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition } = require('./feishu');
+const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord } = require('./feishu');
 
 const app = express();
 app.use(cors());
@@ -102,6 +102,39 @@ app.post('/api/admin/updateMulti', async (req, res) => {
         }
         await updateMultiDefinition(targetUser, words);
         res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/word', async (req, res) => {
+    try {
+        const { userId, word } = req.query;
+        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
+        const data = await getWord(userId, word);
+        res.json(data || { exists: false });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/word', async (req, res) => {
+    try {
+        const { userId, word, meaning, cnMeaning, pos, context, distractors, status } = req.body;
+        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
+        const data = await updateWord(userId, word, { meaning, cnMeaning, pos, context, distractors, status });
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/word', async (req, res) => {
+    try {
+        const { userId, word } = req.query;
+        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
+        const data = await deleteWord(userId, word);
+        res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

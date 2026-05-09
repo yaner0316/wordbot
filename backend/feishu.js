@@ -773,4 +773,57 @@ async function updateMultiDefinition(targetUser, words) {
     }
 }
 
-module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition };
+async function getWord(userId, word) {
+    const records = await getRecords(WORD_TABLE);
+    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    if (!record) return null;
+    return {
+        word: record.fields.Word,
+        meaning: record.fields.Meaning || '',
+        cnMeaning: record.fields.CN_Meaning || '',
+        pos: record.fields.POS || '',
+        context: record.fields.Context || '',
+        distractors: record.fields.Distractors || '',
+        status: record.fields.Status || 'Pending',
+        record_id: record.record_id
+    };
+}
+
+async function updateWord(userId, word, fields) {
+    const records = await getRecords(WORD_TABLE);
+    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    if (!record) return { error: '单词不存在' };
+    const updateFields = {};
+    if (fields.meaning !== undefined) updateFields.Meaning = fields.meaning;
+    if (fields.cnMeaning !== undefined) updateFields.CN_Meaning = fields.cnMeaning;
+    if (fields.pos !== undefined) updateFields.POS = fields.pos;
+    if (fields.context !== undefined) updateFields.Context = fields.context;
+    if (fields.distractors !== undefined) updateFields.Distractors = fields.distractors;
+    if (fields.status !== undefined) updateFields.Status = fields.status;
+    await updateRecord(WORD_TABLE, record.record_id, updateFields);
+    return { success: true };
+}
+
+async function deleteWord(userId, word) {
+    const records = await getRecords(WORD_TABLE);
+    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    if (!record) return { error: '单词不存在' };
+    const token = await getToken();
+    await new Promise((resolve, reject) => {
+        const req = https.request({
+            hostname: 'open.feishu.cn',
+            path: `/open-apis/bitable/v1/apps/${WORD_TABLE.appToken}/tables/${WORD_TABLE.tableId}/records/${record.record_id}`,
+            method: 'DELETE',
+            headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+        }, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString())));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+    return { success: true };
+}
+
+module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord };
