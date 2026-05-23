@@ -371,9 +371,18 @@ async function generateQuiz(userId) {
 async function submitAnswers(userId, testId, answers) {
     const token = await getToken();
     const records = await getRecords(TEST_TABLE);
+    console.log(`submitAnswers: userId=${userId}, testId=${testId}, totalRecords=${records.length}`);
+    console.log(`testId type: ${typeof testId}, value: ${testId}`);
+    
     const testRecords = records
-        .filter(r => r.fields.user === userId && r.fields.test_id === testId)
+        .filter(r => {
+            const match = r.fields.user === userId && r.fields.test_id === testId;
+            console.log(`  record: user=${r.fields.user}, test_id=${r.fields.test_id}, match=${match}`);
+            return match;
+        })
         .sort((a, b) => a.fields.test_time - b.fields.test_time);
+
+    console.log(`找到测试记录: ${testRecords.length}`);
 
     if (testRecords.length === 0) return { error: '未找到测试记录' };
 
