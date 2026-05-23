@@ -82,8 +82,36 @@ async function getToken() {
 
 async function getRecords(table) {
     const token = await getToken();
-    const res = await request('GET', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records?page_size=500`, null, token);
-    return res.data?.items || [];
+    const allRecords = [];
+    let pageToken = null;
+    do {
+        let url = `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records?page_size=500`;
+        if (pageToken) url += `&page_token=${pageToken}`;
+        const res = await request('GET', url, null, token);
+        const items = res.data?.items || [];
+        allRecords.push(...items);
+        pageToken = res.data?.page_token;
+    } while (pageToken);
+    console.log(`getRecords: 共获取 ${allRecords.length} 条记录`);
+    return allRecords;
+}
+
+async function searchRecords(table, filter) {
+    const token = await getToken();
+    const allRecords = [];
+    let pageToken = null;
+    const body = { page_size: 500 };
+    if (filter) body.filter = filter;
+
+    do {
+        if (pageToken) body.page_token = pageToken;
+        const res = await request('POST', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/search`, body, token);
+        const items = res.data?.items || [];
+        allRecords.push(...items);
+        pageToken = res.data?.page_token;
+    } while (pageToken);
+    console.log(`searchRecords: 共获取 ${allRecords.length} 条记录`);
+    return allRecords;
 }
 
 async function addRecord(table, fields) {
@@ -369,30 +397,27 @@ async function generateQuiz(userId) {
 }
 
 async function submitAnswers(userId, testId, answers) {
-    const token = await getToken();
-    const records = await getRecords(TEST_TABLE);
-    console.log(`submitAnswers: userId=${userId}, testId=${testId}, totalRecords=${records.length}`);
-    console.log(`testId type: ${typeof testId}, value: ${testId}`);
-    
-    const testRecords = records
-        .filter(r => {
-            const match = r.fields.user === userId && r.fields.test_id === testId;
-            console.log(`  record: user=${r.fields.user}, test_id=${r.fields.test_id}, match=${match}`);
-            return match;
-        })
-        .sort((a, b) => a.fields.test_time - b.fields.test_time);
-
-    console.log(`找到测试记录: ${testRecords.length}`);
+    const filter = {
+        conjunction: "and",
+        conditions: [
+            { field_name: "user", operator: "is", value: [userId] },
+            { field_name: "test_id", operator: "is", value: [testId] }
+        ]
+    };
+    const testRecords = await searchRecords(TEST_TABLE, filter);
+    console.log(`submitAnswers: 找到 ${testRecords.length} 条记录`);
 
     if (testRecords.length === 0) return { error: '未找到测试记录' };
+
+    const sortedRecords = testRecords.sort((a, b) => a.fields.test_time - b.fields.test_time);
 
     let correct = 0;
     const results = [];
     const wordMap = {};
 
     const letters = ['A', 'B', 'C', 'D'];
-    for (let i = 0; i < Math.min(testRecords.length, answers.length); i++) {
-        const rec = testRecords[i];
+    for (let i = 0; i < Math.min(sortedRecords.length, answers.length); i++) {
+        const rec = sortedRecords[i];
         const yourAnswerIdx = answers[i];
         const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
         const correctAnswer = rec.fields.correct_answer;
