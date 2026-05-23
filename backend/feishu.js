@@ -422,6 +422,7 @@ async function submitAnswers(userId, testId, answers) {
         const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
         const correctAnswer = rec.fields.correct_answer;
         console.log(`第${i+1}题 correctAnswer:`, JSON.stringify(correctAnswer));
+        const answerStr = typeof correctAnswer === 'object' ? (correctAnswer?.text || correctAnswer?.value || JSON.stringify(correctAnswer)) : String(correctAnswer || '');
         const isCorrect = yourAnswer === correctAnswer;
         if (isCorrect) correct++;
 
@@ -435,7 +436,7 @@ async function submitAnswers(userId, testId, answers) {
         wordMap[word].total++;
         if (isCorrect) wordMap[word].correct++;
 
-        results.push({ q: i + 1, word, your: yourAnswer, answer: String(correctAnswer), correct: isCorrect });
+        results.push({ q: i + 1, word, your: yourAnswer, answer: answerStr, correct: isCorrect });
     }
 
     const masteredWords = [];
