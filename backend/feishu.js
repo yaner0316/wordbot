@@ -140,11 +140,11 @@ function secureRandom(arr, count) {
     if (arr.length <= count) return [...arr];
     const pool = [...arr];
     const result = [];
-    while (result.length < count && pool.length > 0) {
-        const idx = crypto.randomInt(0, pool.length);
-        result.push(pool.splice(idx, 1)[0]);
+    for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    return result;
+    return pool.slice(0, count);
 }
 
 async function getDistractorPool() {
@@ -295,25 +295,27 @@ async function generateQuiz(userId) {
         const distrs = secureRandom(specificDistrs, 3);
         distrs.forEach(d => usedDistractors.add(d));
 
-        const idx = crypto.randomInt(0, 4);
-        const wordOpts = [key, ...distrs];
-        const shuffledOpts = secureRandom(wordOpts, 4);
-        const correctIdx = shuffledOpts.indexOf(key);
-        console.log(`出题: word=${key}, shuffledOpts=${JSON.stringify(shuffledOpts)}, correctIdx=${correctIdx}, answer=${letters[correctIdx]}`);
+        const opts = [key, ...distrs];
+        for (let i = opts.length - 1; i > 0; i--) {
+            const j = crypto.randomInt(0, i + 1);
+            [opts[i], opts[j]] = [opts[j], opts[i]];
+        }
+        const finalOpts = opts.slice(0, 4);
+        const finalCorrectIdx = finalOpts.indexOf(key);
+        console.log(`出题: word=${key}, finalOpts=${JSON.stringify(finalOpts)}, correctIdx=${finalCorrectIdx}, answer=${letters[finalCorrectIdx]}`);
 
         let q;
         if (qType === 1) {
-            // 处理复数形式，如 opportunity -> opportunities
             const singular = key.endsWith('y') ? key.slice(0, -1) + 'ies' : key + 's';
             const pattern = new RegExp(`(${key}|${singular})`, 'gi');
             const sentence = (info.context || '').replace(pattern, '_____');
-            q = { type: 1, word: key, context: sentence, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
+            q = { type: 1, word: key, context: sentence, options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[finalCorrectIdx] };
         } else if (qType === 2) {
             const meaning = info.meaning || info.meaning.split(';')[0] || '';
-            q = { type: 2, word: key, context: meaning, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
+            q = { type: 2, word: key, context: meaning, options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[finalCorrectIdx] };
         } else if (qType === 3) {
             const cnMeaning = info.CN_Meaning || '';
-            q = { type: 3, word: key, context: cnMeaning, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
+            q = { type: 3, word: key, context: cnMeaning, options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[finalCorrectIdx] };
         }
         
         if (!q.context) continue;
