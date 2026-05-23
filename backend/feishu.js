@@ -299,13 +299,13 @@ async function generateQuiz(userId) {
         const wordOpts = [key, ...distrs];
         const shuffledOpts = secureRandom(wordOpts, 4);
         const correctIdx = shuffledOpts.indexOf(key);
+        console.log(`出题: word=${key}, shuffledOpts=${JSON.stringify(shuffledOpts)}, correctIdx=${correctIdx}, answer=${letters[correctIdx]}`);
 
         let q;
         if (qType === 1) {
             // 处理复数形式，如 opportunity -> opportunities
-            const singular = key.endsWith('y') ? key.slice(0, -1) + 'i' + 'es' : key + 's';
-            const plural = key.endsWith('y') ? key.slice(0, -1) + 'ies' : key + 's';
-            const pattern = new RegExp(`(${key}|${singular}|${plural})`, 'gi');
+            const singular = key.endsWith('y') ? key.slice(0, -1) + 'ies' : key + 's';
+            const pattern = new RegExp(`(${key}|${singular})`, 'gi');
             const sentence = (info.context || '').replace(pattern, '_____');
             q = { type: 1, word: key, context: sentence, options: shuffledOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
         } else if (qType === 2) {
