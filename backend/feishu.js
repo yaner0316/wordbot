@@ -421,8 +421,12 @@ async function submitAnswers(userId, testId, answers) {
         const yourAnswerIdx = answers[i];
         const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
         const correctAnswer = rec.fields.correct_answer;
-        console.log(`第${i+1}题 correctAnswer:`, JSON.stringify(correctAnswer));
-        const answerStr = typeof correctAnswer === 'object' ? (correctAnswer?.text || correctAnswer?.value || JSON.stringify(correctAnswer)) : String(correctAnswer || '');
+        console.log(`第${i+1}题 correctAnswer raw:`, correctAnswer);
+        let answerStr = String(correctAnswer || '');
+        try {
+            const parsed = JSON.parse(correctAnswer);
+            answerStr = Array.isArray(parsed) ? parsed[0]?.text : parsed?.text || answerStr;
+        } catch (e) {}
         const isCorrect = yourAnswer === correctAnswer;
         if (isCorrect) correct++;
 
