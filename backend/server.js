@@ -20,6 +20,7 @@ app.post('/api/quiz', async (req, res) => {
 app.post('/api/submit', async (req, res) => {
     try {
         const { user, testId, answers } = req.body;
+        console.log(`submit API: user="${user}", testId="${testId}"`);
         if (!user || !testId || !answers) return res.status(400).json({ error: '缺少参数' });
         const data = await submitAnswers(user, testId, answers);
         res.json(data);
