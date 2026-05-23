@@ -624,14 +624,14 @@ function generateDistractorsWithAI(word, meaning) {
     return null;
 }
 
-function callMiniMaxAPI(prompt) {
+async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7-highspeed', timeout = 10000) {
     return new Promise((resolve, reject) => {
         if (!MINIMAX_API_KEY) {
             reject(new Error('MINIMAX_API_KEY not set'));
             return;
         }
         const data = JSON.stringify({
-            model: 'MiniMax-M2.7',
+            model: model,
             messages: [{ role: 'user', content: prompt }]
         });
         const options = {
@@ -658,9 +658,58 @@ function callMiniMaxAPI(prompt) {
             });
         });
         req.on('error', reject);
+        const timer = setTimeout(() => {
+            req.destroy();
+            reject(new Error('timeout'));
+        }, timeout);
+        req.on('close', () => clearTimeout(timer));
         req.write(data);
         req.end();
     });
+}
+
+async function generateDistractorsWithContext(word, context) {
+    const prompt = `Given the sentence: "${context}"
+Target word: "${word}"
+Generate 3 wrong distractors that:
+1. Are grammatically correct in this sentence
+2. Make the sentence sound natural but meaning wrong
+3. Are NOT synonyms of "${word}"
+Return JSON: {"distractors": ["word1", "word2", "word3"]}`;
+    try {
+        const result = await callMiniMaxAPI(prompt);
+        if (result) {
+            const match = result.match(/"distractors"\s*:\s*\[(.*?)\]/s);
+            if (match) {
+                const words = match[1].match(/"([^"]+)"/g);
+                if (words && words.length >= 3) {
+                    return words.map(w => w.replace(/"/g, '').trim());
+                }
+            }
+        }
+    } catch (e) { }
+    return null;
+}
+
+async function generateDistractorsWithCollocation(word, context) {
+    const prompt = `Sentence: "${context}"
+Word: "${word}"
+Generate 3 WRONG words by analyzing collocation keywords in the sentence.
+The wrong words should create semantic confusion when substituted.
+Return JSON: {"distractors": ["wrong1", "wrong2", "wrong3"]}`;
+    try {
+        const result = await callMiniMaxAPI(prompt);
+        if (result) {
+            const match = result.match(/"distractors"\s*:\s*\[(.*?)\]/s);
+            if (match) {
+                const words = match[1].match(/"([^"]+)"/g);
+                if (words && words.length >= 3) {
+                    return words.map(w => w.replace(/"/g, '').trim());
+                }
+            }
+        }
+    } catch (e) { }
+    return null;
 }
 
 async function generateExampleWithAI(word, meaning) {
@@ -750,7 +799,20 @@ async function addWords(targetUser, words) {
         try {
             const def = await fetchWordDefinition(word);
             
-            let distractors = generateDistractorsWithAI(word, def.meaning);
+            let distractors = null;
+            let example = def.context || '';
+            let cnMeaning = '';
+
+            if (example) {
+                distractors = await generateDistractorsWithContext(word, example);
+            }
+
+            if (!distractors || distractors.length < 3) {
+                if (example) {
+                    distractors = await generateDistractorsWithCollocation(word, example);
+                }
+            }
+
             if (!distractors || distractors.length < 3) {
                 const distPool = await getDistractorPool();
                 const lowerWord = word.toLowerCase();
@@ -770,12 +832,7 @@ async function addWords(targetUser, words) {
                     distractors = fallback;
                 }
             }
-            
-            let example = await generateExampleWithAI(word, def.meaning);
-            if (!example && def.context) {
-                example = def.context;
-            }
-            
+
             let cnMeaning = await translateToCN(def.meaning);
             if (!cnMeaning) {
                 cnMeaning = await translateToCN(info.cnMeaning);
