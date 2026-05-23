@@ -833,7 +833,7 @@ async function addWords(targetUser, words) {
                 }
             }
 
-            let cnMeaning = await translateToCN(def.meaning);
+            cnMeaning = await translateToCN(def.meaning);
             if (!cnMeaning) {
                 cnMeaning = await translateToCN(info.cnMeaning);
             }
