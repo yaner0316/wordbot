@@ -624,7 +624,7 @@ function generateDistractorsWithAI(word, meaning) {
     return null;
 }
 
-async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7-highspeed', timeout = 10000) {
+async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7', timeout = 15000) {
     return new Promise((resolve, reject) => {
         if (!MINIMAX_API_KEY) {
             reject(new Error('MINIMAX_API_KEY not set'));
