@@ -434,7 +434,7 @@ async function submitAnswers(userId, testId, answers) {
         wordMap[word].total++;
         if (isCorrect) wordMap[word].correct++;
 
-        results.push({ q: i + 1, word, your: yourAnswer, answer: Array.isArray(correctAnswer) ? correctAnswer[0] : correctAnswer, correct: isCorrect });
+        results.push({ q: i + 1, word, your: yourAnswer, answer: String(correctAnswer), correct: isCorrect });
     }
 
     const masteredWords = [];
