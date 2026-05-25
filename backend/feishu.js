@@ -835,7 +835,7 @@ async function addWords(targetUser, words) {
 
             cnMeaning = await translateToCN(def.meaning);
             if (!cnMeaning) {
-                cnMeaning = await translateToCN(info.cnMeaning);
+                cnMeaning = '';
             }
             
             const wordFields = {
