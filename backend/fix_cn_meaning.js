@@ -25,6 +25,13 @@ function translateToCN(text) {
     });
 }
 
+function getStringValue(val) {
+    if (typeof val === 'string') return val;
+    if (Array.isArray(val)) return val[0] || '';
+    if (typeof val === 'object' && val !== null) return val.text || val.value || '';
+    return String(val || '');
+}
+
 async function fixChineseMeaning() {
     console.log('开始修复中文释义...\n');
     const records = await searchRecords(WORD_TABLE);
@@ -32,38 +39,46 @@ async function fixChineseMeaning() {
     
     let fixed = 0;
     let skipped = 0;
+    let errorCn = 0;
     
     for (const record of records) {
-        const cnMeaning = record.fields.CN_Meaning;
+        const cnMeaningRaw = record.fields.CN_Meaning;
+        const cnMeaning = getStringValue(cnMeaningRaw);
         const word = record.fields.Word;
         const recordId = record.record_id;
         
-        if (cnMeaning && cnMeaning.includes('请提供要翻译的文本')) {
+        const cnStr = cnMeaning.trim();
+        console.log(`检查: ${word} -> CN_Meaning: "${cnStr}" (${typeof cnMeaningRaw})`);
+        
+        if (cnStr.includes('请提供要翻译的文本')) {
             const meaning = record.fields.Meaning;
-            console.log(`修复: ${word} - ${meaning?.substring(0, 30)}...`);
+            console.log(`  发现错误: ${word} - ${meaning?.substring(0, 30)}...`);
             
             try {
                 const newCn = await translateToCN(meaning);
                 if (newCn && newCn.trim() && !newCn.includes('请提供')) {
                     await updateWord(recordId, { CN_Meaning: newCn });
                     console.log(`  -> ${newCn}`);
-                    fixed++;
                 } else {
                     await updateWord(recordId, { CN_Meaning: '' });
                     console.log(`  -> 留空`);
-                    fixed++;
                 }
+                fixed++;
             } catch (e) {
                 console.log(`  失败: ${e.message}`);
             }
             
             await new Promise(r => setTimeout(r, 500));
         } else {
-            skipped++;
+            if (cnStr) {
+                skipped++;
+            } else {
+                errorCn++;
+            }
         }
     }
     
-    console.log(`\n完成: 修复 ${fixed}, 跳过 ${skipped}`);
+    console.log(`\n完成: 修复 ${fixed}, 有效跳过 ${skipped}, 无中文 ${errorCn}`);
 }
 
 fixChineseMeaning().then(() => process.exit(0)).catch(e => {
