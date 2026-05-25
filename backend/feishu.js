@@ -249,17 +249,19 @@ async function generateQuiz(userId) {
     const withCN = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
         const cn = info.CN_Meaning?.trim();
-        return cn && !cn.includes('请提供要翻译的文本');
+        return cn && cn.length > 0 && !cn.includes('请提供要翻译的文本');
     });
     const withContext = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
         const cn = info.CN_Meaning?.trim();
-        return !cn || cn.includes('请提供要翻译的文本') ? !info.context?.trim() : false;
+        const hasBadCN = !cn || cn.includes('请提供要翻译的文本');
+        return hasBadCN && info.context?.trim();
     });
     const withMeaning = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
         const cn = info.CN_Meaning?.trim();
-        return (!cn || cn.includes('请提供要翻译的文本')) && !info.context?.trim() && info.meaning?.trim();
+        const hasBadCN = !cn || cn.includes('请提供要翻译的文本');
+        return hasBadCN && !info.context?.trim() && info.meaning?.trim();
     });
 
     console.log(`可用: 总=${valid.length}, type3=${withCN.length}, type1=${withContext.length}, type2=${withMeaning.length}`);
