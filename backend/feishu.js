@@ -248,15 +248,18 @@ async function generateQuiz(userId) {
     // 分离不同类型的单词
     const withCN = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
-        return info.CN_Meaning?.trim();
+        const cn = info.CN_Meaning?.trim();
+        return cn && !cn.includes('请提供要翻译的文本');
     });
     const withContext = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
-        return !info.CN_Meaning?.trim() && info.context?.trim();
+        const cn = info.CN_Meaning?.trim();
+        return !cn || cn.includes('请提供要翻译的文本') ? !info.context?.trim() : false;
     });
     const withMeaning = valid.filter(w => {
         const info = pool[w.word.toLowerCase()];
-        return !info.CN_Meaning?.trim() && !info.context?.trim() && info.meaning?.trim();
+        const cn = info.CN_Meaning?.trim();
+        return (!cn || cn.includes('请提供要翻译的文本')) && !info.context?.trim() && info.meaning?.trim();
     });
 
     console.log(`可用: 总=${valid.length}, type3=${withCN.length}, type1=${withContext.length}, type2=${withMeaning.length}`);
@@ -933,4 +936,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord };
+module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords };
