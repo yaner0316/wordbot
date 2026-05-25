@@ -40,7 +40,7 @@ app.get('/api/stats/:user', async (req, res) => {
 
 app.get('/api/history/:user', async (req, res) => {
     try {
-        const TEST_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
+        const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
         const records = await searchRecords(TEST_TABLE, {
             conjunction: "and",
             conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }]
