@@ -1,6 +1,5 @@
 require('dotenv').config();
-const { updateWord, searchRecords } = require('./feishu');
-const https = require('https');
+const { getRecords, updateRecord } = require('./feishu');
 
 const WORD_TABLE = { appToken: process.env.FEISHU_APP_TOKEN, tableId: process.env.FEISHU_WORD_TABLE_ID };
 
@@ -10,6 +9,7 @@ function translateToCN(text) {
             resolve('');
             return;
         }
+        const https = require('https');
         const encoded = encodeURIComponent(text.substring(0, 500));
         const url = `https://api.mymemory.translated.net/get?q=${encoded}&langpair=en|zht`;
         https.get(url, (res) => {
@@ -25,7 +25,7 @@ function translateToCN(text) {
     });
 }
 
-function getStringValue(val) {
+function getFieldValue(val) {
     if (typeof val === 'string') return val;
     if (Array.isArray(val)) return val[0] || '';
     if (typeof val === 'object' && val !== null) return val.text || val.value || '';
@@ -34,51 +34,43 @@ function getStringValue(val) {
 
 async function fixChineseMeaning() {
     console.log('开始修复中文释义...\n');
-    const records = await searchRecords(WORD_TABLE);
+    const records = await getRecords(WORD_TABLE);
     console.log(`总记录数: ${records.length}`);
     
     let fixed = 0;
     let skipped = 0;
-    let errorCn = 0;
     
     for (const record of records) {
         const cnMeaningRaw = record.fields.CN_Meaning;
-        const cnMeaning = getStringValue(cnMeaningRaw);
+        const cnMeaning = getFieldValue(cnMeaningRaw);
         const word = record.fields.Word;
         const recordId = record.record_id;
         
         const cnStr = cnMeaning.trim();
-        console.log(`检查: ${word} -> CN_Meaning: "${cnStr}" (${typeof cnMeaningRaw})`);
         
         if (cnStr.includes('请提供要翻译的文本')) {
-            const meaning = record.fields.Meaning;
-            console.log(`  发现错误: ${word} - ${meaning?.substring(0, 30)}...`);
+            const meaning = getFieldValue(record.fields.Meaning);
+            console.log(`发现错误: ${word} -> "${cnStr}"`);
+            console.log(`  英文释义: ${meaning?.substring(0, 50)}...`);
             
             try {
                 const newCn = await translateToCN(meaning);
-                if (newCn && newCn.trim() && !newCn.includes('请提供')) {
-                    await updateWord(recordId, { CN_Meaning: newCn });
-                    console.log(`  -> ${newCn}`);
-                } else {
-                    await updateWord(recordId, { CN_Meaning: '' });
-                    console.log(`  -> 留空`);
-                }
+                console.log(`  翻译结果: ${newCn || '(空)'}`);
+                
+                await updateRecord(WORD_TABLE, recordId, { CN_Meaning: newCn || '' });
                 fixed++;
+                console.log(`  已更新`);
             } catch (e) {
                 console.log(`  失败: ${e.message}`);
             }
             
             await new Promise(r => setTimeout(r, 500));
         } else {
-            if (cnStr) {
-                skipped++;
-            } else {
-                errorCn++;
-            }
+            skipped++;
         }
     }
     
-    console.log(`\n完成: 修复 ${fixed}, 有效跳过 ${skipped}, 无中文 ${errorCn}`);
+    console.log(`\n完成: 修复 ${fixed}, 跳过 ${skipped}`);
 }
 
 fixChineseMeaning().then(() => process.exit(0)).catch(e => {
