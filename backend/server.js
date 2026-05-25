@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord } = require('./feishu');
+const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords } = require('./feishu');
 
 const app = express();
 app.use(cors());
