@@ -38,6 +38,39 @@ app.get('/api/stats/:user', async (req, res) => {
     }
 });
 
+app.get('/api/history/:user', async (req, res) => {
+    try {
+        const TEST_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
+        const records = await searchRecords(TEST_TABLE, {
+            conjunction: "and",
+            conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }]
+        });
+        
+        const testMap = {};
+        for (const rec of records) {
+            const testId = rec.fields.test_id;
+            const time = rec.fields.test_time;
+            if (!testMap[testId]) {
+                testMap[testId] = { testId, time, questions: [], correct: 0, total: 0 };
+            }
+            const isCorrect = rec.fields.is_correct === 'optHGT7gYf';
+            testMap[testId].questions.push({
+                word: rec.fields.word,
+                yourAnswer: rec.fields.your_answer,
+                correctAnswer: rec.fields.correct_answer,
+                isCorrect
+            });
+            testMap[testId].total++;
+            if (isCorrect) testMap[testId].correct++;
+        }
+        
+        const history = Object.values(testMap).sort((a, b) => b.time - a.time);
+        res.json({ history });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get('/api/admin/users', async (req, res) => {
     try {
         const users = await getAllUsers();
