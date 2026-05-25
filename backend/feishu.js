@@ -437,7 +437,7 @@ async function submitAnswers(userId, testId, answers) {
         } else {
             answerStr = correctAnswer?.text || JSON.stringify(correctAnswer);
         }
-        const isCorrect = yourAnswer === correctAnswer;
+        const isCorrect = yourAnswer === answerStr;
         if (isCorrect) correct++;
 
         await updateRecord(TEST_TABLE, rec.record_id, {
