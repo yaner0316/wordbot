@@ -46,18 +46,20 @@ app.get('/api/history/:user', async (req, res) => {
             conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }]
         });
         
+        const getFieldVal = (v) => typeof v === 'object' && v !== null ? (v.text || v.name || JSON.stringify(v)) : String(v || '');
+        
         const testMap = {};
         for (const rec of records) {
-            const testId = rec.fields.test_id;
-            const time = rec.fields.test_time;
+            const testId = getFieldVal(rec.fields.test_id);
+            const time = Number(rec.fields.test_time) || 0;
             if (!testMap[testId]) {
                 testMap[testId] = { testId, time, questions: [], correct: 0, total: 0 };
             }
-            const isCorrect = rec.fields.is_correct === 'optHGT7gYf';
+            const isCorrect = getFieldVal(rec.fields.is_correct) === 'optHGT7gYf';
             testMap[testId].questions.push({
-                word: rec.fields.word,
-                yourAnswer: rec.fields.your_answer,
-                correctAnswer: rec.fields.correct_answer,
+                word: getFieldVal(rec.fields.word),
+                yourAnswer: getFieldVal(rec.fields.your_answer),
+                correctAnswer: getFieldVal(rec.fields.correct_answer),
                 isCorrect
             });
             testMap[testId].total++;
