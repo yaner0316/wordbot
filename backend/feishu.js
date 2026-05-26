@@ -96,19 +96,21 @@ async function getRecords(table) {
     return allRecords;
 }
 
-async function searchRecords(table, filter) {
+async function searchRecords(table, filter, timeout = 8000) {
     const token = await getToken();
     const allRecords = [];
     let pageToken = null;
     const body = { page_size: 500 };
     if (filter) body.filter = filter;
 
+    const startTime = Date.now();
     do {
         if (pageToken) body.page_token = pageToken;
+        if (Date.now() - startTime > timeout) throw new Error('search timeout');
         const res = await request('POST', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/search`, body, token);
         const items = res.data?.items || [];
         allRecords.push(...items);
-        pageToken = res.data?.page_token;
+        pageToken = null; // 只获取第一页
     } while (pageToken);
     console.log(`searchRecords: 共获取 ${allRecords.length} 条记录`);
     return allRecords;

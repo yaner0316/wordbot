@@ -1,6 +1,27 @@
 const express = require('express');
 const cors = require('cors');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords } = require('./feishu');
+const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords, getRecords } = require('./feishu');
+
+const getFieldVal = (v) => {
+    if (!v) return '';
+    if (typeof v === 'object') {
+        if (Array.isArray(v)) return v.length > 0 ? getFieldVal(v[0]) : '';
+        if (v.text !== undefined) return v.text;
+        if (v.name !== undefined) return v.name;
+        return JSON.stringify(v);
+    }
+    if (typeof v === 'string') {
+        try {
+            const parsed = JSON.parse(v);
+            if (Array.isArray(parsed)) return parsed.length > 0 ? getFieldVal(parsed[0]) : '';
+            if (parsed.text !== undefined) return parsed.text;
+            if (parsed.name !== undefined) return parsed.name;
+            return String(parsed);
+        } catch (e) {}
+        return v;
+    }
+    return String(v);
+};
 
 const app = express();
 app.use(cors());
@@ -41,23 +62,43 @@ app.get('/api/stats/:user', async (req, res) => {
 app.get('/api/history/:user', async (req, res) => {
     try {
         const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
-        const records = await searchRecords(TEST_TABLE, {
-            conjunction: "and",
-            conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }]
-        });
+        const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
         
-        const getFieldVal = (v) => typeof v === 'object' && v !== null ? (v.text || v.name || JSON.stringify(v)) : String(v || '');
+        const records = await searchRecords(TEST_TABLE);
+        const userRecords = records.filter(r => getFieldVal(r.fields.user) === req.params.user);
+        
+        const wordRecords = await getRecords(WORD_TABLE);
+        const userWordRecords = wordRecords.filter(r => getFieldVal(r.fields.user) === req.params.user);
+        const wordMap = {};
+        for (const w of userWordRecords) {
+            const wn = getFieldVal(w.fields.Word);
+            wordMap[wn.toLowerCase()] = {
+                context: getFieldVal(w.fields.Context),
+                meaning: getFieldVal(w.fields.Meaning),
+                cnMeaning: getFieldVal(w.fields.CN_Meaning)
+            };
+        }
         
         const testMap = {};
-        for (const rec of records) {
+        for (const rec of userRecords) {
             const testId = getFieldVal(rec.fields.test_id);
             const time = Number(rec.fields.test_time) || 0;
+            const qType = Number(rec.fields.question_type) || 1;
+            const word = getFieldVal(rec.fields.word);
             if (!testMap[testId]) {
                 testMap[testId] = { testId, time, questions: [], correct: 0, total: 0 };
             }
             const isCorrect = getFieldVal(rec.fields.is_correct) === 'optHGT7gYf';
+            const wi = wordMap[word.toLowerCase()] || {};
+            let question = '';
+            if (qType === 1) question = wi.context || word;
+            else if (qType === 2) question = wi.meaning || word;
+            else if (qType === 3) question = wi.cnMeaning || wi.meaning || word;
+            else question = word;
             testMap[testId].questions.push({
-                word: getFieldVal(rec.fields.word),
+                word,
+                question,
+                type: qType,
                 yourAnswer: getFieldVal(rec.fields.your_answer),
                 correctAnswer: getFieldVal(rec.fields.correct_answer),
                 isCorrect
