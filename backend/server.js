@@ -64,8 +64,15 @@ app.get('/api/history/:user', async (req, res) => {
         const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
         const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
         
-        const records = await searchRecords(TEST_TABLE);
-        const userRecords = records.filter(r => getFieldVal(r.fields.user) === req.params.user);
+        const records = await searchRecords(
+            TEST_TABLE,
+            { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }] }
+        );
+        console.log('Total records for user:', records.length);
+        if (records.length > 0) {
+            console.log('First record test_time:', getFieldVal(records[0].fields.test_time));
+        }
+        const userRecords = records;
         
         const wordRecords = await getRecords(WORD_TABLE);
         const userWordRecords = wordRecords.filter(r => getFieldVal(r.fields.user) === req.params.user);
