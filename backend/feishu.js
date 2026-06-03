@@ -9,6 +9,53 @@ const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69
 const DIST_TABLE = { appToken: 'GskxbMxMgaDPFRsgqS4cdWvdndb', tableId: 'tbl3EgurgOTXdM3V' };
 const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
 const STATS_TABLE = { appToken: 'Mbh7bK7Jrah7XMsV9lhceE7cnyh', tableId: 'tblQBYKzcQuz8sSq' };
+const STATUS_PENDING = 'Pending';
+const STATUS_MASTERED = 'Mastered';
+const STATUS_PENDING_LEGACY = 'optXjbXS2F';
+const STATUS_MASTERED_LEGACY = 'optF5P0W3O';
+
+function getFieldValue(value) {
+    if (value === undefined || value === null) return '';
+    if (Array.isArray(value)) return value.length > 0 ? getFieldValue(value[0]) : '';
+    if (typeof value === 'object') {
+        if (value.text !== undefined) return String(value.text);
+        if (value.name !== undefined) return String(value.name);
+        if (value.value !== undefined) return String(value.value);
+        if (value.id !== undefined) return String(value.id);
+        return JSON.stringify(value);
+    }
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            if (Array.isArray(parsed) || (parsed && typeof parsed === 'object')) {
+                return getFieldValue(parsed);
+            }
+        } catch (e) {}
+        return value;
+    }
+    return String(value);
+}
+
+function normalizeStatus(status) {
+    const value = getFieldValue(status).trim();
+    const lower = value.toLowerCase();
+    if (lower === STATUS_MASTERED.toLowerCase() || value === STATUS_MASTERED_LEGACY || value === '已掌握') return STATUS_MASTERED;
+    if (lower === STATUS_PENDING.toLowerCase() || value === STATUS_PENDING_LEGACY || value === '待复习') return STATUS_PENDING;
+    return STATUS_PENDING;
+}
+
+function isMasteredStatus(status) {
+    return normalizeStatus(status) === STATUS_MASTERED;
+}
+
+function isCorrectField(value) {
+    const normalized = getFieldValue(value).trim();
+    return normalized === 'optHGT7gYf' || normalized === '正确' || normalized.toLowerCase() === 'true';
+}
+
+function hasSubmittedAnswer(record) {
+    return record?.fields?.is_correct !== undefined && record?.fields?.is_correct !== null;
+}
 
 const TRAD_TO_SIMP = {
     '為':'为','與':'与','過':'过','來':'来','時':'时','們':'们','這':'这',
@@ -185,8 +232,8 @@ async function getDistractorPool() {
 async function getPendingWords(userId) {
     const records = await getRecords(WORD_TABLE);
     return records
-        .filter(r => r.fields.user === userId && r.fields.Status !== 'optF5P0W3O')
-        .map(r => ({ word: r.fields.Word, record_id: r.record_id }));
+        .filter(r => getFieldValue(r.fields.user) === userId && !isMasteredStatus(r.fields.Status))
+        .map(r => ({ word: getFieldValue(r.fields.Word), record_id: r.record_id }));
 }
 
 function isContextValid(ctx) {
@@ -465,19 +512,19 @@ async function submitAnswers(userId, testId, answers) {
     for (const [word, stats] of Object.entries(wordMap)) {
         if (stats.correct >= stats.total) {
             masteredWords.push(word);
-            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId && r.fields.Word === word);
+            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId && getFieldValue(r.fields.Word) === word);
             if (wordRecords.length > 0) {
-                await updateRecord(WORD_TABLE, wordRecords[0].record_id, { Status: 'optF5P0W3O' });
+                await updateRecord(WORD_TABLE, wordRecords[0].record_id, { Status: STATUS_MASTERED });
             }
         }
     }
 
-    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId);
+    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId);
     const total = wordRecords.length;
-    const mastered = wordRecords.filter(r => r.fields.Status === 'optF5P0W3O').length;
+    const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
     const statsRecords = await getRecords(STATS_TABLE);
-    const userRecord = statsRecords.find(r => r.fields.user === userId);
+    const userRecord = statsRecords.find(r => getFieldValue(r.fields.user) === userId);
 
     const statsFields = {
         user: userId,
@@ -507,24 +554,34 @@ async function submitAnswers(userId, testId, answers) {
 }
 
 async function getStats(userId) {
-    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => r.fields.user === userId);
+    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId);
     const total = wordRecords.length;
-    const mastered = wordRecords.filter(r => r.fields.Status === 'optF5P0W3O').length;
-    const statsRecords = await getRecords(STATS_TABLE);
-    const userRecord = statsRecords.find(r => r.fields.user === userId);
+    const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
-    const acc = (userRecord?.fields?.total_tests || 0) > 0 
-        ? ((userRecord.fields.correct_count / (userRecord.fields.total_tests * 4)) * 100)
-        : 0;
+    const testRecords = await searchRecords(
+        TEST_TABLE,
+        { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [userId] }] }
+    );
+    const submittedRecords = testRecords.filter(hasSubmittedAnswer);
+    const submittedTestIds = new Set(submittedRecords.map(r => getFieldValue(r.fields.test_id)).filter(Boolean));
+    const correctCount = submittedRecords.filter(r => isCorrectField(r.fields.is_correct)).length;
+    const totalQuestions = submittedRecords.length;
+    const lastTestTime = submittedRecords.reduce((max, r) => {
+        const time = Number(r.fields.test_time) || 0;
+        return time > max ? time : max;
+    }, 0);
+    const acc = totalQuestions > 0 ? (correctCount / totalQuestions) * 100 : 0;
+
     return {
         user: userId,
         totalWords: total,
         masteredWords: mastered,
         pendingWords: total - mastered,
-        totalTests: userRecord?.fields?.total_tests || 0,
-        correctCount: userRecord?.fields?.correct_count || 0,
+        totalTests: submittedTestIds.size,
+        totalQuestions,
+        correctCount,
         accuracyRate: `${acc.toFixed(1)}%`,
-        lastTestTime: userRecord?.fields?.last_test_time || null
+        lastTestTime: lastTestTime || null
     };
 }
 
@@ -549,7 +606,7 @@ async function addWord(targetUser, wordData) {
 
 async function getAllUsers() {
     const records = await getRecords(WORD_TABLE);
-    const userSet = new Set(records.map(r => r.fields.user).filter(u => u));
+    const userSet = new Set(records.map(r => getFieldValue(r.fields.user)).filter(u => u));
     return Array.from(userSet).sort();
 }
 

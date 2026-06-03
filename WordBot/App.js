@@ -314,6 +314,8 @@ export default function App() {
           <Text>总单词: {item.totalWords}</Text>
           <Text style={s.green}>已掌握: {item.masteredWords}</Text>
           <Text style={s.orange}>待复习: {item.pendingWords}</Text>
+          <Text>测试次数: {item.totalTests || 0}</Text>
+          <Text>答题数: {item.totalQuestions || 0}</Text>
           <Text>正确率: {item.accuracyRate}</Text>
         </View>
       ))}
