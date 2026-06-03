@@ -23,6 +23,17 @@ const getFieldVal = (v) => {
     return String(v);
 };
 
+const parseOptions = (v) => {
+    const raw = getFieldVal(v);
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+        return raw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
+    }
+};
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -106,6 +117,7 @@ app.get('/api/history/:user', async (req, res) => {
                 word,
                 question,
                 type: qType,
+                options: parseOptions(rec.fields.options),
                 yourAnswer: getFieldVal(rec.fields.your_answer),
                 correctAnswer: getFieldVal(rec.fields.correct_answer),
                 isCorrect

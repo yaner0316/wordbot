@@ -443,6 +443,7 @@ async function generateQuiz(userId) {
             word: q.word,
             question_type: q.type,
             correct_answer: q.answer,
+            options: JSON.stringify(q.options),
             test_time: Date.now()
         });
     }
