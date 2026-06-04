@@ -176,6 +176,18 @@ async function addRecord(table, fields) {
     return res;
 }
 
+async function addRecords(table, fieldList) {
+    const token = await getToken();
+    const records = fieldList.map(fields => ({ fields }));
+    console.log(`批量写入表: ${table.appToken} ${table.tableId}, 数量=${records.length}`);
+    const res = await request('POST', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/batch_create`, { records }, token);
+    console.log('batchCreate返回:', JSON.stringify(res).substring(0, 200));
+    if (res.code !== 0) {
+        throw new Error(`批量添加记录失败: ${res.msg || res.code}`);
+    }
+    return res;
+}
+
 async function updateRecord(table, recordId, fields) {
     const token = await getToken();
     const res = await request('PUT', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/${recordId}`, { fields }, token);
@@ -281,17 +293,6 @@ async function getRecentQuizFootprint(userId, testCount = 4) {
         if (word) words.add(word);
     }
     return { recordIds, words };
-}
-
-async function runWithConcurrency(items, limit, worker) {
-    let index = 0;
-    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-        while (index < items.length) {
-            const currentIndex = index++;
-            await worker(items[currentIndex], currentIndex);
-        }
-    });
-    await Promise.all(workers);
 }
 
 function isContextValid(ctx) {
@@ -470,8 +471,7 @@ async function generateQuiz(userId) {
 
     const randomizedQuestions = secureRandom(questions, questions.length);
     const baseTestTime = Date.now();
-    await runWithConcurrency(randomizedQuestions, 4, async (q, index) => {
-        await addRecord(TEST_TABLE, {
+    await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
             user: userId,
             test_id: testId,
             record_id: q.record_id,
@@ -480,8 +480,7 @@ async function generateQuiz(userId) {
             correct_answer: q.answer,
             options: JSON.stringify(q.options),
             test_time: baseTestTime + index
-        });
-    });
+    })));
 
     return {
         testId,
