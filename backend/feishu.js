@@ -247,8 +247,40 @@ async function getPendingWords(userId) {
             cn_meaning: getFieldValue(r.fields.CN_Meaning),
             context: getFieldValue(r.fields.Context),
             distractors: getFieldValue(r.fields.Distractors),
-            multi_definition: r.fields.multi_definition
+            multi_definition: r.fields.multi_definition,
+            quality_flags: getFieldValue(r.fields.Quality_Flags)
         }));
+}
+
+async function getRecentQuizFootprint(userId, testCount = 4) {
+    const records = await searchRecords(
+        TEST_TABLE,
+        { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [userId] }] },
+        [{ desc: true, field_name: "test_time" }],
+        30000
+    );
+    const recentTestIds = [];
+    const seenTests = new Set();
+    for (const record of records) {
+        const testId = getFieldValue(record.fields.test_id);
+        if (!testId || seenTests.has(testId)) continue;
+        seenTests.add(testId);
+        recentTestIds.push(testId);
+        if (recentTestIds.length >= testCount) break;
+    }
+
+    const recentSet = new Set(recentTestIds);
+    const recordIds = new Set();
+    const words = new Set();
+    for (const record of records) {
+        const testId = getFieldValue(record.fields.test_id);
+        if (!recentSet.has(testId)) continue;
+        const recordId = getFieldValue(record.fields.record_id);
+        const word = getFieldValue(record.fields.word).toLowerCase();
+        if (recordId) recordIds.add(recordId);
+        if (word) words.add(word);
+    }
+    return { recordIds, words };
 }
 
 function isContextValid(ctx) {
@@ -333,11 +365,17 @@ function generateQuestion(word, info, distractors, type, allWords) {
 async function generateQuiz(userId) {
     const { pool } = await getDistractorPool();
     const pending = await getPendingWords(userId);
+    const recent = await getRecentQuizFootprint(userId).catch(e => {
+        console.log(`recent quiz footprint failed: ${e.message}`);
+        return { recordIds: new Set(), words: new Set() };
+    });
 
-    const valid = pending.filter(r => {
+    const validBase = pending.filter(r => {
         const info = pool[r.record_id];
         return info && (info.distractors || []).filter(d => d).length >= 3;
     });
+    const reviewClean = validBase.filter(r => !r.quality_flags);
+    const valid = reviewClean.length >= 2 ? reviewClean : validBase;
 
     if (valid.length < 2) {
         return { error: `可用单词不足，当前${valid.length}个，需要至少2个` };
@@ -356,15 +394,18 @@ async function generateQuiz(userId) {
     };
 
     const multiDefGroups = Object.entries(wordGroup)
-        .filter(([w, recs]) => recs.length >= 2 && recs.length <= 10 && isMultiDef(recs[0]))
-        .sort((a, b) => a[1].length - b[1].length);
+        .filter(([w, recs]) => recs.length >= 2 && recs.length <= 10 && isMultiDef(recs[0]));
+    const freshMultiDefGroups = multiDefGroups.filter(([w, recs]) =>
+        !recent.words.has(w) && recs.every(r => !recent.recordIds.has(r.record_id))
+    );
 
     const questions = [];
     const usedRecordIds = new Set();
     const testId = crypto.randomUUID().split('-')[0];
     const letters = ['A', 'B', 'C', 'D'];
 
-    for (const [pickedWord, pickedRecs] of secureRandom(multiDefGroups.slice(0, 4), Math.min(multiDefGroups.length, 4))) {
+    const multiCandidates = freshMultiDefGroups.length > 0 ? freshMultiDefGroups : multiDefGroups;
+    for (const [pickedWord, pickedRecs] of secureRandom(multiCandidates, multiCandidates.length)) {
         const multiQuestions = [];
         for (const rec of pickedRecs) {
             const info = pool[rec.record_id];
@@ -394,7 +435,7 @@ async function generateQuiz(userId) {
             if (questions.some(q => q.word.toLowerCase() === w)) return false;
             const info = pool[r.record_id];
             if (slot === 1) return isContextUsableForWord(info.word, info.context);
-            if (slot === 2) return !info.context?.trim() && info.meaning?.trim();
+            if (slot === 2) return info.meaning?.trim();
             if (slot === 3) {
                 const cn = info.CN_Meaning?.trim();
                 return cn && cn.length > 0 && !cn.includes('请提供要翻译的文本');
@@ -402,7 +443,10 @@ async function generateQuiz(userId) {
             return false;
         });
         if (candidates.length === 0) continue;
-        const rec = secureRandom(candidates, 1)[0];
+        const freshCandidates = candidates.filter(r =>
+            !recent.recordIds.has(r.record_id) && !recent.words.has(r.word.toLowerCase())
+        );
+        const rec = secureRandom(freshCandidates.length > 0 ? freshCandidates : candidates, 1)[0];
         const q = buildQuizQuestion(rec.record_id, pool[rec.record_id], slot, testId, letters);
         if (q) {
             questions.push(q);
@@ -413,7 +457,8 @@ async function generateQuiz(userId) {
     console.log(`生成题目: 总=${questions.length}, type1=${questions.filter(q=>q.type===1).length}, type2=${questions.filter(q=>q.type===2).length}, type3=${questions.filter(q=>q.type===3).length}`);
 
     const token = await getToken();
-    for (const q of questions) {
+    const randomizedQuestions = secureRandom(questions, questions.length);
+    for (const q of randomizedQuestions) {
         await addRecord(TEST_TABLE, {
             user: userId,
             test_id: testId,
@@ -428,7 +473,7 @@ async function generateQuiz(userId) {
 
     return {
         testId,
-        questions: questions.map(({ testId: _, record_id: __, ...q }) => q)
+        questions: randomizedQuestions.map(({ testId: _, record_id: __, ...q }) => q)
     };
 }
 
