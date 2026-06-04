@@ -197,8 +197,8 @@ function secureRandom(arr, count) {
     return pool.slice(0, count);
 }
 
-async function getDistractorPool() {
-    const records = await getRecords(WORD_TABLE);
+async function getDistractorPool(records = null) {
+    records = records || await getRecords(WORD_TABLE);
     const pool = {};
     const wordIndex = {};
     // 词库统计
@@ -235,8 +235,8 @@ async function getDistractorPool() {
     return { pool, wordIndex };
 }
 
-async function getPendingWords(userId) {
-    const records = await getRecords(WORD_TABLE);
+async function getPendingWords(userId, records = null) {
+    records = records || await getRecords(WORD_TABLE);
     return records
         .filter(r => getFieldValue(r.fields.user) === userId && !isMasteredStatus(r.fields.Status))
         .map(r => ({
@@ -281,6 +281,17 @@ async function getRecentQuizFootprint(userId, testCount = 4) {
         if (word) words.add(word);
     }
     return { recordIds, words };
+}
+
+async function runWithConcurrency(items, limit, worker) {
+    let index = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (index < items.length) {
+            const currentIndex = index++;
+            await worker(items[currentIndex], currentIndex);
+        }
+    });
+    await Promise.all(workers);
 }
 
 function isContextValid(ctx) {
@@ -363,8 +374,9 @@ function generateQuestion(word, info, distractors, type, allWords) {
 }
 
 async function generateQuiz(userId) {
-    const { pool } = await getDistractorPool();
-    const pending = await getPendingWords(userId);
+    const wordRecords = await getRecords(WORD_TABLE);
+    const { pool } = await getDistractorPool(wordRecords);
+    const pending = await getPendingWords(userId, wordRecords);
     const recent = await getRecentQuizFootprint(userId).catch(e => {
         console.log(`recent quiz footprint failed: ${e.message}`);
         return { recordIds: new Set(), words: new Set() };
@@ -456,9 +468,9 @@ async function generateQuiz(userId) {
 
     console.log(`生成题目: 总=${questions.length}, type1=${questions.filter(q=>q.type===1).length}, type2=${questions.filter(q=>q.type===2).length}, type3=${questions.filter(q=>q.type===3).length}`);
 
-    const token = await getToken();
     const randomizedQuestions = secureRandom(questions, questions.length);
-    for (const q of randomizedQuestions) {
+    const baseTestTime = Date.now();
+    await runWithConcurrency(randomizedQuestions, 4, async (q, index) => {
         await addRecord(TEST_TABLE, {
             user: userId,
             test_id: testId,
@@ -467,9 +479,9 @@ async function generateQuiz(userId) {
             question_type: q.type,
             correct_answer: q.answer,
             options: JSON.stringify(q.options),
-            test_time: Date.now()
+            test_time: baseTestTime + index
         });
-    }
+    });
 
     return {
         testId,
