@@ -272,10 +272,21 @@ function getWordForms(word) {
 
 function isContextUsableForWord(word, ctx) {
     if (!ctx || typeof ctx !== 'string') return false;
-    if (ctx === '___' || ctx.includes('[object Object]')) return false;
+    const text = ctx.trim();
+    if (text === '___' || text.includes('[object Object]')) return false;
+    const tokens = text.match(/[A-Za-z]+/g) || [];
+    if (tokens.length < 7) return false;
+    if (/^it\s+(works|worked|functions?)\s+like\s+a\s+charm\.?$/i.test(text)) return false;
     if (/^the word ".+" is used in context\.$/i.test(ctx.trim())) return false;
     const forms = getWordForms(word).map(escapeRegExp).join('|');
-    return new RegExp(`\\b(${forms})\\b`, 'i').test(ctx);
+    if (!new RegExp(`\\b(${forms})\\b`, 'i').test(text)) return false;
+    const lower = text.toLowerCase();
+    const target = String(word || '').toLowerCase();
+    const clueWords = tokens
+        .map(t => t.toLowerCase())
+        .filter(t => !getWordForms(target).includes(t))
+        .filter(t => !['the','a','an','it','this','that','these','those','he','she','they','we','i','you','his','her','their','our','my','your','is','are','was','were','be','been','being','has','have','had','do','does','did','to','of','in','on','at','for','with','by','and','or','but','like'].includes(t));
+    return clueWords.length >= 4;
 }
 
 function generateQuestion(word, info, distractors, type, allWords) {
@@ -781,12 +792,21 @@ Return JSON: {"distractors": ["wrong1", "wrong2", "wrong3"]}`;
 }
 
 async function generateExampleWithAI(word, meaning) {
-    const prompt = `为单词 ${word} 生成一个英文例句，返回JSON：{"example": "例句"}`;
+    const prompt = `Create one natural English vocabulary quiz sentence.
+Target word: "${word}"
+Meaning: "${meaning || ''}"
+Rules:
+1. Include the exact target word once.
+2. Add concrete context clues so a learner can infer the meaning.
+3. Do not use thin idioms or fixed phrases such as "It works like a charm".
+4. Avoid generic sentences.
+5. Keep it under 22 words.
+Return JSON only: {"example": "sentence"}`;
     try {
         const result = await callMiniMaxAPI(prompt);
         if (result) {
             const match = result.match(/"example"\s*:\s*"([^"]+)"/);
-            if (match) return match[1];
+            if (match && isContextUsableForWord(word, match[1])) return match[1];
         }
     } catch (e) { }
     return null;
@@ -868,8 +888,12 @@ async function addWords(targetUser, words) {
             const def = await fetchWordDefinition(word);
             
             let distractors = null;
-            let example = def.context || '';
+            let example = isContextUsableForWord(word, def.context) ? def.context : '';
             let cnMeaning = '';
+
+            if (!example) {
+                example = await generateExampleWithAI(word, def.meaning) || '';
+            }
 
             if (example) {
                 distractors = await generateDistractorsWithContext(word, example);
@@ -882,9 +906,9 @@ async function addWords(targetUser, words) {
             }
 
             if (!distractors || distractors.length < 3) {
-                const distPool = await getDistractorPool();
+                const { pool: distPool } = await getDistractorPool();
                 const lowerWord = word.toLowerCase();
-                const allWords = Object.keys(distPool);
+                const allWords = [...new Set(Object.values(distPool).map(r => r.word?.toLowerCase()).filter(Boolean))];
                 const fallback = [];
                 while (fallback.length < 3 && allWords.length > 0) {
                     const idx = crypto.randomInt(0, allWords.length);
