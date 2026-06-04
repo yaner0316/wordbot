@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords, getRecords } = require('./feishu');
+const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
 
 const getFieldVal = (v) => {
     if (!v) return '';
@@ -205,7 +205,11 @@ app.post('/api/admin/updateMulti', async (req, res) => {
 
 app.get('/api/word', async (req, res) => {
     try {
-        const { userId, word } = req.query;
+        const { userId, word, recordId } = req.query;
+        if (recordId) {
+            const data = await getWordByRecordId(recordId);
+            return res.json(data || { exists: false });
+        }
         if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
         const data = await getWord(userId, word);
         res.json(data || { exists: false });
@@ -216,9 +220,40 @@ app.get('/api/word', async (req, res) => {
 
 app.put('/api/word', async (req, res) => {
     try {
-        const { userId, word, meaning, cnMeaning, pos, context, distractors, status } = req.body;
-        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
-        const data = await updateWord(userId, word, { meaning, cnMeaning, pos, context, distractors, status });
+        const { userId, word, recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote } = req.body;
+        if (!recordId && (!userId || !word)) return res.status(400).json({ error: '缺少参数' });
+        const data = await updateWord(userId, word, { recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote });
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/reviewWords', async (req, res) => {
+    try {
+        const data = await getReviewWords(req.query.userId || '');
+        res.json({ words: data });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/reviewWords/mark', async (req, res) => {
+    try {
+        const { recordId, flags, note } = req.body;
+        if (!recordId) return res.status(400).json({ error: '缺少recordId' });
+        const data = await markWordForReview(recordId, flags, note);
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/reviewWords/clear', async (req, res) => {
+    try {
+        const { recordId } = req.body;
+        if (!recordId) return res.status(400).json({ error: '缺少recordId' });
+        const data = await clearWordReview(recordId);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

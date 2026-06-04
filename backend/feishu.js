@@ -984,22 +984,76 @@ async function getWord(userId, word) {
         context: record.fields.Context || '',
         distractors: record.fields.Distractors || '',
         status: record.fields.Status || 'Pending',
+        qualityFlags: record.fields.Quality_Flags || '',
+        qualityNote: record.fields.Quality_Note || '',
         record_id: record.record_id
     };
 }
 
+function mapWordRecord(record) {
+    return {
+        word: record.fields.Word || '',
+        meaning: record.fields.Meaning || '',
+        cnMeaning: record.fields.CN_Meaning || '',
+        pos: record.fields.POS || '',
+        context: record.fields.Context || '',
+        distractors: record.fields.Distractors || '',
+        status: record.fields.Status || 'Pending',
+        qualityFlags: record.fields.Quality_Flags || '',
+        qualityNote: record.fields.Quality_Note || '',
+        user: record.fields.user || '',
+        record_id: record.record_id
+    };
+}
+
+async function getWordByRecordId(recordId) {
+    const records = await getRecords(WORD_TABLE);
+    const record = records.find(r => r.record_id === recordId);
+    return record ? mapWordRecord(record) : null;
+}
+
 async function updateWord(userId, word, fields) {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    const record = fields.recordId
+        ? records.find(r => r.record_id === fields.recordId && (!userId || r.fields.user === userId))
+        : records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
     if (!record) return { error: '单词不存在' };
     const updateFields = {};
+    if (fields.word !== undefined) updateFields.Word = fields.word;
     if (fields.meaning !== undefined) updateFields.Meaning = fields.meaning;
     if (fields.cnMeaning !== undefined) updateFields.CN_Meaning = fields.cnMeaning;
     if (fields.pos !== undefined) updateFields.POS = fields.pos;
     if (fields.context !== undefined) updateFields.Context = fields.context;
     if (fields.distractors !== undefined) updateFields.Distractors = fields.distractors;
     if (fields.status !== undefined) updateFields.Status = fields.status;
+    if (fields.qualityFlags !== undefined) updateFields.Quality_Flags = fields.qualityFlags;
+    if (fields.qualityNote !== undefined) updateFields.Quality_Note = fields.qualityNote;
     await updateRecord(WORD_TABLE, record.record_id, updateFields);
+    return { success: true };
+}
+
+async function getReviewWords(userId) {
+    const records = await getRecords(WORD_TABLE);
+    return records
+        .filter(r => !userId || r.fields.user === userId)
+        .filter(r => getFieldValue(r.fields.Quality_Flags).trim() || getFieldValue(r.fields.Quality_Note).trim())
+        .filter(r => !isMasteredStatus(r.fields.Status))
+        .map(mapWordRecord);
+}
+
+async function markWordForReview(recordId, flags, note) {
+    await updateRecord(WORD_TABLE, recordId, {
+        Quality_Flags: flags || 'manual_review',
+        Quality_Note: note || ''
+    });
+    return { success: true };
+}
+
+async function clearWordReview(recordId) {
+    await updateRecord(WORD_TABLE, recordId, {
+        Quality_Flags: '',
+        Quality_Note: ''
+    });
     return { success: true };
 }
 
@@ -1025,4 +1079,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, searchRecords, getRecords, updateRecord, getToken };
+module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
