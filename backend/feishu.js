@@ -1,9 +1,14 @@
 const https = require('https');
 const crypto = require('crypto');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
-const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+const APP_ID = process.env.FEISHU_APP_ID;
+const APP_SECRET = process.env.FEISHU_APP_SECRET;
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const AI_PROVIDER = (process.env.AI_PROVIDER || (DEEPSEEK_API_KEY ? 'deepseek' : (OPENAI_API_KEY ? 'openai' : 'minimax'))).toLowerCase();
 
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 const DIST_TABLE = { appToken: 'GskxbMxMgaDPFRsgqS4cdWvdndb', tableId: 'tbl3EgurgOTXdM3V' };
@@ -13,6 +18,23 @@ const STATUS_PENDING = 'Pending';
 const STATUS_MASTERED = 'Mastered';
 const STATUS_PENDING_LEGACY = 'optXjbXS2F';
 const STATUS_MASTERED_LEGACY = 'optF5P0W3O';
+
+function normalizeStatus(status) {
+    if (Array.isArray(status)) return normalizeStatus(status[0]);
+    if (!status) return STATUS_PENDING;
+    if (typeof status === 'object') {
+        return normalizeStatus(getFieldValue(status));
+    }
+    const value = String(status).trim();
+    const lower = value.toLowerCase();
+    if (lower === STATUS_MASTERED.toLowerCase() || value === STATUS_MASTERED_LEGACY || value === '已掌握') return STATUS_MASTERED;
+    if (lower === STATUS_PENDING.toLowerCase() || value === STATUS_PENDING_LEGACY || value === '待复习') return STATUS_PENDING;
+    return STATUS_PENDING;
+}
+
+function isMasteredStatus(status) {
+    return normalizeStatus(status) === STATUS_MASTERED;
+}
 
 function getFieldValue(value) {
     if (value === undefined || value === null) return '';
@@ -34,18 +56,6 @@ function getFieldValue(value) {
         return value;
     }
     return String(value);
-}
-
-function normalizeStatus(status) {
-    const value = getFieldValue(status).trim();
-    const lower = value.toLowerCase();
-    if (lower === STATUS_MASTERED.toLowerCase() || value === STATUS_MASTERED_LEGACY || value === '已掌握') return STATUS_MASTERED;
-    if (lower === STATUS_PENDING.toLowerCase() || value === STATUS_PENDING_LEGACY || value === '待复习') return STATUS_PENDING;
-    return STATUS_PENDING;
-}
-
-function isMasteredStatus(status) {
-    return normalizeStatus(status) === STATUS_MASTERED;
 }
 
 function isCorrectField(value) {
@@ -119,6 +129,9 @@ let tokenExpiry = 0;
 
 async function getToken() {
     if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+    if (!APP_ID || !APP_SECRET) {
+        throw new Error('FEISHU_APP_ID and FEISHU_APP_SECRET must be set');
+    }
     const res = await request('POST', '/open-apis/auth/v3/tenant_access_token/internal', {
         app_id: APP_ID, app_secret: APP_SECRET
     });
@@ -176,18 +189,6 @@ async function addRecord(table, fields) {
     return res;
 }
 
-async function addRecords(table, fieldList) {
-    const token = await getToken();
-    const records = fieldList.map(fields => ({ fields }));
-    console.log(`批量写入表: ${table.appToken} ${table.tableId}, 数量=${records.length}`);
-    const res = await request('POST', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/batch_create`, { records }, token);
-    console.log('batchCreate返回:', JSON.stringify(res).substring(0, 200));
-    if (res.code !== 0) {
-        throw new Error(`批量添加记录失败: ${res.msg || res.code}`);
-    }
-    return res;
-}
-
 async function updateRecord(table, recordId, fields) {
     const token = await getToken();
     const res = await request('PUT', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/${recordId}`, { fields }, token);
@@ -209,34 +210,36 @@ function secureRandom(arr, count) {
     return pool.slice(0, count);
 }
 
-async function getDistractorPool(records = null) {
-    records = records || await getRecords(WORD_TABLE);
+async function getDistractorPool() {
+    const records = await getRecords(WORD_TABLE);
+    // 按 record_id 存储，每条记录独立（多义词每个释义都是独立记录）
     const pool = {};
+    // 额外维护 word -> records 索引（用于多义词识别）
     const wordIndex = {};
     // 词库统计
     let stats = { total: 0, hasCN: 0, hasDist3: 0, canType3: 0 };
-    
+
     for (const r of records) {
-        const w = getFieldValue(r.fields.Word).toLowerCase();
+        const w = r.fields.Word?.toLowerCase();
         if (w) {
-            const cn = getFieldValue(r.fields.CN_Meaning).trim();
-            const dists = getFieldValue(r.fields.Distractors).split(',').map(s => s.trim()).filter(s => s);
-            const context = getFieldValue(r.fields.Context);
-            
+            const cn = r.fields.CN_Meaning?.trim() || '';
+            const dists = r.fields.Distractors ? r.fields.Distractors.split(',').map(s => s.trim()).filter(s => s) : [];
+            const context = r.fields.Context || '';
+
             pool[r.record_id] = {
-                word: getFieldValue(r.fields.Word),
-                pos: getFieldValue(r.fields.POS),
-                meaning: getFieldValue(r.fields.Meaning),
+                word: r.fields.Word,
+                meaning: r.fields.Meaning,
                 CN_Meaning: cn,
                 distractors: dists,
                 context: context,
                 rawContext: context,
+                pos: r.fields.POS,
                 multi_definition: r.fields.multi_definition
             };
 
             if (!wordIndex[w]) wordIndex[w] = [];
             wordIndex[w].push(r.record_id);
-            
+
             stats.total++;
             if (cn) stats.hasCN++;
             if (dists.length >= 3) stats.hasDist3++;
@@ -247,57 +250,20 @@ async function getDistractorPool(records = null) {
     return { pool, wordIndex };
 }
 
-async function getPendingWords(userId, records = null) {
-    records = records || await getRecords(WORD_TABLE);
+async function getPendingWords(userId) {
+    const records = await getRecords(WORD_TABLE);
     return records
-        .filter(r => getFieldValue(r.fields.user) === userId && !isMasteredStatus(r.fields.Status))
+        .filter(r => r.fields.user === userId && !isMasteredStatus(r.fields.Status))
         .map(r => ({
             record_id: r.record_id,
-            word: getFieldValue(r.fields.Word),
-            meaning: getFieldValue(r.fields.Meaning),
-            pos: getFieldValue(r.fields.POS),
-            cn_meaning: getFieldValue(r.fields.CN_Meaning),
-            context: getFieldValue(r.fields.Context),
-            distractors: getFieldValue(r.fields.Distractors),
-            multi_definition: r.fields.multi_definition,
-            quality_flags: getFieldValue(r.fields.Quality_Flags)
+            word: r.fields.Word,
+            meaning: r.fields.Meaning,
+            pos: r.fields.POS,
+            cn_meaning: r.fields.CN_Meaning,
+            context: r.fields.Context,
+            distractors: r.fields.Distractors,
+            multi_definition: r.fields.multi_definition
         }));
-}
-
-async function getRecentQuizFootprint(userId, testCount = 4) {
-    const records = await searchRecords(
-        TEST_TABLE,
-        { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [userId] }] },
-        [{ desc: true, field_name: "test_time" }],
-        30000
-    );
-    const recentTestIds = [];
-    const seenTests = new Set();
-    for (const record of records) {
-        const testId = getFieldValue(record.fields.test_id);
-        if (!testId || seenTests.has(testId)) continue;
-        seenTests.add(testId);
-        recentTestIds.push(testId);
-        if (recentTestIds.length >= testCount) break;
-    }
-
-    const recentSet = new Set(recentTestIds);
-    const recordIds = new Set();
-    const words = new Set();
-    for (const record of records) {
-        const testId = getFieldValue(record.fields.test_id);
-        if (!recentSet.has(testId)) continue;
-        const recordId = getFieldValue(record.fields.record_id);
-        const word = getFieldValue(record.fields.word).toLowerCase();
-        if (recordId) recordIds.add(recordId);
-        if (word) words.add(word);
-    }
-    return { recordIds, words };
-}
-
-function isContextValid(ctx) {
-    if (!ctx || ctx === '___' || ctx.includes('[object Object]')) return false;
-    return true;
 }
 
 function escapeRegExp(text) {
@@ -321,10 +287,10 @@ function isContextUsableForWord(word, ctx) {
     const tokens = text.match(/[A-Za-z]+/g) || [];
     if (tokens.length < 7) return false;
     if (/^it\s+(works|worked|functions?)\s+like\s+a\s+charm\.?$/i.test(text)) return false;
-    if (/^the word ".+" is used in context\.$/i.test(ctx.trim())) return false;
+    if (/^the word ".+" is used in context\.$/i.test(text)) return false;
+
     const forms = getWordForms(word).map(escapeRegExp).join('|');
     if (!new RegExp(`\\b(${forms})\\b`, 'i').test(text)) return false;
-    const lower = text.toLowerCase();
     const target = String(word || '').toLowerCase();
     const clueWords = tokens
         .map(t => t.toLowerCase())
@@ -375,25 +341,20 @@ function generateQuestion(word, info, distractors, type, allWords) {
 }
 
 async function generateQuiz(userId) {
-    const wordRecords = await getRecords(WORD_TABLE);
-    const { pool } = await getDistractorPool(wordRecords);
-    const pending = await getPendingWords(userId, wordRecords);
-    const recent = await getRecentQuizFootprint(userId).catch(e => {
-        console.log(`recent quiz footprint failed: ${e.message}`);
-        return { recordIds: new Set(), words: new Set() };
-    });
+    const { pool, wordIndex } = await getDistractorPool();
+    const pending = await getPendingWords(userId);
 
-    const validBase = pending.filter(r => {
+    // 按 record 过滤有效记录（每条记录代表一个释义）
+    const valid = pending.filter(r => {
         const info = pool[r.record_id];
         return info && (info.distractors || []).filter(d => d).length >= 3;
     });
-    const reviewClean = validBase.filter(r => !r.quality_flags);
-    const valid = reviewClean.length >= 2 ? reviewClean : validBase;
 
     if (valid.length < 2) {
         return { error: `可用单词不足，当前${valid.length}个，需要至少2个` };
     }
 
+    // 按 word 分组，识别多义词
     const wordGroup = {};
     for (const rec of valid) {
         const w = rec.word.toLowerCase();
@@ -401,54 +362,60 @@ async function generateQuiz(userId) {
         wordGroup[w].push(rec);
     }
 
+    // 多义词判断：用 multi_definition 标志（不是按 record 数量）
     const isMultiDef = (rec) => {
         const m = rec.multi_definition;
         return m === 'opthB7bmkB' || (Array.isArray(m) && m.includes('opthB7bmkB'));
     };
 
+    // 识别多义词（multi_definition = opthB7bmkB），按释义数升序排序
     const multiDefGroups = Object.entries(wordGroup)
-        .filter(([w, recs]) => recs.length >= 2 && recs.length <= 10 && isMultiDef(recs[0]));
-    const freshMultiDefGroups = multiDefGroups.filter(([w, recs]) =>
-        !recent.words.has(w) && recs.every(r => !recent.recordIds.has(r.record_id))
-    );
+        .filter(([w, recs]) => recs.length >= 2 && isMultiDef(recs[0]))
+        .sort((a, b) => a[1].length - b[1].length);
 
     const questions = [];
     const usedRecordIds = new Set();
     const testId = crypto.randomUUID().split('-')[0];
     const letters = ['A', 'B', 'C', 'D'];
 
-    const multiCandidates = freshMultiDefGroups.length > 0 ? freshMultiDefGroups : multiDefGroups;
-    for (const [pickedWord, pickedRecs] of secureRandom(multiCandidates, multiCandidates.length)) {
-        const multiQuestions = [];
+    // 1. 多义词出题：选 1 个多义词，每个释义出 1 题
+    if (multiDefGroups.length > 0) {
+        const candidates = multiDefGroups.slice(0, 2);  // 释义最少的前 2 个随机选
+        const picked = secureRandom(candidates, 1)[0];
+        const [pickedWord, pickedRecs] = picked;
+        console.log(`选中多义词: ${pickedWord}, 释义数=${pickedRecs.length}`);
+
         for (const rec of pickedRecs) {
+            if (questions.length >= 10) break;
             const info = pool[rec.record_id];
+            // 判断题型：优先用中文释义
             const cn = info.CN_Meaning?.trim();
             const hasGoodCN = cn && cn.length > 0 && !cn.includes('请提供要翻译的文本');
             const qType = hasGoodCN ? 3 : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
             const q = buildQuizQuestion(rec.record_id, info, qType, testId, letters);
-            if (q) multiQuestions.push(q);
-        }
-        if (multiQuestions.length === pickedRecs.length) {
-            console.log(`选中多义词: ${pickedWord}, 释义数=${pickedRecs.length}`);
-            for (const q of multiQuestions) {
+            if (q) {
                 questions.push(q);
-                usedRecordIds.add(q.record_id);
+                usedRecordIds.add(rec.record_id);
             }
-            break;
         }
     }
 
-    const typeSlots = secureRandom([...Array(6).fill(1), ...Array(2).fill(2), ...Array(2).fill(3)], 10);
+    // 2. 剩余题数从单义词中按 6:2:2 抽
+    const typeSlots = [...Array(6).fill(1), ...Array(2).fill(2), ...Array(2).fill(3)];
+    const shuffledSlots = secureRandom(typeSlots, typeSlots.length);
+
     const remaining = valid.filter(r => !usedRecordIds.has(r.record_id));
-    for (const slot of typeSlots) {
+
+    for (const slot of shuffledSlots) {
         if (questions.length >= 10) break;
+        // 优先抽单词未被用过的（去重）
         const candidates = remaining.filter(r => {
             if (usedRecordIds.has(r.record_id)) return false;
             const w = r.word.toLowerCase();
-            if (questions.some(q => q.word.toLowerCase() === w)) return false;
+            if (questions.some(q => q.word.toLowerCase() === w)) return false;  // 单义词去重
             const info = pool[r.record_id];
             if (slot === 1) return isContextUsableForWord(info.word, info.context);
-            if (slot === 2) return info.meaning?.trim();
+            if (slot === 2) return !info.context?.trim() && info.meaning?.trim();
             if (slot === 3) {
                 const cn = info.CN_Meaning?.trim();
                 return cn && cn.length > 0 && !cn.includes('请提供要翻译的文本');
@@ -456,11 +423,10 @@ async function generateQuiz(userId) {
             return false;
         });
         if (candidates.length === 0) continue;
-        const freshCandidates = candidates.filter(r =>
-            !recent.recordIds.has(r.record_id) && !recent.words.has(r.word.toLowerCase())
-        );
-        const rec = secureRandom(freshCandidates.length > 0 ? freshCandidates : candidates, 1)[0];
-        const q = buildQuizQuestion(rec.record_id, pool[rec.record_id], slot, testId, letters);
+
+        const rec = secureRandom(candidates, 1)[0];
+        const info = pool[rec.record_id];
+        const q = buildQuizQuestion(rec.record_id, info, slot, testId, letters);
         if (q) {
             questions.push(q);
             usedRecordIds.add(rec.record_id);
@@ -469,9 +435,9 @@ async function generateQuiz(userId) {
 
     console.log(`生成题目: 总=${questions.length}, type1=${questions.filter(q=>q.type===1).length}, type2=${questions.filter(q=>q.type===2).length}, type3=${questions.filter(q=>q.type===3).length}`);
 
-    const randomizedQuestions = secureRandom(questions, questions.length);
-    const baseTestTime = Date.now();
-    await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
+    // 写入 TEST_TABLE（带 record_id 关联到 WORD_TABLE）
+    for (const q of questions) {
+        await addRecord(TEST_TABLE, {
             user: userId,
             test_id: testId,
             record_id: q.record_id,
@@ -479,12 +445,13 @@ async function generateQuiz(userId) {
             question_type: q.type,
             correct_answer: q.answer,
             options: JSON.stringify(q.options),
-            test_time: baseTestTime + index
-    })));
+            test_time: Date.now()
+        });
+    }
 
     return {
         testId,
-        questions: randomizedQuestions.map(({ testId: _, record_id: __, ...q }) => q)
+        questions: questions.map(({ testId: _, record_id: __, ...q }) => q)
     };
 }
 
@@ -492,8 +459,16 @@ function buildQuizQuestion(recordId, info, qType, testId, letters) {
     const key = info.word.toLowerCase();
     const specificDistrs = (info.distractors || []).filter(d => d !== key);
     if (specificDistrs.length < 3) return null;
-    const finalOpts = secureRandom([key, ...secureRandom(specificDistrs, 3)], 4);
+    const distrs = secureRandom(specificDistrs, 3);
+
+    const opts = [key, ...distrs];
+    for (let i = opts.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    const finalOpts = opts.slice(0, 4);
     const correctIdx = finalOpts.indexOf(key);
+
     let q;
     if (qType === 1) {
         if (!isContextUsableForWord(key, info.context)) return null;
@@ -505,8 +480,10 @@ function buildQuizQuestion(recordId, info, qType, testId, letters) {
         const meaning = (info.meaning || '').split(';')[0] || info.meaning || '';
         q = { type: 2, word: key, context: meaning, options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
     } else if (qType === 3) {
-        q = { type: 3, word: key, context: info.CN_Meaning || '', options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
+        const cnMeaning = info.CN_Meaning || '';
+        q = { type: 3, word: key, context: cnMeaning, options: finalOpts.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
     }
+
     if (!q || !q.context) return null;
     q.testId = testId;
     q.record_id = recordId;
@@ -530,7 +507,10 @@ async function submitAnswers(userId, testId, answers) {
 
     let correct = 0;
     const results = [];
-    const wordMap = {};
+    // 按 record_id 分组（新记录精确批改）
+    const recordResults = {};
+    // 按 word 分组（旧记录兼容批改，仅用于统计不计单词状态）
+    const wordResults = {};
 
     const letters = ['A', 'B', 'C', 'D'];
     for (let i = 0; i < Math.min(sortedRecords.length, answers.length); i++) {
@@ -539,7 +519,19 @@ async function submitAnswers(userId, testId, answers) {
         const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
         const correctAnswer = rec.fields.correct_answer;
         console.log(`第${i+1}题 correctAnswer:`, JSON.stringify(correctAnswer));
-        const answerStr = getFieldValue(correctAnswer);
+        let answerStr = '';
+        if (typeof correctAnswer === 'string') {
+            try {
+                const parsed = JSON.parse(correctAnswer);
+                answerStr = Array.isArray(parsed) ? (parsed[0]?.text || parsed[0]) : (parsed?.text || parsed);
+            } catch (e) {
+                answerStr = correctAnswer;
+            }
+        } else if (Array.isArray(correctAnswer)) {
+            answerStr = correctAnswer[0]?.text || JSON.stringify(correctAnswer);
+        } else {
+            answerStr = correctAnswer?.text || JSON.stringify(correctAnswer);
+        }
         const isCorrect = yourAnswer === answerStr;
         if (isCorrect) correct++;
 
@@ -548,41 +540,41 @@ async function submitAnswers(userId, testId, answers) {
             is_correct: isCorrect ? ['optHGT7gYf'] : ['optbe4bsQk']
         });
 
-        const word = getFieldValue(rec.fields.word).toLowerCase();
-        const recordId = getFieldValue(rec.fields.record_id);
-        if (!wordMap[word]) {
-            wordMap[word] = { correct: 0, total: 0, recordIds: [], wrongRecordIds: [], hasRecordIds: false };
-        }
-        wordMap[word].total++;
-        if (isCorrect) wordMap[word].correct++;
+        const word = rec.fields.word;
+        const recordId = rec.fields.record_id;
+
         if (recordId) {
-            wordMap[word].hasRecordIds = true;
-            wordMap[word].recordIds.push(recordId);
-            if (!isCorrect) wordMap[word].wrongRecordIds.push(recordId);
+            // 新记录：按 record_id 精确统计
+            if (!recordResults[recordId]) recordResults[recordId] = { correct: 0, total: 0, word };
+            recordResults[recordId].total++;
+            if (isCorrect) recordResults[recordId].correct++;
+        } else {
+            // 旧记录（无 record_id）：按 word 兼容统计
+            if (!wordResults[word]) wordResults[word] = { correct: 0, total: 0 };
+            wordResults[word].total++;
+            if (isCorrect) wordResults[word].correct++;
         }
 
         results.push({ q: i + 1, word, recordId, your: yourAnswer, answer: answerStr, correct: isCorrect });
     }
 
-    const masteredWords = [];
-    for (const [word, stats] of Object.entries(wordMap)) {
-        if (stats.hasRecordIds) {
-            if (stats.correct >= stats.total) {
-                masteredWords.push(word);
-                for (const recordId of stats.recordIds) {
-                    await updateRecord(WORD_TABLE, recordId, { Status: STATUS_MASTERED });
-                }
-            } else {
-                const current = await getRecords(WORD_TABLE);
-                for (const recordId of stats.wrongRecordIds) {
-                    const rec = current.find(r => r.record_id === recordId);
-                    const errCount = Number(rec?.fields?.Error_Count || 0) + 1;
-                    await updateRecord(WORD_TABLE, recordId, { Error_Count: errCount });
-                }
-            }
-        } else if (stats.correct >= stats.total) {
-            masteredWords.push(word);
-            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId && getFieldValue(r.fields.Word).toLowerCase() === word);
+    // 新记录：按 record_id 全部答对 → 标记该 record 为已掌握，答错 → Error_Count +1
+    for (const [recordId, stats] of Object.entries(recordResults)) {
+        if (stats.correct >= stats.total) {
+            await updateRecord(WORD_TABLE, recordId, { Status: STATUS_MASTERED });
+        } else {
+            // 答错：Error_Count +1
+            const current = await getRecords(WORD_TABLE);
+            const rec = current.find(r => r.record_id === recordId);
+            const errCount = Number(rec?.fields?.Error_Count || 0) + 1;
+            await updateRecord(WORD_TABLE, recordId, { Error_Count: errCount });
+        }
+    }
+
+    // 旧记录：按 word 全部答对 → 标记该 word 的所有 record 为已掌握（兼容方案）
+    for (const [word, stats] of Object.entries(wordResults)) {
+        if (stats.correct >= stats.total) {
+            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId && getFieldValue(r.fields.Word) === word);
             for (const wr of wordRecords) {
                 await updateRecord(WORD_TABLE, wr.record_id, { Status: STATUS_MASTERED });
             }
@@ -594,7 +586,7 @@ async function submitAnswers(userId, testId, answers) {
     const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
     const statsRecords = await getRecords(STATS_TABLE);
-    const userRecord = statsRecords.find(r => getFieldValue(r.fields.user) === userId);
+    const userRecord = statsRecords.find(r => r.fields.user === userId);
 
     const statsFields = {
         user: userId,
@@ -613,6 +605,16 @@ async function submitAnswers(userId, testId, answers) {
     }
 
     console.log('submitAnswers results:', JSON.stringify(results).substring(0, 500));
+    // 收集本次掌握的单词（返回给前端）
+    const masteredWords = [
+        ...Object.entries(recordResults)
+            .filter(([rid, stats]) => stats.correct >= stats.total)
+            .map(([rid, stats]) => stats.word),
+        ...Object.entries(wordResults)
+            .filter(([word, stats]) => stats.correct >= stats.total)
+            .map(([word, stats]) => word)
+    ];
+
     return {
         results,
         correct,
@@ -664,7 +666,7 @@ async function addWord(targetUser, wordData) {
         user: targetUser,
         Word: toSimp(Word),
         Meaning: toSimp(Meaning),
-        Status: 'Pending',
+        Status: STATUS_PENDING,
         record_time: Date.now()
     };
     if (POS) fields.POS = POS;
@@ -693,20 +695,25 @@ async function getAllStats() {
 async function validateWords(words) {
     const errors = [];
     const multiMeanings = [];
-    const distPool = await getDistractorPool();
-    
+    const { pool, wordIndex } = await getDistractorPool();
+
     for (const word of words) {
         const lowerWord = word.toLowerCase();
         if (!/^[a-z]+$/.test(lowerWord)) {
             errors.push(word);
             continue;
         }
-        
+
         let meanings = [];
-        
-        const exists = distPool[lowerWord];
-        if (exists && exists.meaning) {
-            meanings = exists.meaning.split(',').map(m => m.trim()).filter(m => m);
+
+        // 通过 wordIndex 找到该 word 的所有 record_id
+        const recordIds = wordIndex[lowerWord] || [];
+        if (recordIds.length > 0) {
+            // 已存在：汇总所有 record 的 meaning（多义词场景）
+            const allMeanings = recordIds.map(rid => pool[rid].meaning).filter(m => m);
+            const splitMeanings = allMeanings
+                .flatMap(m => m.split(/[;,]/).map(s => s.trim()).filter(s => s));
+            meanings = [...new Set(splitMeanings)];
         } else {
             const def = await fetchWordDefinition(word);
             if (def.meaning && def.meaning.includes(';')) {
@@ -715,7 +722,7 @@ async function validateWords(words) {
                 meanings = [def.meaning];
             }
         }
-        
+
         if (meanings.length > 1) {
             multiMeanings.push({ word, meanings });
         }
@@ -803,66 +810,435 @@ async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7', timeout = 15000) {
     });
 }
 
-async function generateDistractorsWithContext(word, context) {
-    const prompt = `Given the sentence: "${context}"
-Target word: "${word}"
-Generate 3 wrong distractors that:
-1. Are grammatically correct in this sentence
-2. Make the sentence sound natural but meaning wrong
-3. Are NOT synonyms of "${word}"
-Return JSON: {"distractors": ["word1", "word2", "word3"]}`;
-    try {
-        const result = await callMiniMaxAPI(prompt);
-        if (result) {
-            const match = result.match(/"distractors"\s*:\s*\[(.*?)\]/s);
-            if (match) {
-                const words = match[1].match(/"([^"]+)"/g);
-                if (words && words.length >= 3) {
-                    return words.map(w => w.replace(/"/g, '').trim());
-                }
+async function callOpenAIAPI(prompt, model = OPENAI_MODEL, timeout = 30000) {
+    return new Promise((resolve, reject) => {
+        if (!OPENAI_API_KEY) {
+            reject(new Error('OPENAI_API_KEY not set'));
+            return;
+        }
+        const data = JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: 'You create high-quality English vocabulary quiz content. Return strict JSON only.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            response_format: { type: 'json_object' }
+        });
+        const options = {
+            hostname: 'api.openai.com',
+            path: '/v1/chat/completions',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                'Content-Length': Buffer.byteLength(data)
             }
+        };
+        const req = https.request(options, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                const raw = Buffer.concat(chunks).toString();
+                try {
+                    const result = JSON.parse(raw);
+                    const content = result.choices?.[0]?.message?.content;
+                    if (!content) {
+                        reject(new Error(`OpenAI empty response: ${raw.substring(0, 200)}`));
+                        return;
+                    }
+                    resolve(content);
+                } catch (e) {
+                    reject(new Error(`OpenAI parse failed: ${e.message}`));
+                }
+            });
+        });
+        req.on('error', reject);
+        const timer = setTimeout(() => {
+            req.destroy();
+            reject(new Error('timeout'));
+        }, timeout);
+        req.on('close', () => clearTimeout(timer));
+        req.write(data);
+        req.end();
+    });
+}
+
+async function callDeepSeekAPI(prompt, model = DEEPSEEK_MODEL, timeout = 30000) {
+    return new Promise((resolve, reject) => {
+        if (!DEEPSEEK_API_KEY) {
+            reject(new Error('DEEPSEEK_API_KEY not set'));
+            return;
+        }
+        const data = JSON.stringify({
+            model,
+            messages: [
+                { role: 'system', content: 'You create high-quality English vocabulary quiz content. Return strict JSON only.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            thinking: { type: 'disabled' }
+        });
+        const options = {
+            hostname: 'api.deepseek.com',
+            path: '/v1/chat/completions',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
+                'Content-Length': Buffer.byteLength(data)
+            }
+        };
+        const req = https.request(options, (res) => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+                const raw = Buffer.concat(chunks).toString();
+                try {
+                    const result = JSON.parse(raw);
+                    const content = result.choices?.[0]?.message?.content;
+                    if (!content) {
+                        reject(new Error(`DeepSeek empty response: ${raw.substring(0, 200)}`));
+                        return;
+                    }
+                    resolve(content);
+                } catch (e) {
+                    reject(new Error(`DeepSeek parse failed: ${e.message}`));
+                }
+            });
+        });
+        req.on('error', reject);
+        const timer = setTimeout(() => {
+            req.destroy();
+            reject(new Error('timeout'));
+        }, timeout);
+        req.on('close', () => clearTimeout(timer));
+        req.write(data);
+        req.end();
+    });
+}
+
+async function callAI(prompt, options = {}) {
+    const provider = options.provider || AI_PROVIDER;
+    if (provider === 'deepseek') {
+        try {
+            return await callDeepSeekAPI(prompt, options.model || DEEPSEEK_MODEL, options.timeout || 30000);
+        } catch (e) {
+            console.log(`DeepSeek 调用失败，尝试其他 fallback: ${e.message}`);
+            if (OPENAI_API_KEY) return callOpenAIAPI(prompt, options.model || OPENAI_MODEL, options.timeout || 30000);
+            if (MINIMAX_API_KEY) return callMiniMaxAPI(prompt, undefined, options.timeout || 20000);
+            throw e;
+        }
+    }
+    if (provider === 'openai') {
+        try {
+            return await callOpenAIAPI(prompt, options.model || OPENAI_MODEL, options.timeout || 30000);
+        } catch (e) {
+            console.log(`OpenAI 调用失败，尝试 MiniMax fallback: ${e.message}`);
+            if (MINIMAX_API_KEY) return callMiniMaxAPI(prompt, undefined, options.timeout || 20000);
+            throw e;
+        }
+    }
+    return callMiniMaxAPI(prompt, undefined, options.timeout || 20000);
+}
+
+function parseJsonArrayFromAI(text, key) {
+    if (!text) return null;
+    try {
+        const jsonText = text.match(/\{[\s\S]*\}/)?.[0];
+        const parsed = JSON.parse(jsonText || text);
+        return Array.isArray(parsed?.[key]) ? parsed[key] : null;
+    } catch (e) {
+        const match = text.match(new RegExp(`"${key}"\\s*:\\s*\\[(.*?)\\]`, 's'));
+        const words = match?.[1]?.match(/"([^"]+)"/g);
+        return words ? words.map(w => w.replace(/"/g, '').trim()) : null;
+    }
+}
+
+function cleanDistractors(word, distractors) {
+    const key = String(word || '').toLowerCase();
+    const seen = new Set();
+    return (distractors || [])
+        .map(d => String(d || '').trim().toLowerCase())
+        .filter(d => /^[a-z][a-z -]*$/i.test(d))
+        .filter(d => d !== key && !getWordForms(key).includes(d))
+        .filter(d => {
+            if (seen.has(d)) return false;
+            seen.add(d);
+            return true;
+        })
+        .slice(0, 3);
+}
+
+async function generateQualityContext(word, meaning, pos) {
+    const prompt = `Create one natural English sentence for a vocabulary quiz.
+Target word: "${word}"
+Part of speech: "${pos || 'unknown'}"
+Meaning: "${meaning || ''}"
+Rules:
+1. The sentence must include the exact target word "${word}" once.
+2. The sentence must make the meaning of "${word}" inferable from nearby context clues.
+3. Include concrete clues, consequences, or details that point to the target meaning.
+4. Avoid thin fixed phrases or idioms such as "It works like a charm."
+5. Avoid generic sentences like "The word ... is used in context."
+6. Keep it under 22 words.
+    Return strict JSON only: {"example": "sentence"}`;
+    try {
+        const result = await callAI(prompt);
+        const examples = parseJsonArrayFromAI(result, 'examples');
+        const example = examples?.[0] || result?.match(/"example"\s*:\s*"([^"]+)"/)?.[1];
+        if (isContextUsableForWord(word, example)) {
+            return example.replace(/\s+/g, ' ').trim();
         }
     } catch (e) { }
     return null;
 }
 
-async function generateDistractorsWithCollocation(word, context) {
-    const prompt = `Sentence: "${context}"
-Word: "${word}"
-Generate 3 WRONG words by analyzing collocation keywords in the sentence.
-The wrong words should create semantic confusion when substituted.
-Return JSON: {"distractors": ["wrong1", "wrong2", "wrong3"]}`;
+async function generateDistractorsWithContext(word, context, meaning, pos, feedback = '') {
+    const prompt = `Generate high-quality multiple-choice distractors for an English vocabulary quiz.
+Target word: "${word}"
+Part of speech: "${pos || 'unknown'}"
+Meaning: "${meaning || ''}"
+Sentence context: "${context}"
+${feedback ? `Rejected previous candidates and reason: ${feedback}` : ''}
+
+Return exactly 3 English words or short phrases.
+Each distractor must:
+1. Match the target word's part of speech.
+2. Be semantically related to the target word or from the same conceptual domain.
+3. Be plausible enough to confuse a learner who only knows the broad topic.
+4. Be incorrect in this exact sentence context.
+5. Not be a synonym, antonym, spelling variant, inflection, or translation of "${word}".
+6. Prefer sibling-category alternatives under the same narrow category, separated by the sentence's concrete clues.
+7. If a distractor could reasonably answer the same question as "${word}", reject it.
+8. Do not use broader/narrower near-equivalents such as taste/preference for "fancy" or hunger/craving for "appetite".
+9. Avoid broad-domain but different-category words. For "jeans", other lower-body garments are better than shirts or accessories.
+10. Prefer common learner vocabulary (CEFR A1-B1). Avoid obscure or low-frequency words unless the target itself is advanced.
+
+Examples of bad distractors:
+- For "appetite", do not use hunger, craving, desire.
+- For "in spite of", do not use despite or notwithstanding.
+- For "fancy" meaning liking/desire, do not use appetite, taste, preference.
+- For "applicant", do not use candidate, aspirant, petitioner.
+- For a noun target, do not return adjectives.
+- For a verb target, do not return adjectives or nouns.
+
+Return strict JSON only: {"distractors": ["word1", "word2", "word3"]}`;
     try {
-        const result = await callMiniMaxAPI(prompt);
-        if (result) {
-            const match = result.match(/"distractors"\s*:\s*\[(.*?)\]/s);
-            if (match) {
-                const words = match[1].match(/"([^"]+)"/g);
-                if (words && words.length >= 3) {
-                    return words.map(w => w.replace(/"/g, '').trim());
-                }
-            }
-        }
+        const result = await callAI(prompt);
+        const cleaned = cleanDistractors(word, parseJsonArrayFromAI(result, 'distractors'));
+        if (cleaned.length >= 3) return cleaned;
     } catch (e) { }
     return null;
+}
+
+async function generateSafeDistractorsWithContext(word, context, meaning, pos, feedback = '') {
+    const prompt = `Generate safe fallback multiple-choice distractors for an English vocabulary quiz.
+Target word: "${word}"
+Part of speech: "${pos || 'unknown'}"
+Meaning: "${meaning || ''}"
+Sentence context: "${context}"
+${feedback ? `Rejected previous candidates and reason: ${feedback}` : ''}
+
+Return exactly 3 English words or short phrases.
+Priority:
+1. Same part of speech as the target.
+2. Clearly NOT synonyms, near-synonyms, translations, inflections, or reasonable answers.
+3. Same narrow conceptual category as the target whenever possible.
+4. Grammatically usable in the sentence if substituted, but ruled out by concrete clues in the context.
+5. Prefer sibling-category words over broad-domain words.
+6. Do not choose unrelated, opposite, or merely associated words.
+7. Prefer common learner vocabulary (CEFR A1-B1); avoid obscure words when simpler same-category words exist.
+8. It is acceptable if they are slightly less close than ideal distractors, but they must still feel like comparable choices.
+
+Good fallback style:
+- statement: question, instruction, summary
+- businessman: teacher, farmer, artist
+- though: because, unless, until
+- jeans: shorts, skirt, trousers
+- hill: mound, ridge, dune
+- drawer: shelf, cabinet, cupboard
+- paper as a written assignment: essay, report, article
+- mobile phone: landline, pager, walkie-talkie
+- course as lessons: workshop, class, lecture
+- match as a sports contest: race, game, tournament
+- belt as a clothing strap: tie, scarf, strap
+- concert as a music event: play, lecture, exhibition
+
+Bad examples:
+- appetite: do not use hunger, craving, desire, taste, preference.
+- fancy: do not use appetite, taste, preference, desire, wish.
+- in spite of: do not use despite, notwithstanding, regardless.
+- applicant: do not use candidate, aspirant, petitioner.
+- jeans: do not use t-shirt, sweater, dress, socks, gloves, scarves, chinos, khakis, corduroys.
+- hill: do not use river, forest, lake.
+- bottom: do not use strap, zipper, pocket.
+- course: do not use program, curriculum, syllabus when the context is ordinary learner lessons.
+- match: do not use meeting, ceremony, parade.
+- channel: do not use frequency, wavelength, band, station, network.
+
+Return strict JSON only: {"distractors": ["word1", "word2", "word3"]}`;
+    try {
+        const result = await callAI(prompt);
+        const cleaned = cleanDistractors(word, parseJsonArrayFromAI(result, 'distractors'));
+        if (cleaned.length >= 3) return cleaned;
+    } catch (e) { }
+    return null;
+}
+
+async function evaluateQuizContent(word, context, meaning, pos, distractors) {
+    const prompt = `Evaluate existing English vocabulary quiz content.
+Target word: "${word}"
+Part of speech: "${pos || 'unknown'}"
+Meaning: "${meaning || ''}"
+Sentence context: "${context || ''}"
+Distractors: ${(distractors || []).join(', ')}
+
+Judge with strict teaching-quality standards:
+1. The context must naturally use the target word and provide useful clues for its meaning.
+2. The context must not be generic, artificial, or unrelated to the target meaning.
+3. Each distractor must match the target word's part of speech.
+4. Each distractor must be semantically related to the target word or same conceptual domain.
+5. Each distractor must be incorrect in this exact context.
+6. Distractors must not be synonyms, antonyms, spelling variants, inflections, translations, or random unrelated words.
+7. Distractors must not be near-synonyms, broader/narrower equivalents, or words that could reasonably answer the same question.
+8. For abstract noun meanings like liking/desire, reject alternatives such as taste, preference, appetite, desire, wish, craving.
+
+Return strict JSON only:
+{
+  "context_ok": true,
+  "distractors_ok": true,
+  "reasons": ["short reason"],
+  "bad_distractors": ["word"]
+}`;
+    try {
+        const result = await callAI(prompt);
+        const jsonText = result.match(/\{[\s\S]*\}/)?.[0] || result;
+        const parsed = JSON.parse(jsonText);
+        return {
+            contextOk: Boolean(parsed.context_ok),
+            distractorsOk: Boolean(parsed.distractors_ok),
+            reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+            badDistractors: Array.isArray(parsed.bad_distractors) ? parsed.bad_distractors : []
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function evaluateSafeDistractors(word, context, meaning, pos, distractors) {
+    const prompt = `Evaluate fallback distractors for an English vocabulary quiz.
+Target word: "${word}"
+Part of speech: "${pos || 'unknown'}"
+Meaning: "${meaning || ''}"
+Sentence context: "${context || ''}"
+Distractors: ${(distractors || []).join(', ')}
+
+These are fallback distractors. They do not need to be very semantically close.
+They are acceptable only if:
+1. They match the target word's part of speech.
+2. They are clearly not synonyms, near-synonyms, translations, inflections, or reasonable answers.
+3. They belong to the same narrow category or a very close sibling category.
+4. They are not random, merely associated, opposite, or from a much broader/different category.
+5. They would be clearly wrong in this exact context because of context clues.
+
+Return strict JSON only:
+{
+  "distractors_ok": true,
+  "reasons": ["short reason"],
+  "bad_distractors": ["word"]
+}`;
+    try {
+        const result = await callAI(prompt);
+        const jsonText = result.match(/\{[\s\S]*\}/)?.[0] || result;
+        const parsed = JSON.parse(jsonText);
+        return {
+            distractorsOk: Boolean(parsed.distractors_ok),
+            reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+            badDistractors: Array.isArray(parsed.bad_distractors) ? parsed.bad_distractors : []
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function evaluateAndRepairMeaning(word, meaning, pos, cnMeaning) {
+    const prompt = `Evaluate whether an English vocabulary record's meaning matches the target word.
+Target word or phrase: "${word}"
+Current part of speech: "${pos || 'unknown'}"
+Current English meaning: "${meaning || ''}"
+Current Chinese meaning: "${cnMeaning || ''}"
+
+Tasks:
+1. Decide whether the English meaning correctly matches the most common learner-useful meaning of the target word or phrase.
+2. If it is wrong, unrelated, too generic, or clearly belongs to another word, provide a corrected concise English meaning.
+3. Provide a corrected part of speech and concise Simplified Chinese meaning.
+
+Return strict JSON only:
+{
+  "meaning_ok": true,
+  "corrected_meaning": "concise English definition",
+  "corrected_pos": "noun",
+  "corrected_cn_meaning": "中文释义",
+  "reason": "short reason"
+}`;
+    try {
+        const result = await callAI(prompt);
+        const jsonText = result.match(/\{[\s\S]*\}/)?.[0] || result;
+        const parsed = JSON.parse(jsonText);
+        return {
+            meaningOk: Boolean(parsed.meaning_ok),
+            correctedMeaning: String(parsed.corrected_meaning || '').trim(),
+            correctedPos: String(parsed.corrected_pos || '').trim(),
+            correctedCNMeaning: String(parsed.corrected_cn_meaning || '').trim(),
+            reason: String(parsed.reason || '').trim()
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+async function evaluateAndRepairSpelling(word, meaning, pos, cnMeaning) {
+    const prompt = `Evaluate whether this English vocabulary headword has an obvious spelling typo.
+Target word or phrase: "${word}"
+Part of speech: "${pos || 'unknown'}"
+English meaning: "${meaning || ''}"
+Chinese meaning: "${cnMeaning || ''}"
+
+Rules:
+1. Only mark spelling_ok=false for clear misspellings or transposed/missing letters, such as "altutide" -> "altitude".
+2. Do not change valid British/American variants, proper nouns, phrases, idioms, or learner-useful multi-word expressions.
+3. Do not rewrite awkward but valid vocabulary items into a different concept.
+4. If unsure, keep spelling_ok=true.
+
+Return strict JSON only:
+{
+  "spelling_ok": true,
+  "corrected_word": "",
+  "reason": "short reason"
+}`;
+    try {
+        const result = await callAI(prompt);
+        const jsonText = result.match(/\{[\s\S]*\}/)?.[0] || result;
+        const parsed = JSON.parse(jsonText);
+        return {
+            spellingOk: Boolean(parsed.spelling_ok),
+            correctedWord: String(parsed.corrected_word || '').trim(),
+            reason: String(parsed.reason || '').trim()
+        };
+    } catch (e) {
+        return null;
+    }
 }
 
 async function generateExampleWithAI(word, meaning) {
-    const prompt = `Create one natural English vocabulary quiz sentence.
-Target word: "${word}"
-Meaning: "${meaning || ''}"
-Rules:
-1. Include the exact target word once.
-2. Add concrete context clues so a learner can infer the meaning.
-3. Do not use thin idioms or fixed phrases such as "It works like a charm".
-4. Avoid generic sentences.
-5. Keep it under 22 words.
-Return JSON only: {"example": "sentence"}`;
+    const prompt = `为单词 ${word} 生成一个英文例句，返回JSON：{"example": "例句"}`;
     try {
-        const result = await callMiniMaxAPI(prompt);
+        const result = await callAI(prompt);
         if (result) {
             const match = result.match(/"example"\s*:\s*"([^"]+)"/);
-            if (match && isContextUsableForWord(word, match[1])) return match[1];
+            if (match) return match[1];
         }
     } catch (e) { }
     return null;
@@ -870,10 +1246,20 @@ Return JSON only: {"example": "sentence"}`;
 
 async function translateToCN(text) {
     if (!text) return null;
-    const prompt = `翻译成中文（只返回翻译结果）：${text}`;
+    const prompt = `Translate this English vocabulary definition into concise Simplified Chinese.
+Text: "${text}"
+Return strict JSON only: {"translation": "中文释义"}`;
     try {
-        const result = await callMiniMaxAPI(prompt);
-        if (result) return result.trim();
+        const result = await callAI(prompt);
+        if (result) {
+            const jsonText = result.match(/\{[\s\S]*\}/)?.[0] || result;
+            try {
+                const parsed = JSON.parse(jsonText);
+                return parsed.translation?.trim() || null;
+            } catch (e) {
+                return result.trim();
+            }
+        }
     } catch (e) { }
     return null;
 }
@@ -948,23 +1334,17 @@ async function addWords(targetUser, words) {
             let cnMeaning = '';
 
             if (!example) {
-                example = await generateExampleWithAI(word, def.meaning) || '';
+                example = await generateQualityContext(word, def.meaning, def.pos) || '';
             }
 
             if (example) {
-                distractors = await generateDistractorsWithContext(word, example);
+                distractors = await generateDistractorsWithContext(word, example, def.meaning, def.pos);
             }
 
             if (!distractors || distractors.length < 3) {
-                if (example) {
-                    distractors = await generateDistractorsWithCollocation(word, example);
-                }
-            }
-
-            if (!distractors || distractors.length < 3) {
-                const { pool: distPool } = await getDistractorPool();
+                const { pool } = await getDistractorPool();
                 const lowerWord = word.toLowerCase();
-                const allWords = [...new Set(Object.values(distPool).map(r => r.word?.toLowerCase()).filter(Boolean))];
+                const allWords = [...new Set(Object.values(pool).map(r => r.word?.toLowerCase()).filter(w => w))];
                 const fallback = [];
                 while (fallback.length < 3 && allWords.length > 0) {
                     const idx = crypto.randomInt(0, allWords.length);
@@ -975,7 +1355,7 @@ async function addWords(targetUser, words) {
                     allWords.splice(idx, 1);
                 }
                 if (distractors) {
-                    distractors = [...distractors, ...fallback].slice(0, 3);
+                    distractors = cleanDistractors(word, [...distractors, ...fallback]).slice(0, 3);
                 } else {
                     distractors = fallback;
                 }
@@ -989,18 +1369,18 @@ async function addWords(targetUser, words) {
             const wordFields = {
                 user: targetUser,
                 Word: toSimp(word),
-                Meaning: def.meaning,
-                CN_Meaning: cnMeaning || '',
+                Meaning: toSimp(def.meaning),
+                CN_Meaning: toSimp(cnMeaning || ''),
                 Distractors: Array.isArray(distractors) ? distractors.join(',') : '',
-                Status: 'Pending',
+                Status: STATUS_PENDING,
                 record_time: Date.now()
             };
             if (def.pos) wordFields.POS = def.pos;
-            if (example) wordFields.Context = example;
+            if (example) wordFields.Context = toSimp(example);
             
             await addRecord(WORD_TABLE, wordFields);
             count++;
-            console.log(`成功写入: ${word}, 干扰词: ${distractors.join(', ')}, 中文: ${cnMeaning?.substring(0, 15)}...`);
+            console.log(`成功写入: ${word}, 例句质量=${isContextUsableForWord(word, example)}, 干扰词: ${(distractors || []).join(', ')}, 中文: ${cnMeaning?.substring(0, 15)}...`);
         } catch (e) {
             console.log(`写入失败 ${word}: ${e.message}`);
             errors.push(`${word}: ${e.message}`);
@@ -1039,7 +1419,7 @@ async function getWord(userId, word) {
         pos: record.fields.POS || '',
         context: record.fields.Context || '',
         distractors: record.fields.Distractors || '',
-        status: record.fields.Status || 'Pending',
+        status: normalizeStatus(record.fields.Status),
         qualityFlags: record.fields.Quality_Flags || '',
         qualityNote: record.fields.Quality_Note || '',
         record_id: record.record_id
@@ -1054,7 +1434,7 @@ function mapWordRecord(record) {
         pos: record.fields.POS || '',
         context: record.fields.Context || '',
         distractors: record.fields.Distractors || '',
-        status: record.fields.Status || 'Pending',
+        status: normalizeStatus(record.fields.Status),
         qualityFlags: record.fields.Quality_Flags || '',
         qualityNote: record.fields.Quality_Note || '',
         user: record.fields.user || '',
@@ -1081,7 +1461,7 @@ async function updateWord(userId, word, fields) {
     if (fields.pos !== undefined) updateFields.POS = fields.pos;
     if (fields.context !== undefined) updateFields.Context = fields.context;
     if (fields.distractors !== undefined) updateFields.Distractors = fields.distractors;
-    if (fields.status !== undefined) updateFields.Status = fields.status;
+    if (fields.status !== undefined) updateFields.Status = normalizeStatus(fields.status);
     if (fields.qualityFlags !== undefined) updateFields.Quality_Flags = fields.qualityFlags;
     if (fields.qualityNote !== undefined) updateFields.Quality_Note = fields.qualityNote;
     await updateRecord(WORD_TABLE, record.record_id, updateFields);
@@ -1135,4 +1515,35 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+module.exports = {
+    generateQuiz,
+    submitAnswers,
+    getStats,
+    addWord,
+    getAllUsers,
+    getAllStats,
+    validateWords,
+    addWords,
+    updateMultiDefinition,
+    getWord,
+    updateWord,
+    deleteWord,
+    getWordByRecordId,
+    getReviewWords,
+    markWordForReview,
+    clearWordReview,
+    searchRecords,
+    getRecords,
+    updateRecord,
+    addRecord,
+    getToken,
+    generateQualityContext,
+    generateDistractorsWithContext,
+    generateSafeDistractorsWithContext,
+    evaluateQuizContent,
+    evaluateSafeDistractors,
+    evaluateAndRepairMeaning,
+    evaluateAndRepairSpelling,
+    isContextUsableForWord,
+    cleanDistractors
+};
