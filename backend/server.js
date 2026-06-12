@@ -1,6 +1,8 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
+const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
 
 const getFieldVal = (v) => {
     if (!v) return '';
@@ -38,11 +40,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 提供前端静态文件（Expo Web 构建产物）
+const publicDir = path.join(__dirname, '..');
+app.use(express.static(publicDir));
+
 app.post('/api/quiz', async (req, res) => {
     try {
-        const { user } = req.body;
+        const { user, level } = req.body;
         if (!user) return res.status(400).json({ error: '缺少用户ID' });
-        const data = await generateQuiz(user);
+        const data = await generateQuiz(user, level || null);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -72,13 +78,8 @@ app.get('/api/stats/:user', async (req, res) => {
 
 app.get('/api/history/:user', async (req, res) => {
     try {
-        const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
-        const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
-        
-        const records = await searchRecords(
-            TEST_TABLE,
-            { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [req.params.user] }] }
-        );
+        const allRecords = await getRecords(TEST_TABLE);
+        const records = allRecords.filter(r => getFieldVal(r.fields.user) === req.params.user);
         console.log('Total records for user:', records.length);
         if (records.length > 0) {
             console.log('First record test_time:', getFieldVal(records[0].fields.test_time));
@@ -106,7 +107,7 @@ app.get('/api/history/:user', async (req, res) => {
             if (!testMap[testId]) {
                 testMap[testId] = { testId, time, questions: [], correct: 0, total: 0 };
             }
-            const isCorrect = getFieldVal(rec.fields.is_correct) === 'optHGT7gYf';
+            const isCorrect = getFieldVal(rec.fields.is_correct) === OPTION_IDS.IS_CORRECT;
             const wi = wordMap[word.toLowerCase()] || {};
             let question = '';
             if (qType === 1) question = wi.context || word;
@@ -271,7 +272,19 @@ app.delete('/api/word', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+// 清理用户测试数据（支持按天数清理，days=3 表示只删除最近3天的记录）
+app.post('/api/admin/cleanup', express.json(), async (req, res) => {
+    try {
+        const { user, days } = req.body;
+        if (!user) return res.status(400).json({ error: '请指定用户' });
+        const result = await deleteUserTestData(user, days);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`后端服务运行在 http://0.0.0.0:${PORT}`);
 });
