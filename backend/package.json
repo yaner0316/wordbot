@@ -2,7 +2,10 @@
   "name": "word-bot-backend",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "setup:review-fields": "node setup-review-fields.js",
+    "check:env": "node check-env.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

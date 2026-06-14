@@ -1,6 +1,44 @@
 const https = require('https');
 const crypto = require('crypto');
 const {
+    createSubmissionCoordinator,
+    rebuildSubmittedResult,
+} = require('./submission-coordinator');
+const {
+    ASSESSMENT_MODE,
+    createAssessmentId,
+    filterAssessmentRecords,
+    getAssessmentMode,
+    isRealAssessment,
+    isTestAssessment,
+    normalizeAssessmentMode,
+    shouldAffectLearningState,
+} = require('./assessment-mode');
+const {
+    encodeAnswer,
+    evaluateWordMastery,
+    normalizeSubmittedAnswer,
+    parseStoredAnswer,
+} = require('./mastery-evidence');
+const {
+    normalizeArticleContext,
+    normalizeQuizArticleContexts,
+} = require('./article-context');
+const { enrichQuestionOptionMeanings } = require('./option-meanings');
+const { createQuizBuilder } = require('./quiz-builder');
+const { createContextDifficultyAdapter } = require('./language-enrichment');
+const { createReviewQuestionBuilder } = require('./review-question-builder');
+const { createReviewService } = require('./review-service');
+const {
+    ASSESSMENT_KIND,
+    getAssessmentKind,
+} = require('./review-session');
+const {
+    getDeferredRecordIds,
+    prioritizePendingRecords,
+} = require('./review-priority');
+const { calculateGameReward } = require('./game-reward');
+const {
   APP_ID,
   APP_SECRET,
   MINIMAX_API_KEY,
@@ -287,12 +325,13 @@ async function getPendingWords(userId, records = null) {
 }
 
 async function getRecentQuizFootprint(userId, testCount = 4) {
-    const records = await searchRecords(
+    const allRecords = await searchRecords(
         TEST_TABLE,
         { conjunction: "and", conditions: [{ field_name: "user", operator: "is", value: [userId] }] },
         [{ desc: true, field_name: "test_time" }],
         30000
     );
+    const records = filterAssessmentRecords(allRecords, ASSESSMENT_MODE.REAL);
     const recentTestIds = [];
     const seenTests = new Set();
     for (const record of records) {
@@ -355,6 +394,18 @@ function isContextUsableForWord(word, ctx) {
     return clueWords.length >= 4;
 }
 
+const buildQuizQuestion = createQuizBuilder({
+    choose: secureRandom,
+    escapeRegExp,
+    getWordForms,
+    isContextUsableForWord,
+    normalizeArticleContext,
+    getFallbackDistractors: info => info.fallbackDistractors || [],
+});
+const adaptContextsByLevel = createContextDifficultyAdapter({
+    callAI: prompt => callMiniMaxAPI(prompt, 'MiniMax-M2.7', 60000),
+});
+
 function generateQuestion(word, info, distractors, type, allWords) {
     if (!distractors || distractors.length < 3) {
         distractors = secureRandom(allWords.filter(w => w !== word.toLowerCase()), 3);
@@ -396,10 +447,25 @@ function generateQuestion(word, info, distractors, type, allWords) {
     };
 }
 
-async function generateQuiz(userId, level = null) {
+async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
+    const assessmentMode = normalizeAssessmentMode(mode);
     const wordRecords = await getRecords(WORD_TABLE);
     const { pool } = await getDistractorPool(wordRecords);
-    const pending = await getPendingWords(userId, wordRecords);
+    const pendingBase = await getPendingWords(userId, wordRecords);
+    const allAssessmentRecords = await getRecords(TEST_TABLE);
+    const masteredRecordIds = new Set(
+        wordRecords
+            .filter(record =>
+                getFieldValue(record.fields.user) === userId &&
+                isMasteredStatus(record.fields.Status)
+            )
+            .map(record => record.record_id)
+    );
+    const deferredRecordIds = new Set(getDeferredRecordIds(
+        allAssessmentRecords,
+        { userId, mode: assessmentMode, masteredRecordIds }
+    ));
+    const pending = prioritizePendingRecords(pendingBase, deferredRecordIds);
 
     const recent = await getRecentQuizFootprint(userId).catch(e => {
         console.log(`recent quiz footprint failed: ${e.message}`);
@@ -437,8 +503,33 @@ async function generateQuiz(userId, level = null) {
 
     let questions = [];
     const usedRecordIds = new Set();
-    const testId = crypto.randomUUID().split('-')[0];
+    const usedDistractors = new Set();
+    const testId = createAssessmentId(
+        assessmentMode,
+        () => crypto.randomUUID().split('-')[0]
+    );
     const letters = ['A', 'B', 'C', 'D'];
+    const fallbackWords = valid
+        .map(record => String(record.word || '').trim().toLowerCase())
+        .filter(Boolean);
+    const buildFreshQuestion = (recordId, info, qType) => {
+        const question = buildQuizQuestion(
+            recordId,
+            { ...info, fallbackDistractors: fallbackWords },
+            qType,
+            testId,
+            letters,
+            { excludedDistractors: [...usedDistractors] }
+        );
+        if (!question) return null;
+        for (const option of question.options || []) {
+            const optionWord = String(option).replace(/^[A-D]\.\s*/, '').trim().toLowerCase();
+            if (optionWord && optionWord !== question.word.toLowerCase()) {
+                usedDistractors.add(optionWord);
+            }
+        }
+        return question;
+    };
 
     const multiCandidates = freshMultiDefGroups.length > 0 ? freshMultiDefGroups : multiDefGroups;
     for (const [pickedWord, pickedRecs] of secureRandom(multiCandidates, multiCandidates.length)) {
@@ -448,7 +539,7 @@ async function generateQuiz(userId, level = null) {
             const cn = info.CN_Meaning?.trim();
             const hasGoodCN = cn && cn.length > 0 && !cn.includes('请提供要翻译的文本');
             const qType = hasGoodCN ? 3 : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
-            const q = buildQuizQuestion(rec.record_id, info, qType, testId, letters);
+            const q = buildFreshQuestion(rec.record_id, info, qType);
             if (q) multiQuestions.push(q);
         }
         if (multiQuestions.length === pickedRecs.length) {
@@ -483,7 +574,7 @@ async function generateQuiz(userId, level = null) {
             !recent.recordIds.has(r.record_id) && !recent.words.has(r.word.toLowerCase())
         );
         const rec = secureRandom(freshCandidates.length > 0 ? freshCandidates : candidates, 1)[0];
-        const q = buildQuizQuestion(rec.record_id, pool[rec.record_id], slot, testId, letters);
+        const q = buildFreshQuestion(rec.record_id, pool[rec.record_id], slot);
         if (q) {
             questions.push(q);
             usedRecordIds.add(rec.record_id);
@@ -504,15 +595,26 @@ async function generateQuiz(userId, level = null) {
     }
 
     // 按难度等级改写题干
+    let difficultyApplied = !level;
     if (level && MINIMAX_API_KEY && questions.length > 0) {
         try {
-            await adaptContextsByLevel(questions, level);
-            console.log(`题干已适配难度: ${level}`);
+            difficultyApplied = await adaptContextsByLevel(questions, level);
+            if (difficultyApplied) console.log(`题干已适配难度: ${level}`);
         } catch (e) {
             console.error(`题干适配失败: ${e.message}`);
         }
     }
 
+    normalizeQuizArticleContexts(questions);
+    const userWordRecords = wordRecords.filter(
+        record => getFieldValue(record.fields.user) === userId
+    );
+    await enrichQuestionOptionMeanings({
+        questions,
+        records: userWordRecords,
+        translateWords: translateWordsToCN,
+        updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
+    });
     const randomizedQuestions = secureRandom(questions, questions.length);
     const baseTestTime = Date.now();
     await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
@@ -528,6 +630,10 @@ async function generateQuiz(userId, level = null) {
 
     return {
         testId,
+        mode: assessmentMode,
+        level: level || null,
+        difficultyApplied,
+        warning: level && !difficultyApplied ? 'AI 题干改写暂不可用，本次保留原题干' : null,
         questions: randomizedQuestions.map(({ testId: _, record_id: __, ...q }) => q)
     };
 }
@@ -598,46 +704,6 @@ async function checkQuizAmbiguity(questions) {
 /**
  * 按难度等级改写题干语境
  */
-async function adaptContextsByLevel(questions, level) {
-    if (!level || level === '全部') return;
-    const levelMap = {
-        '小学': 'elementary school level (use very simple daily words, 6-8 year old vocabulary)',
-        '中学': 'middle school level (common vocabulary, straightforward sentences, 12-15 year old)',
-        '高中': 'high school level (moderately complex vocabulary and sentence structures)',
-        'CET4_6_TOEFL': 'college/TOEFL level (academic vocabulary, complex sentence structures)'
-    };
-    const desc = levelMap[level];
-    if (!desc) return;
-
-    // 所有题（type1和type2）合并到一个prompt一次调用
-    const toAdapt = questions.filter(q => q.type === 1 || q.type === 2);
-    if (toAdapt.length === 0) return;
-
-    const prompt = toAdapt.map((q, i) => {
-        if (q.type === 1) return `Q${i + 1} [Type1 fill-in-blank]:\nWord: "${q.word}"\nOriginal: "${q.context}"\nOptions: ${q.options.join(', ')}\n---`;
-        return `Q${i + 1} [Type2 definition]:\nWord: "${q.word}"\nOriginal definition: "${q.context}"\nOptions: ${q.options.join(', ')}\n---`;
-    }).join('\n') + `\n\nRewrite ALL ${toAdapt.length} questions at ${desc}.
-- For Type1: rewrite the context sentence (keep _____ blank and word meaning the same, but use level-appropriate vocabulary)
-- For Type2: rewrite the definition/explanation with level-appropriate vocabulary
-
-Return JSON ONLY: {"rewrites": [{"index":1,"text":"rewritten version with _____ if type1"},{"index":2,"text":"..."}]}`;
-
-    try {
-        const r = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 60000);
-        if (!r) { console.error('Level context: empty response'); return; }
-        const m = r.match(/\{[\s\S]*\}/);
-        if (!m) { console.error('Level context: no JSON'); return; }
-        const j = JSON.parse(m[0]);
-        if (!j.rewrites) { console.error('Level context: no rewrites field'); return; }
-        for (const c of j.rewrites) {
-            const idx = c.index - 1;
-            if (idx >= 0 && idx < toAdapt.length && c.text && c.text.length > 3) {
-                toAdapt[idx].context = c.text.trim();
-            }
-        }
-    } catch (e) { console.error('Level context failed:', e.message); }
-}
-
 async function generateBetterDistractors(q, info) {
     const prompt = q.type === 1
         ? `Context: "${q.context}"
@@ -667,92 +733,11 @@ Return JSON: {"distractors": ["option1", "option2", "option3"]}`;
     }
 }
 
-// 将 blank 前的 "a _____" / "an _____" 统一改为 "a(n) _____"
-function normalizeArticleContext(context) {
-    if (!context) return { text: context, normalized: false };
-    let result = context;
-    let normalized = false;
-    // 替换 "an _____" 或 "a _____" → "a(n) _____"
-    if (/\ban\s+_____/i.test(result)) {
-        result = result.replace(/\ban\s+_____/gi, 'a(n) _____');
-        normalized = true;
-    } else if (/\ba\s+_____/i.test(result)) {
-        result = result.replace(/\ba\s+_____/gi, 'a(n) _____');
-        normalized = true;
-    }
-    return { text: result, normalized };
-}
-
-function buildQuizQuestion(recordId, info, qType, testId, letters) {
-    const key = info.word.toLowerCase();
-    const specificDistrs = (info.distractors || []).filter(d => d !== key);
-    if (specificDistrs.length < 3) return null;
-
-    // 对 type 1 (语境填空) 做额外质量过滤
-    let validatedDistrs = [...specificDistrs];
-    let articleNormalized = false;
-    if (qType === 1 && isContextUsableForWord(key, info.context)) {
-        const pattern = new RegExp(`\\b(${getWordForms(key).map(escapeRegExp).join('|')})\\b`, 'gi');
-        const sentence = (info.context || '').replace(pattern, '_____');
-
-        // 将 "a _____" / "an _____" 统一为 "a(n) _____"，不再限制选项
-        const art = normalizeArticleContext(sentence);
-        if (art.normalized) {
-            articleNormalized = true;
-            // 在 question 上记录冠词提示信息，前端分析时展示
-        }
-
-        // 过滤掉与正确答案过于相似的干扰项（含同义或包含关系）
-        validatedDistrs = validatedDistrs.filter(d => {
-            if (d.includes(key) || key.includes(d)) return false;
-            return true;
-        });
-    }
-
-    if (validatedDistrs.length < 3) return null;
-
-    // 随机选 3 个干扰词 + 正确答案，一起 shuffle
-    const pickedDistrs = secureRandom(validatedDistrs, 3);
-    const allOptions = secureRandom([key, ...pickedDistrs], 4);
-    const correctIdx = allOptions.indexOf(key);
-
-    let q;
-    if (qType === 1) {
-        if (!isContextUsableForWord(key, info.context)) return null;
-        const pattern = new RegExp(`\\b(${getWordForms(key).map(escapeRegExp).join('|')})\\b`, 'gi');
-        let sentence = (info.context || '').replace(pattern, '_____');
-        if (!sentence.includes('_____')) return null;
-        // 冠词标准化: "a _____" / "an _____" → "a(n) _____"
-        const art = normalizeArticleContext(sentence);
-        sentence = art.text;
-        if (art.normalized) articleNormalized = true;
-        q = { type: 1, word: key, context: sentence, options: allOptions.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx], articleNormalized };
-    } else if (qType === 2) {
-        const meaning = (info.meaning || '').split(';')[0] || info.meaning || '';
-        q = { type: 2, word: key, context: meaning, options: allOptions.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
-    } else if (qType === 3) {
-        q = { type: 3, word: key, context: info.CN_Meaning || '', options: allOptions.map((o, i) => `${letters[i]}. ${o}`), answer: letters[correctIdx] };
-    }
-    if (!q || !q.context) return null;
-    q.testId = testId;
-    q.record_id = recordId;
-    return q;
-}
-
-async function submitAnswers(userId, testId, answers) {
-    const filter = {
-        conjunction: "and",
-        conditions: [
-            { field_name: "user", operator: "is", value: [userId] },
-            { field_name: "test_id", operator: "is", value: [testId] }
-        ]
-    };
-    const testRecords = await searchRecords(TEST_TABLE, filter);
-    console.log(`submitAnswers: 找到 ${testRecords.length} 条记录`);
-
-    if (testRecords.length === 0) return { error: '未找到测试记录' };
-
-    const sortedRecords = testRecords.sort((a, b) => a.fields.test_time - b.fields.test_time);
+async function settleAnswers(testRecords, answers, userId, testId) {
+    console.log(`settleAnswers: user=${userId}, testId=${testId}, records=${testRecords.length}`);
+    const sortedRecords = [...testRecords].sort(
+        (a, b) => Number(a.fields.test_time || 0) - Number(b.fields.test_time || 0)
+    );
 
     let correct = 0;
     const results = [];
@@ -761,7 +746,8 @@ async function submitAnswers(userId, testId, answers) {
     const letters = ['A', 'B', 'C', 'D'];
     for (let i = 0; i < Math.min(sortedRecords.length, answers.length); i++) {
         const rec = sortedRecords[i];
-        const yourAnswerIdx = answers[i];
+        const submitted = normalizeSubmittedAnswer(answers[i]);
+        const yourAnswerIdx = submitted.option;
         const yourAnswer = yourAnswerIdx !== null && yourAnswerIdx !== undefined ? letters[yourAnswerIdx] : null;
         const correctAnswer = rec.fields.correct_answer;
         console.log(`第${i+1}题 correctAnswer:`, JSON.stringify(correctAnswer));
@@ -772,7 +758,7 @@ async function submitAnswers(userId, testId, answers) {
         const opts = rec.fields.options || [];
         const optsText = Array.isArray(opts) ? opts.join(' | ') : String(opts);
         await updateRecord(TEST_TABLE, rec.record_id, {
-            your_answer: yourAnswer || '',
+            your_answer: encodeAnswer(yourAnswer || '', submitted.confidence),
             is_correct: isCorrect ? [OPT_IS_CORRECT] : [OPT_IS_WRONG],
             options: optsText
         });
@@ -790,72 +776,249 @@ async function submitAnswers(userId, testId, answers) {
             if (!isCorrect) wordMap[word].wrongRecordIds.push(recordId);
         }
 
-        results.push({ q: i + 1, word, recordId, your: yourAnswer, answer: answerStr, correct: isCorrect });
+        results.push({
+            q: i + 1,
+            word,
+            recordId,
+            your: yourAnswer,
+            answer: answerStr,
+            correct: isCorrect,
+            confidence: submitted.confidence,
+        });
     }
 
+    const mode = getAssessmentMode(testId);
+    if (!shouldAffectLearningState(testId)) {
+        const currentStats = await getStats(userId);
+        return {
+            alreadySubmitted: false,
+            mode,
+            results,
+            correct,
+            total: results.length,
+            accuracy: `${((correct / results.length) * 100).toFixed(1)}%`,
+            masteredWords: [],
+            stats: {
+                total: currentStats.totalWords,
+                mastered: currentStats.masteredWords,
+                pending: currentStats.pendingWords,
+            },
+        };
+    }
+
+    const allWordRecords = await getRecords(WORD_TABLE);
+    const wordRecords = allWordRecords.filter(r => getFieldValue(r.fields.user) === userId);
+    const allTestRecords = await getRecords(TEST_TABLE);
+    const userRealTests = filterAssessmentRecords(
+        allTestRecords.filter(r => getFieldValue(r.fields.user) === userId && hasSubmittedAnswer(r)),
+        ASSESSMENT_MODE.REAL
+    );
     const masteredWords = [];
-    for (const [word, stats] of Object.entries(wordMap)) {
-        if (stats.hasRecordIds) {
-            if (stats.correct >= stats.total) {
-                masteredWords.push(word);
-                for (const recordId of stats.recordIds) {
-                    await updateRecord(WORD_TABLE, recordId, {
-                        Status: STATUS_MASTERED,
-                        remember_time: Date.now()
-                    });
-                }
-            } else {
-                const current = await getRecords(WORD_TABLE);
-                for (const recordId of stats.wrongRecordIds) {
-                    const rec = current.find(r => r.record_id === recordId);
-                    const errCount = Number(rec?.fields?.Error_Count || 0) + 1;
-                    await updateRecord(WORD_TABLE, recordId, { Error_Count: errCount });
-                }
-            }
-        } else if (stats.correct >= stats.total) {
+    const masteryProgress = {};
+
+    for (const [word, currentStats] of Object.entries(wordMap)) {
+        const meanings = wordRecords.filter(
+            record => getFieldValue(record.fields.Word).toLowerCase() === word
+        );
+        const recordIds = meanings.map(record => record.record_id);
+        const evaluation = evaluateWordMastery(recordIds, userRealTests, isCorrectField);
+        masteryProgress[word] = evaluation;
+
+        if (evaluation.mastered) {
             masteredWords.push(word);
-            const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId && getFieldValue(r.fields.Word).toLowerCase() === word);
-            for (const wr of wordRecords) {
-                await updateRecord(WORD_TABLE, wr.record_id, {
+            for (const meaning of meanings) {
+                await updateRecord(WORD_TABLE, meaning.record_id, {
                     Status: STATUS_MASTERED,
-                    remember_time: Date.now()
+                    remember_time: Date.now(),
                 });
+                meaning.fields.Status = STATUS_MASTERED;
+            }
+        } else if (currentStats.wrongRecordIds.length > 0) {
+            for (const meaning of meanings) {
+                const wasWrong = currentStats.wrongRecordIds.includes(meaning.record_id);
+                const updateFields = { Status: STATUS_PENDING };
+                if (wasWrong) {
+                    updateFields.Error_Count = Number(meaning.fields?.Error_Count || 0) + 1;
+                }
+                await updateRecord(WORD_TABLE, meaning.record_id, updateFields);
+                meaning.fields.Status = STATUS_PENDING;
             }
         }
     }
 
-    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId);
     const total = wordRecords.length;
     const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
-    const statsRecords = await getRecords(STATS_TABLE);
-    const userRecord = statsRecords.find(r => getFieldValue(r.fields.user) === userId);
+    if (getAssessmentKind(testId) === ASSESSMENT_KIND.QUIZ) {
+        const statsRecords = await getRecords(STATS_TABLE);
+        const userRecord = statsRecords.find(r => getFieldValue(r.fields.user) === userId);
+        const statsFields = {
+            user: userId,
+            total_words: total,
+            mastered_words: mastered,
+            pending_words: total - mastered,
+            total_tests: Number((userRecord?.fields?.total_tests || 0)) + 1,
+            correct_count: Number((userRecord?.fields?.correct_count || 0)) + correct,
+            last_test_time: Date.now()
+        };
 
-    const statsFields = {
-        user: userId,
-        total_words: total,
-        mastered_words: mastered,
-        pending_words: total - mastered,
-        total_tests: Number((userRecord?.fields?.total_tests || 0)) + 1,
-        correct_count: Number((userRecord?.fields?.correct_count || 0)) + correct,
-        last_test_time: Date.now()
-    };
-
-    if (userRecord) {
-        await updateRecord(STATS_TABLE, userRecord.record_id, statsFields);
-    } else {
-        await addRecord(STATS_TABLE, statsFields);
+        if (userRecord) {
+            await updateRecord(STATS_TABLE, userRecord.record_id, statsFields);
+        } else {
+            await addRecord(STATS_TABLE, statsFields);
+        }
     }
 
     console.log('submitAnswers results:', JSON.stringify(results).substring(0, 500));
     return {
+        alreadySubmitted: false,
+        mode,
         results,
         correct,
         total: results.length,
         accuracy: `${((correct / results.length) * 100).toFixed(1)}%`,
         masteredWords,
+        masteryProgress,
+        gameReward: calculateGameReward({
+            testId,
+            mode,
+            correct,
+            total: results.length,
+        }),
         stats: { total, mastered, pending: total - mastered }
     };
+}
+
+async function loadQuizRecords(testId) {
+    const filter = {
+        conjunction: 'and',
+        conditions: [
+            { field_name: 'test_id', operator: 'is', value: [testId] }
+        ]
+    };
+    const records = await searchRecords(TEST_TABLE, filter);
+    return records.sort(
+        (a, b) => Number(a.fields.test_time || 0) - Number(b.fields.test_time || 0)
+    );
+}
+
+const submissionCoordinator = createSubmissionCoordinator({
+    loadRecords: loadQuizRecords,
+    isSubmitted: hasSubmittedAnswer,
+    rebuildResult: async records => {
+        const result = rebuildSubmittedResult(records, isCorrectField);
+        const userId = getFieldValue(records[0]?.fields?.user);
+        const stats = await getStats(userId);
+        return {
+            ...result,
+            stats: {
+                total: stats.totalWords,
+                mastered: stats.masteredWords,
+                pending: stats.pendingWords,
+            },
+        };
+    },
+    settle: settleAnswers,
+});
+
+async function submitAnswers(userId, testId, answers) {
+    return submissionCoordinator.submit(userId, testId, answers);
+}
+
+async function rewriteReviewQuestion({ info, type }) {
+    const field = type === 1 ? 'context' : type === 2 ? 'meaning' : 'CN_Meaning';
+    const original = info[field] || '';
+    const prompt = `Rewrite this vocabulary review prompt with different wording.
+Target word: "${info.word}"
+Question type: ${type}
+Original: "${original}"
+Keep the same tested meaning. For type 1, include the target word in a natural sentence.
+Return only the rewritten text.`;
+    const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
+    if (!rewritten || rewritten.trim() === original.trim()) {
+        throw new Error('复习题题干改写失败');
+    }
+    return { ...info, [field]: rewritten.trim() };
+}
+
+async function generateReviewDistractors({ info, excludedDistractors }) {
+    const prompt = `Generate exactly 3 English wrong options for a vocabulary quiz.
+Correct word: "${info.word}"
+Meaning: "${info.meaning || info.CN_Meaning}"
+Do not use: ${[...excludedDistractors].join(', ')}
+The options must be unique and clearly wrong. Return JSON only:
+{"distractors":["word1","word2","word3"]}`;
+    const response = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
+    const match = response?.match(/\{[\s\S]*\}/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed.distractors) ? parsed.distractors : [];
+}
+
+const buildReviewQuestionCore = createReviewQuestionBuilder({
+    buildQuizQuestion,
+    rewriteContext: rewriteReviewQuestion,
+    generateDistractors: generateReviewDistractors,
+    chooseType: types => secureRandom(types, 1)[0],
+});
+
+const reviewService = createReviewService({
+    createId: () => crypto.randomUUID().split('-')[0],
+    loadAssessmentRecords: loadQuizRecords,
+    loadReviewChainRecords: async sourceTestId => {
+        const records = await getRecords(TEST_TABLE);
+        return records.filter(record =>
+            getFieldValue(record.fields.test_id) === sourceTestId ||
+            getFieldValue(record.fields.source_test_id) === sourceTestId
+        );
+    },
+    loadWordInfo: async recordId => {
+        const records = await getRecords(WORD_TABLE);
+        const { pool } = await getDistractorPool(records);
+        const info = pool[recordId];
+        if (!info) throw new Error('未找到错词释义记录');
+        return info;
+    },
+    buildReviewQuestion: async input => {
+        const question = await buildReviewQuestionCore(input);
+        const records = (await getRecords(WORD_TABLE)).filter(record =>
+            getFieldValue(record.fields.user) === input.userId
+        );
+        await enrichQuestionOptionMeanings({
+            questions: [question],
+            records,
+            translateWords: translateWordsToCN,
+            updateRecord: (recordId, fields) =>
+                updateRecord(WORD_TABLE, recordId, fields),
+        });
+        return question;
+    },
+    addReviewRecords: rows => addRecords(TEST_TABLE, rows),
+    updateReviewRecord: (rowId, fields) => updateRecord(TEST_TABLE, rowId, fields),
+    submitAssessment: submitAnswers,
+    isSubmitted: hasSubmittedAnswer,
+    isCorrect: isCorrectField,
+    fieldValue: getFieldValue,
+});
+
+async function createReviewRound(input) {
+    return reviewService.createRound(input);
+}
+
+async function getActiveReviewRound(input) {
+    return reviewService.getActiveRound(input);
+}
+
+async function submitReviewRound(input) {
+    return reviewService.submitRound(input);
+}
+
+async function deferReviewRound(input) {
+    return reviewService.deferRound(input);
+}
+
+async function getReviewSummary(input) {
+    return reviewService.getSummary(input);
 }
 
 async function getStats(userId) {
@@ -865,12 +1028,18 @@ async function getStats(userId) {
 
     // 改用 getRecords 替代 searchRecords（search 在大数据量下容易超时）
     const allTestRecords = await getRecords(TEST_TABLE);
-    const testRecords = allTestRecords.filter(r => getFieldValue(r.fields.user) === userId);
+    const testRecords = filterAssessmentRecords(
+        allTestRecords.filter(r => getFieldValue(r.fields.user) === userId),
+        ASSESSMENT_MODE.REAL
+    );
     const submittedRecords = testRecords.filter(hasSubmittedAnswer);
-    const submittedTestIds = new Set(submittedRecords.map(r => getFieldValue(r.fields.test_id)).filter(Boolean));
-    const correctCount = submittedRecords.filter(r => isCorrectField(r.fields.is_correct)).length;
-    const totalQuestions = submittedRecords.length;
-    const lastTestTime = submittedRecords.reduce((max, r) => {
+    const quizRecords = submittedRecords.filter(record =>
+        getAssessmentKind(getFieldValue(record.fields.test_id)) === ASSESSMENT_KIND.QUIZ
+    );
+    const submittedTestIds = new Set(quizRecords.map(r => getFieldValue(r.fields.test_id)).filter(Boolean));
+    const correctCount = quizRecords.filter(r => isCorrectField(r.fields.is_correct)).length;
+    const totalQuestions = quizRecords.length;
+    const lastTestTime = quizRecords.reduce((max, r) => {
         const time = Number(r.fields.test_time) || 0;
         return time > max ? time : max;
     }, 0);
@@ -1110,6 +1279,37 @@ async function translateToCN(text) {
         if (result) return result.trim();
     } catch (e) { }
     return null;
+}
+
+async function translateWordsToCN(words) {
+    if (!words.length) return {};
+    const prompt = `请把以下英文单词翻译成简洁、准确的中文释义。
+每个单词只给最常用的1-2个中文含义。
+只返回 JSON 对象，键必须保持英文小写：
+${JSON.stringify(words)}`;
+    try {
+        const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
+        const match = result?.match(/\{[\s\S]*\}/);
+        if (match) {
+            const parsed = JSON.parse(match[0]);
+            const translations = {};
+            for (const word of words) {
+                const meaning = String(parsed[word] || '').trim();
+                if (meaning) translations[word] = toSimp(meaning);
+            }
+            if (Object.keys(translations).length === words.length) return translations;
+        }
+    } catch (e) {
+        console.error(`批量补齐中文释义失败: ${e.message}`);
+    }
+
+    const translations = {};
+    for (const word of words) {
+        const definition = await fetchWordDefinition(word);
+        const translated = await translateToCN(definition.meaning || word);
+        if (translated) translations[word] = toSimp(translated);
+    }
+    return translations;
 }
 
 async function fetchWordDefinition(word) {
@@ -1388,9 +1588,12 @@ async function rebuildUserWordStatus(userId) {
 }
 
 async function deleteUserTestData(userId, days = null) {
-    // 获取该用户所有的测试记录
+    // 只删除显式标记为 test 的记录；旧记录与 real-* 记录均视为正式数据。
     const testRecords = await getRecords(TEST_TABLE);
-    let userTests = testRecords.filter(r => r.fields?.user === userId || getFieldValue(r.fields?.user) === userId);
+    let userTests = testRecords.filter(r => {
+        const belongsToUser = r.fields?.user === userId || getFieldValue(r.fields?.user) === userId;
+        return belongsToUser && isTestAssessment(getFieldValue(r.fields?.test_id));
+    });
 
     // 如果指定了 days，只删除最近 N 天的记录
     let cutoffTime = null;
@@ -1407,10 +1610,7 @@ async function deleteUserTestData(userId, days = null) {
     }
 
     if (userTests.length === 0) {
-        // 即使没有删除记录，也重建单词状态和统计
-        const rebuilt = await rebuildUserWordStatus(userId);
-        await rebuildUserStats(userId);
-        return { success: true, deleted: 0, rebuilt };
+        return { success: true, deleted: 0, rebuilt: 0 };
     }
 
     const token = await getToken();
@@ -1447,20 +1647,17 @@ async function deleteUserTestData(userId, days = null) {
         });
     }
 
-    // 重建单词掌握状态（基于剩余测试记录）
-    const rebuilt = await rebuildUserWordStatus(userId);
-
-    // 重建考核统计
-    await rebuildUserStats(userId);
-
-    console.log(`deleteUserTestData: 删除了用户 ${userId} 的 ${deleted} 条测试记录，重建了 ${rebuilt} 个单词状态`);
-    return { success: true, deleted, rebuilt };
+    console.log(`deleteUserTestData: 删除了用户 ${userId} 的 ${deleted} 条测试模式记录`);
+    return { success: true, deleted, rebuilt: 0 };
 }
 
 async function rebuildUserStats(userId) {
     // 根据剩余测试记录重建用户统计
     const testRecords = await getRecords(TEST_TABLE);
-    const userTests = testRecords.filter(r => r.fields?.user === userId || getFieldValue(r.fields?.user) === userId);
+    const userTests = testRecords.filter(r => {
+        const belongsToUser = r.fields?.user === userId || getFieldValue(r.fields?.user) === userId;
+        return belongsToUser && isRealAssessment(getFieldValue(r.fields?.test_id));
+    });
 
     // 按 test_id 分组统计考核次数
     const testIds = new Set();
@@ -1522,4 +1719,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+module.exports = { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };

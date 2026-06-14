@@ -1,8 +1,16 @@
 const express = require('express');
 const path = require('path');
-const cors = require('cors');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { generateQuiz, submitAnswers, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { createApp } = require('./http-app');
+const { getRuntimeHealth } = require('./runtime-health');
+const {
+    ASSESSMENT_MODE,
+    filterAssessmentRecords,
+    getAssessmentMode,
+    normalizeAssessmentMode,
+} = require('./assessment-mode');
+const { parseStoredAnswer } = require('./mastery-evidence');
 
 const getFieldVal = (v) => {
     if (!v) return '';
@@ -36,9 +44,15 @@ const parseOptions = (v) => {
     }
 };
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const app = createApp({
+    submitAnswers,
+    createReviewRound,
+    getActiveReviewRound,
+    submitReviewRound,
+    deferReviewRound,
+    getReviewSummary,
+    getRuntimeHealth,
+});
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
@@ -46,21 +60,13 @@ app.use(express.static(publicDir));
 
 app.post('/api/quiz', async (req, res) => {
     try {
-        const { user, level } = req.body;
+        const { user, level, mode } = req.body;
         if (!user) return res.status(400).json({ error: '缺少用户ID' });
-        const data = await generateQuiz(user, level || null);
-        res.json(data);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/submit', async (req, res) => {
-    try {
-        const { user, testId, answers } = req.body;
-        console.log(`submit API: user="${user}", testId="${testId}"`);
-        if (!user || !testId || !answers) return res.status(400).json({ error: '缺少参数' });
-        const data = await submitAnswers(user, testId, answers);
+        const data = await generateQuiz(
+            user,
+            level || null,
+            normalizeAssessmentMode(mode || ASSESSMENT_MODE.REAL)
+        );
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -78,8 +84,12 @@ app.get('/api/stats/:user', async (req, res) => {
 
 app.get('/api/history/:user', async (req, res) => {
     try {
+        const mode = normalizeAssessmentMode(req.query.mode || ASSESSMENT_MODE.REAL);
         const allRecords = await getRecords(TEST_TABLE);
-        const records = allRecords.filter(r => getFieldVal(r.fields.user) === req.params.user);
+        const records = filterAssessmentRecords(
+            allRecords.filter(r => getFieldVal(r.fields.user) === req.params.user),
+            mode
+        );
         console.log('Total records for user:', records.length);
         if (records.length > 0) {
             console.log('First record test_time:', getFieldVal(records[0].fields.test_time));
@@ -105,7 +115,14 @@ app.get('/api/history/:user', async (req, res) => {
             const qType = Number(rec.fields.question_type) || 1;
             const word = getFieldVal(rec.fields.word);
             if (!testMap[testId]) {
-                testMap[testId] = { testId, time, questions: [], correct: 0, total: 0 };
+                testMap[testId] = {
+                    testId,
+                    mode: getAssessmentMode(testId),
+                    time,
+                    questions: [],
+                    correct: 0,
+                    total: 0
+                };
             }
             const isCorrect = getFieldVal(rec.fields.is_correct) === OPTION_IDS.IS_CORRECT;
             const wi = wordMap[word.toLowerCase()] || {};
@@ -119,7 +136,8 @@ app.get('/api/history/:user', async (req, res) => {
                 question,
                 type: qType,
                 options: parseOptions(rec.fields.options),
-                yourAnswer: getFieldVal(rec.fields.your_answer),
+                yourAnswer: parseStoredAnswer(getFieldVal(rec.fields.your_answer)).option,
+                confidence: parseStoredAnswer(getFieldVal(rec.fields.your_answer)).confidence,
                 correctAnswer: getFieldVal(rec.fields.correct_answer),
                 isCorrect
             });
@@ -285,6 +303,15 @@ app.post('/api/admin/cleanup', express.json(), async (req, res) => {
 });
 
 const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`后端服务运行在 http://0.0.0.0:${PORT}`);
-});
+
+function startServer(port = PORT) {
+    return app.listen(port, '0.0.0.0', () => {
+        console.log(`后端服务运行在 http://0.0.0.0:${port}`);
+    });
+}
+
+if (require.main === module) {
+    startServer();
+}
+
+module.exports = { app, startServer };
