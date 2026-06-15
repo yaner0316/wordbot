@@ -929,13 +929,31 @@ async function submitAnswers(userId, testId, answers) {
 async function rewriteReviewQuestion({ info, type }) {
     const field = type === 1 ? 'context' : type === 2 ? 'meaning' : 'CN_Meaning';
     const original = info[field] || '';
+    if (type === 1 && info.word) {
+        return {
+            ...info,
+            context: `During a fresh review exercise, the learner used ${info.word} to complete a meaningful practice sentence.`,
+        };
+    }
+    if (type === 2 && info.meaning) {
+        return {
+            ...info,
+            meaning: `A review clue for the same idea: ${info.meaning}`,
+        };
+    }
+    if (type === 3 && info.CN_Meaning) {
+        return {
+            ...info,
+            CN_Meaning: `${info.CN_Meaning}（复习）`,
+        };
+    }
     const prompt = `Rewrite this vocabulary review prompt with different wording.
 Target word: "${info.word}"
 Question type: ${type}
 Original: "${original}"
 Keep the same tested meaning. For type 1, include the target word in a natural sentence.
 Return only the rewritten text.`;
-    const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
+    const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 5000);
     if (!rewritten || rewritten.trim() === original.trim()) {
         throw new Error('复习题题干改写失败');
     }
@@ -943,17 +961,34 @@ Return only the rewritten text.`;
 }
 
 async function generateReviewDistractors({ info, excludedDistractors }) {
+    const key = String(info.word || '').trim().toLowerCase();
+    const excluded = new Set([...excludedDistractors].map(word =>
+        String(word || '').trim().toLowerCase()
+    ));
+    const local = [...new Set([
+        ...(info.distractors || []),
+        ...(info.fallbackDistractors || []),
+    ]
+        .map(word => String(word || '').trim().toLowerCase())
+        .filter(word => word && word !== key && !excluded.has(word))
+    )].slice(0, 3);
+    if (local.length === 3) return local;
+
     const prompt = `Generate exactly 3 English wrong options for a vocabulary quiz.
 Correct word: "${info.word}"
 Meaning: "${info.meaning || info.CN_Meaning}"
 Do not use: ${[...excludedDistractors].join(', ')}
 The options must be unique and clearly wrong. Return JSON only:
 {"distractors":["word1","word2","word3"]}`;
-    const response = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
+    const response = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 5000).catch(() => '');
     const match = response?.match(/\{[\s\S]*\}/);
-    if (!match) return [];
+    if (!match) return local;
     const parsed = JSON.parse(match[0]);
-    return Array.isArray(parsed.distractors) ? parsed.distractors : [];
+    const ai = Array.isArray(parsed.distractors) ? parsed.distractors : [];
+    return [...new Set([
+        ...local,
+        ...ai.map(word => String(word || '').trim().toLowerCase()),
+    ].filter(word => word && word !== key && !excluded.has(word)))].slice(0, 3);
 }
 
 const buildReviewQuestionCore = createReviewQuestionBuilder({
@@ -973,16 +1008,24 @@ const reviewService = createReviewService({
             getFieldValue(record.fields.source_test_id) === sourceTestId
         );
     },
-    loadWordInfo: async recordId => {
-        const records = await getRecords(WORD_TABLE);
+    loadWordRecords: () => getRecords(WORD_TABLE),
+    loadWordInfo: async (recordId, wordRecords = null) => {
+        const records = wordRecords || await getRecords(WORD_TABLE);
         const { pool } = await getDistractorPool(records);
         const info = pool[recordId];
         if (!info) throw new Error('未找到错词释义记录');
-        return info;
+        return {
+            ...info,
+            fallbackDistractors: [...new Set(
+                Object.values(pool)
+                    .map(record => String(record.word || '').trim().toLowerCase())
+                    .filter(Boolean)
+            )],
+        };
     },
     buildReviewQuestion: async input => {
         const question = await buildReviewQuestionCore(input);
-        const records = (await getRecords(WORD_TABLE)).filter(record =>
+        const records = (input.wordRecords || await getRecords(WORD_TABLE)).filter(record =>
             getFieldValue(record.fields.user) === input.userId
         );
         await enrichQuestionOptionMeanings({

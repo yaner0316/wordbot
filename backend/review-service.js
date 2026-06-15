@@ -21,6 +21,7 @@ function createReviewService({
     loadAssessmentRecords,
     loadReviewChainRecords,
     loadWordInfo,
+    loadWordRecords,
     buildReviewQuestion,
     addReviewRecords,
     updateReviewRecord,
@@ -138,15 +139,19 @@ function createReviewService({
         const round = parentReviewId
             ? Number(fieldValue(sourceRecords[0].fields?.review_round) || 0) + 1
             : 1;
+        const wordRecords = typeof loadWordRecords === 'function'
+            ? await loadWordRecords()
+            : null;
         const questions = [];
         for (const record of wrongRecords) {
             const source = toSource(record);
-            const info = await loadWordInfo(source.recordId);
+            const info = await loadWordInfo(source.recordId, wordRecords);
             const question = await buildReviewQuestion({
                 userId,
                 reviewId,
                 source,
                 info,
+                wordRecords,
                 usedDistractors,
             });
             questions.push({ ...question, sourceQuestionId: source.sourceQuestionId });
