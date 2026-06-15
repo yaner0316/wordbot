@@ -61,6 +61,25 @@ test('builds a fill-in question and neutralizes the indefinite article', () => {
     });
 });
 
+test('rejects fill-in questions with obvious plural list and singular target mismatch', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-1b',
+        {
+            word: 'peach',
+            context: 'When preparing the fruit mixture, I combined candied bitter orange peels, green raisins, dried apricots, figs, and peach.',
+            distractors: ['eager', 'attribute', 'compute'],
+            CN_Meaning: '桃子',
+        },
+        1,
+        'test-1b',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});
+
 test('builds a definition question from the first semicolon-separated meaning', () => {
     const buildQuizQuestion = createBuilder();
 

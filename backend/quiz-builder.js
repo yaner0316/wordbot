@@ -6,6 +6,29 @@ function createQuizBuilder({
     normalizeArticleContext,
     getFallbackDistractors = () => [],
 }) {
+    function hasPluralListMismatch(word, context) {
+        const key = String(word || '').toLowerCase();
+        const text = String(context || '').toLowerCase();
+        if (!key || key.endsWith('s')) return false;
+        const escaped = escapeRegExp(key);
+        const match = text.match(new RegExp(`([^.?!]*,\\s*and\\s+)${escaped}\\b`));
+        if (!match) return false;
+        const prefix = match[1] || '';
+        const listItems = prefix
+            .split(',')
+            .map(item => item.trim().replace(/\band\s+$/i, ''))
+            .filter(Boolean);
+        const pluralItems = listItems.filter(item => {
+            const lastWord = (item.match(/[a-z]+$/i) || [''])[0].toLowerCase();
+            return (
+                lastWord.length > 3 &&
+                lastWord.endsWith('s') &&
+                !lastWord.endsWith('ss')
+            );
+        });
+        return listItems.length >= 2 && pluralItems.length >= 2;
+    }
+
     return function buildQuizQuestion(
         recordId,
         info,
@@ -57,6 +80,7 @@ function createQuizBuilder({
         if (usableDistractors.length < 3) return null;
         let articleNormalized = false;
         if (qType === 1 && isContextUsableForWord(key, info.context)) {
+            if (hasPluralListMismatch(key, info.context)) return null;
             usableDistractors = usableDistractors.filter(distractor =>
                 !distractor.includes(key) && !key.includes(distractor)
             );
