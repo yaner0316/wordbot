@@ -403,7 +403,8 @@ const buildQuizQuestion = createQuizBuilder({
     getFallbackDistractors: info => info.fallbackDistractors || [],
 });
 const adaptContextsByLevel = createContextDifficultyAdapter({
-    callAI: prompt => callMiniMaxAPI(prompt, 'MiniMax-M2.7', 60000),
+    callAI: prompt => callMiniMaxAPI(prompt, 'MiniMax-M2.7', 12000),
+    timeoutMs: 14000,
 });
 
 function generateQuestion(word, info, distractors, type, allWords) {

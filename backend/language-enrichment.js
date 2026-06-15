@@ -5,7 +5,15 @@ const LEVEL_DESCRIPTIONS = {
     CET4_6_TOEFL: 'college/TOEFL level (academic vocabulary, complex sentence structures)',
 };
 
-function createContextDifficultyAdapter({ callAI }) {
+function withTimeout(promise, timeoutMs, label = 'operation') {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function createContextDifficultyAdapter({ callAI, timeoutMs = 12000 }) {
     function isTemplatedMetaRewrite(text) {
         const lower = String(text || '').toLowerCase();
         return [
@@ -58,7 +66,7 @@ Rewrite ALL ${adaptable.length} questions at ${description}.
 Return JSON ONLY: {"rewrites": [{"index":1,"text":"rewritten version with _____ if type1"},{"index":2,"text":"..."}]}`;
 
         try {
-            const response = await callAI(prompt);
+            const response = await withTimeout(callAI(prompt), timeoutMs, 'context difficulty rewrite');
             if (!response) return false;
             const match = response.match(/\{[\s\S]*\}/);
             if (!match) return false;
