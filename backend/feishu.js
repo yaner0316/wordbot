@@ -26,6 +26,19 @@ const {
 } = require('./article-context');
 const { enrichQuestionOptionMeanings } = require('./option-meanings');
 const { createQuizBuilder } = require('./quiz-builder');
+const {
+    createQuizTimingLogger,
+    shouldRunAiQuizAudit,
+} = require('./quiz-performance-policy');
+const {
+    buildLearningSettings,
+    validateLearningLevelChange,
+} = require('./user-learning-settings');
+const {
+    buildCacheRowsForRecord,
+    selectReadyCachedQuestions,
+    summarizeCacheStatus,
+} = require('./question-cache');
 const { createContextDifficultyAdapter } = require('./language-enrichment');
 const { createReviewQuestionBuilder } = require('./review-question-builder');
 const { createReviewService } = require('./review-service');
@@ -46,6 +59,7 @@ const {
   DIST_TABLE,
   TEST_TABLE,
   STATS_TABLE,
+  QUESTION_CACHE_TABLE,
   OPTION_IDS,
   STATUS,
 } = require('./config');
@@ -249,6 +263,26 @@ async function addRecords(table, fieldList) {
     return res;
 }
 
+async function getQuestionCacheRecords() {
+    if (!QUESTION_CACHE_TABLE) return [];
+    return getRecords(QUESTION_CACHE_TABLE);
+}
+
+async function addQuestionCacheRecords(rows) {
+    if (!QUESTION_CACHE_TABLE || rows.length === 0) return { skipped: true, count: 0 };
+    return addRecords(QUESTION_CACHE_TABLE, rows);
+}
+
+async function markQuestionCacheUsed(cacheRecordIds) {
+    if (!QUESTION_CACHE_TABLE) return;
+    for (const recordId of cacheRecordIds.filter(Boolean)) {
+        await updateRecord(QUESTION_CACHE_TABLE, recordId, {
+            used_count: 1,
+            last_used_at: Date.now(),
+        });
+    }
+}
+
 async function updateRecord(table, recordId, fields) {
     const token = await getToken();
     const res = await request('PUT', `/open-apis/bitable/v1/apps/${table.appToken}/tables/${table.tableId}/records/${recordId}`, { fields }, token);
@@ -449,11 +483,61 @@ function generateQuestion(word, info, distractors, type, allWords) {
 }
 
 async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
+    const markTiming = createQuizTimingLogger({
+        enabled: process.env.WORDBOT_QUIZ_TIMING === '1',
+    });
     const assessmentMode = normalizeAssessmentMode(mode);
+    let effectiveLevel = level || null;
+    if (QUESTION_CACHE_TABLE && effectiveLevel) {
+        const cachedRows = await getQuestionCacheRecords();
+        const cachedQuestions = selectReadyCachedQuestions({
+            rows: cachedRows,
+            userId,
+            level: effectiveLevel,
+            roundType: 'primary',
+            limit: 10,
+        });
+        markTiming('question-cache-read');
+        if (cachedQuestions.length >= 10) {
+            const testId = createAssessmentId(
+                assessmentMode,
+                () => crypto.randomUUID().split('-')[0]
+            );
+            const randomizedQuestions = secureRandom(cachedQuestions, 10);
+            const baseTestTime = Date.now();
+            await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
+                user: userId,
+                test_id: testId,
+                record_id: q.record_id,
+                word: q.word,
+                question_type: q.type,
+                context: q.context,
+                correct_answer: q.answer,
+                options: JSON.stringify(q.options),
+                test_time: baseTestTime + index,
+            })));
+            await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId));
+            markTiming('question-cache-hit');
+            return {
+                testId,
+                mode: assessmentMode,
+                level: effectiveLevel,
+                source: 'question_cache',
+                difficultyApplied: true,
+                questions: randomizedQuestions.map(({ cacheRecordId, testId: _, record_id: __, ...q }) => q),
+            };
+        }
+    }
     const wordRecords = await getRecords(WORD_TABLE);
+    if (!effectiveLevel) {
+        const userRecord = wordRecords.find(record => getFieldValue(record.fields.user) === userId);
+        effectiveLevel = buildLearningSettings({ userId, record: userRecord || null }).learningLevel;
+    }
+    markTiming('word-records');
     const { pool } = await getDistractorPool(wordRecords);
     const pendingBase = await getPendingWords(userId, wordRecords);
     const allAssessmentRecords = await getRecords(TEST_TABLE);
+    markTiming('test-records');
     const masteredRecordIds = new Set(
         wordRecords
             .filter(record =>
@@ -472,6 +556,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         console.log(`recent quiz footprint failed: ${e.message}`);
         return { recordIds: new Set(), words: new Set() };
     });
+    markTiming('recent-footprint');
 
     const validBase = pending.filter(r => {
         const info = pool[r.record_id];
@@ -585,7 +670,12 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     console.log(`生成题目: 总=${questions.length}, type1=${questions.filter(q=>q.type===1).length}, type2=${questions.filter(q=>q.type===2).length}, type3=${questions.filter(q=>q.type===3).length}`);
 
     // AI 审核：剔除有歧义的题目
-    if (MINIMAX_API_KEY && questions.length > 0) {
+    markTiming('local-build');
+    if (shouldRunAiQuizAudit({
+        enabled: process.env.WORDBOT_AI_QUIZ_AUDIT === '1',
+        hasApiKey: Boolean(MINIMAX_API_KEY),
+        questionCount: questions.length,
+    })) {
         try {
             const validated = await validateAndFixQuiz(questions, pool, testId, letters);
             questions = validated.filter(q => q !== null);
@@ -596,26 +686,26 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     }
 
     // 按难度等级改写题干
-    let difficultyApplied = !level;
-    if (level && MINIMAX_API_KEY && questions.length > 0) {
+    markTiming('ai-audit');
+    let difficultyApplied = !effectiveLevel;
+    if (effectiveLevel && MINIMAX_API_KEY && questions.length > 0) {
         try {
-            difficultyApplied = await adaptContextsByLevel(questions, level);
-            if (difficultyApplied) console.log(`题干已适配难度: ${level}`);
+            difficultyApplied = await adaptContextsByLevel(questions, effectiveLevel);
+            if (difficultyApplied) console.log(`题干已适配难度: ${effectiveLevel}`);
         } catch (e) {
             console.error(`题干适配失败: ${e.message}`);
         }
     }
 
+    markTiming('difficulty-rewrite');
     normalizeQuizArticleContexts(questions);
-    const userWordRecords = wordRecords.filter(
-        record => getFieldValue(record.fields.user) === userId
-    );
     await enrichQuestionOptionMeanings({
         questions,
-        records: userWordRecords,
+        records: wordRecords,
         translateWords: translateWordsToCN,
         updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
     });
+    markTiming('option-meanings');
     const randomizedQuestions = secureRandom(questions, questions.length);
     const baseTestTime = Date.now();
     await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
@@ -629,12 +719,13 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             test_time: baseTestTime + index
     })));
 
+    markTiming('test-record-write');
     return {
         testId,
         mode: assessmentMode,
-        level: level || null,
+        level: effectiveLevel || null,
         difficultyApplied,
-        warning: level && !difficultyApplied ? 'AI 题干改写暂不可用，本次保留原题干' : null,
+        warning: effectiveLevel && !difficultyApplied ? 'AI 题干改写暂不可用，本次保留原题干' : null,
         questions: randomizedQuestions.map(({ testId: _, record_id: __, ...q }) => q)
     };
 }
@@ -1135,6 +1226,137 @@ async function getAllStats() {
         stats.push(userStats);
     }
     return stats;
+}
+
+async function getUserLearningSettings(userId) {
+    const records = await getRecords(WORD_TABLE);
+    const userRecord = records.find(record => getFieldValue(record.fields.user) === userId);
+    return buildLearningSettings({
+        userId,
+        record: userRecord || null,
+    });
+}
+
+async function updateUserLearningSettings(userId, requestedLevel) {
+    const records = await getRecords(WORD_TABLE);
+    const userRecords = records.filter(record => getFieldValue(record.fields.user) === userId);
+    const current = buildLearningSettings({
+        userId,
+        record: userRecords[0] || null,
+    });
+    const change = validateLearningLevelChange({
+        currentLevel: current.learningLevel,
+        requestedLevel,
+        lastChangedAt: current.levelChangedAt,
+    });
+
+    if (!change.ok) {
+        return {
+            success: false,
+            error: change.reason,
+            settings: {
+                ...current,
+                nextLevelChangeAt: change.nextLevelChangeAt,
+                canChangeLevel: false,
+            },
+        };
+    }
+
+    const updateFields = change.unchanged
+        ? { Learning_Level: change.learningLevel }
+        : {
+            Learning_Level: change.learningLevel,
+            Level_Changed_At: Date.now(),
+            Question_Cache_Status: 'building',
+        };
+    for (const record of userRecords) {
+        await updateRecord(WORD_TABLE, record.record_id, updateFields);
+    }
+
+    return {
+        success: true,
+        settings: {
+            userId,
+            learningLevel: change.learningLevel,
+            levelChangedAt: updateFields.Level_Changed_At || current.levelChangedAt,
+            nextLevelChangeAt: change.nextLevelChangeAt,
+            canChangeLevel: change.unchanged,
+            questionCacheStatus: change.unchanged ? current.questionCacheStatus : 'building',
+        },
+    };
+}
+
+async function getQuestionCacheStatus(userId) {
+    const rows = (await getQuestionCacheRecords())
+        .filter(record => getFieldValue(record.fields?.user) === userId);
+    return {
+        configured: Boolean(QUESTION_CACHE_TABLE),
+        ...summarizeCacheStatus(rows),
+    };
+}
+
+async function rebuildQuestionCacheForUser(userId) {
+    if (!QUESTION_CACHE_TABLE) {
+        return { configured: false, skipped: true, count: 0 };
+    }
+    const settings = await getUserLearningSettings(userId);
+    const level = settings.learningLevel;
+    const wordRecords = await getRecords(WORD_TABLE);
+    const { pool } = await getDistractorPool(wordRecords);
+    const pending = await getPendingWords(userId, wordRecords);
+    const fallbackWords = pending
+        .map(record => String(record.word || '').trim().toLowerCase())
+        .filter(Boolean);
+    const letters = ['A', 'B', 'C', 'D'];
+    const rows = [];
+    for (const rec of pending) {
+        const info = pool[rec.record_id];
+        if (!info || (info.distractors || []).filter(Boolean).length < 3) continue;
+        const primaryType = info.CN_Meaning?.trim()
+            ? 3
+            : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
+        const reviewType = primaryType === 1
+            ? (info.meaning?.trim() ? 2 : primaryType)
+            : (isContextUsableForWord(info.word, info.context) ? 1 : primaryType);
+        const baseInfo = { ...info, fallbackDistractors: fallbackWords };
+        const primaryQuestion = buildQuizQuestion(
+            rec.record_id,
+            baseInfo,
+            primaryType,
+            'cache-primary',
+            letters
+        );
+        const reviewQuestion = buildQuizQuestion(
+            rec.record_id,
+            baseInfo,
+            reviewType,
+            'cache-review',
+            letters
+        );
+        if (!primaryQuestion || !reviewQuestion) continue;
+        normalizeQuizArticleContexts([primaryQuestion, reviewQuestion]);
+        await enrichQuestionOptionMeanings({
+            questions: [primaryQuestion, reviewQuestion],
+            records: wordRecords,
+            translateWords: translateWordsToCN,
+            updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
+        });
+        rows.push(...buildCacheRowsForRecord({
+            userId,
+            level,
+            primaryQuestion,
+            reviewQuestion,
+            sourceVersion: 'phase-2',
+            now: Date.now(),
+        }));
+    }
+    await addQuestionCacheRecords(rows);
+    return {
+        configured: true,
+        level,
+        count: rows.length,
+        status: summarizeCacheStatus(rows),
+    };
 }
 
 async function validateWords(words) {
@@ -1763,4 +1985,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+module.exports = { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };

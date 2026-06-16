@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput } from 'react-native';
 
 const API = 'http://localhost:3000';
+const DEFAULT_LEVEL = '\u4e2d\u5b66';
+const LEVEL_OPTIONS = [
+  { value: '\u5c0f\u5b66', label: '\u5c0f\u5b66' },
+  { value: '\u4e2d\u5b66', label: '\u4e2d\u5b66' },
+  { value: '\u9ad8\u4e2d', label: '\u9ad8\u4e2d' },
+  { value: 'CET4_6_TOEFL', label: 'CET/TOEFL' },
+];
 
 export default function App() {
   const [screen, setScreen] = useState('select');
@@ -25,6 +32,9 @@ export default function App() {
   const [editContext, setEditContext] = useState('');
   const [editDistractors, setEditDistractors] = useState('');
   const [searchWord, setSearchWord] = useState('');
+  const [learningSettings, setLearningSettings] = useState(null);
+  const [cacheStatus, setCacheStatus] = useState(null);
+  const [selectedLevel, setSelectedLevel] = useState(DEFAULT_LEVEL);
 
   const searchWordAction = async () => {
     const w = searchWord.trim().toLowerCase();
@@ -105,7 +115,7 @@ export default function App() {
       const res = await fetch(`${API}/api/quiz`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user })
+        body: JSON.stringify({ user, level: learningSettings?.learningLevel || selectedLevel || DEFAULT_LEVEL })
       });
       const data = await res.json();
       if (data.error) { setMessage(data.error); setLoading(false); return; }
@@ -192,6 +202,61 @@ export default function App() {
       setAllStats(data.stats || []);
       setScreen('dashboard');
     } catch { setAllStats([]); setScreen('dashboard'); }
+    setLoading(false);
+  };
+
+  const loadLearningSettings = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const settingsRes = await fetch(`${API}/api/admin/userSettings?userId=${encodeURIComponent(user)}`);
+      const settingsData = await settingsRes.json();
+      const statusRes = await fetch(`${API}/api/admin/questionCache/status?userId=${encodeURIComponent(user)}`);
+      const statusData = await statusRes.json();
+      const settings = settingsData.settings || {};
+      setLearningSettings(settings);
+      setCacheStatus(statusData.status || null);
+      setSelectedLevel(settings.learningLevel || DEFAULT_LEVEL);
+      setScreen('learningSettings');
+    } catch (e) {
+      setMessage('\u5b66\u4e60\u8bbe\u7f6e\u52a0\u8f7d\u5931\u8d25');
+    }
+    setLoading(false);
+  };
+
+  const saveLearningSettings = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/admin/userSettings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user, learningLevel: selectedLevel })
+      });
+      const data = await res.json();
+      setLearningSettings(data.settings || learningSettings);
+      setMessage(res.ok ? '\u5b66\u4e60\u96be\u5ea6\u5df2\u4fdd\u5b58' : '\u5b66\u4e60\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25');
+    } catch (e) {
+      setMessage('\u5b66\u4e60\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25');
+    }
+    setLoading(false);
+  };
+
+  const rebuildQuestionCache = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/admin/questionCache/rebuild`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user })
+      });
+      const data = await res.json();
+      setCacheStatus(data.status || cacheStatus);
+      setMessage(data.skipped ? '\u9898\u5e93\u8868\u672a\u914d\u7f6e\uff0c\u5df2\u8df3\u8fc7' : `\u9898\u5e93\u5df2\u91cd\u5efa ${data.count || 0} \u6761`);
+    } catch (e) {
+      setMessage('\u9898\u5e93\u91cd\u5efa\u5931\u8d25');
+    }
     setLoading(false);
   };
 
@@ -323,6 +388,42 @@ export default function App() {
     </ScrollView>
   );
 
+  if (screen === 'learningSettings') return (
+    <ScrollView style={s.container}>
+      <Text style={s.title}>{'\u5b66\u4e60\u8bbe\u7f6e'} - {user}</Text>
+      {message ? <Text style={s.message}>{message}</Text> : null}
+      <View style={s.card}>
+        <Text style={s.label}>{'\u5f53\u524d\u96be\u5ea6'}</Text>
+        <Text style={s.bigText}>{learningSettings?.learningLevel || DEFAULT_LEVEL}</Text>
+        <Text style={s.label}>{'\u9898\u5e93\u72b6\u6001'}</Text>
+        <Text>{learningSettings?.questionCacheStatus || 'not_started'}</Text>
+        <Text>{'\u53ef\u7528\u7f13\u5b58\u9898'}: {cacheStatus?.ready || 0} / {cacheStatus?.total || 0}</Text>
+        {learningSettings?.nextLevelChangeAt ? (
+          <Text style={s.hint}>{'\u4e0b\u6b21\u53ef\u4fee\u6539'}: {new Date(learningSettings.nextLevelChangeAt).toLocaleDateString()}</Text>
+        ) : null}
+      </View>
+      <View style={s.levelGrid}>
+        {LEVEL_OPTIONS.map(({ value, label }) => (
+          <TouchableOpacity
+            key={value}
+            style={[s.levelBtn, selectedLevel === value ? s.statusActive : null]}
+            onPress={() => setSelectedLevel(value)}
+          >
+            <Text style={[s.statusText, selectedLevel === value ? s.statusTextActive : null]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      <TouchableOpacity
+        style={learningSettings?.canChangeLevel === false ? s.grayBtn : s.greenBtn}
+        onPress={learningSettings?.canChangeLevel === false ? undefined : saveLearningSettings}
+      >
+        <Text style={s.btnText}>{'\u4fdd\u5b58\u96be\u5ea6'}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={s.orangeBtn} onPress={rebuildQuestionCache}><Text style={s.btnText}>{'\u91cd\u5efa\u9884\u751f\u6210\u9898\u5e93'}</Text></TouchableOpacity>
+      <TouchableOpacity style={s.grayBtn} onPress={() => setScreen('actions')}><Text style={s.btnText}>返回</Text></TouchableOpacity>
+    </ScrollView>
+  );
+
   if (screen === 'actions') return (
     <ScrollView style={s.container}>
       <Text style={s.title}>{user}</Text>
@@ -330,6 +431,7 @@ export default function App() {
       <TouchableOpacity style={s.greenBtn} onPress={startTest}><Text style={s.btnText}>开始测试</Text></TouchableOpacity>
       <TouchableOpacity style={s.orangeBtn} onPress={() => { setNewWord(''); setMessage(''); setScreen('addWord'); }}><Text style={s.btnText}>录入单词</Text></TouchableOpacity>
       <TouchableOpacity style={s.blueBtn} onPress={() => setScreen('searchWord')}><Text style={s.btnText}>查询/编辑单词</Text></TouchableOpacity>
+      <TouchableOpacity style={s.blueBtn} onPress={loadLearningSettings}><Text style={s.btnText}>{'\u5b66\u4e60\u8bbe\u7f6e'}</Text></TouchableOpacity>
       <TouchableOpacity style={s.btn} onPress={showDashboard}><Text style={s.btnText}>看板</Text></TouchableOpacity>
       <TouchableOpacity style={s.grayBtn} onPress={() => { setUser(null); setScreen('select'); }}><Text style={s.btnText}>返回</Text></TouchableOpacity>
     </ScrollView>
@@ -373,6 +475,8 @@ const s = StyleSheet.create({
   grayBtn: { backgroundColor: '#666', padding: 15, borderRadius: 10, marginVertical: 8 },
   blueBtn: { backgroundColor: '#2196F3', padding: 15, borderRadius: 10, marginVertical: 8 },
   redBtn: { backgroundColor: '#F44336', padding: 15, borderRadius: 10, marginVertical: 8 },
+  levelGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginVertical: 12 },
+  levelBtn: { width: '47%', padding: 12, borderRadius: 8, borderWidth: 2, borderColor: '#ddd', alignItems: 'center', backgroundColor: '#fff' },
   statusRow: { flexDirection: 'row', marginBottom: 15 },
   statusBtn: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 2, borderColor: '#ddd', marginRight: 10, alignItems: 'center' },
   statusActive: { borderColor: '#4CAF50', backgroundColor: '#E8F5E9' },

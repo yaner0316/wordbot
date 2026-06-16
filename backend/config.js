@@ -44,6 +44,9 @@ const STATS_TABLE = {
   appToken: getEnv('FEISHU_STATS_APP_TOKEN'),
   tableId: getEnv('FEISHU_STATS_TABLE_ID'),
 };
+const QUESTION_CACHE_TABLE = (process.env.FEISHU_QUESTION_CACHE_APP_TOKEN && process.env.FEISHU_QUESTION_CACHE_TABLE_ID)
+  ? { appToken: process.env.FEISHU_QUESTION_CACHE_APP_TOKEN, tableId: process.env.FEISHU_QUESTION_CACHE_TABLE_ID }
+  : null;
 
 // 飞书字段选项 ID 映射（可配置，避免表格改动后硬编码失效）
 const OPTION_IDS = {
@@ -72,6 +75,7 @@ module.exports = {
   DIST_TABLE,
   TEST_TABLE,
   STATS_TABLE,
+  QUESTION_CACHE_TABLE,
   OPTION_IDS,
   STATUS,
 };

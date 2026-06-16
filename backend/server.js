@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -165,6 +165,53 @@ app.get('/api/admin/stats', async (req, res) => {
     try {
         const stats = await getAllStats();
         res.json({ stats });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/userSettings', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        if (!userId) return res.status(400).json({ error: '缺少userId' });
+        const settings = await getUserLearningSettings(userId);
+        res.json({ settings });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/admin/userSettings', async (req, res) => {
+    try {
+        const { userId, learningLevel } = req.body;
+        if (!userId || !learningLevel) return res.status(400).json({ error: '缺少参数' });
+        const result = await updateUserLearningSettings(userId, learningLevel);
+        if (!result.success && result.error === 'cooldown') {
+            return res.status(409).json(result);
+        }
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/questionCache/status', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        if (!userId) return res.status(400).json({ error: '缺少userId' });
+        const status = await getQuestionCacheStatus(userId);
+        res.json({ status });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/questionCache/rebuild', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        if (!userId) return res.status(400).json({ error: '缺少userId' });
+        const result = await rebuildQuestionCacheForUser(userId);
+        res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
