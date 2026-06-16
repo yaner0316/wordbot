@@ -38,3 +38,7 @@ backend/*.log
 
 # Frontend (separate repo)
 wordbot-web/
+
+# Local agent workflow files
+.superpowers/
+docs/superpowers/
