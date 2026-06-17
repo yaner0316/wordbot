@@ -267,6 +267,18 @@ export default function App() {
       <Text style={s.bigTitle}>批改结果</Text>
       <Text style={s.score}>{results.correct} / {results.total}</Text>
       <Text style={s.accuracy}>{results.accuracy}</Text>
+      {results.rewardSummary ? (
+        <View style={s.rewardCard}>
+          <Text style={s.rewardTitle}>动物花园奖励</Text>
+          <Text>本次词晶: {results.rewardSummary.summary?.wordCrystalsEarned || 0}</Text>
+          <Text>封存词晶: {results.rewardSummary.summary?.sealedCrystalsEarned || 0}</Text>
+          <Text>已掌握释义: {results.rewardSummary.summary?.masteredMeaningCount || 0}</Text>
+          {results.rewardSummary.summary?.smallMilestoneUnlocked ? <Text style={s.rewardGood}>小里程碑已解锁</Text> : null}
+          {results.rewardSummary.summary?.bigMilestoneUnlocked ? <Text style={s.rewardGood}>大里程碑已解锁</Text> : null}
+          {results.rewardSummary.openedHabitats?.length ? <Text>新区域: {results.rewardSummary.openedHabitats.join(', ')}</Text> : null}
+          {results.rewardSummary.unlockedAnimals?.length ? <Text>新动物: {results.rewardSummary.unlockedAnimals.join(', ')}</Text> : null}
+        </View>
+      ) : null}
       {results.results?.map((r, i) => (
         <View key={i} style={[s.card, r.correct ? s.greenCard : s.redCard]}>
           <Text>第{i+1}题: {r.correct ? '✓ 正确' : `你的答案：${r.your || '未答'}；正确答案：${r.answer}`}</Text>
@@ -465,6 +477,9 @@ const s = StyleSheet.create({
   bigTitle: { fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginVertical: 20, color: '#6200EE' },
   score: { fontSize: 48, fontWeight: 'bold', textAlign: 'center', color: '#333' },
   accuracy: { fontSize: 20, textAlign: 'center', color: '#666', marginBottom: 20 },
+  rewardCard: { backgroundColor: '#FFF8E1', padding: 15, borderRadius: 10, marginBottom: 12, borderWidth: 1, borderColor: '#F3D26A' },
+  rewardTitle: { fontSize: 18, fontWeight: 'bold', color: '#5F4B00', marginBottom: 8 },
+  rewardGood: { color: '#2E7D32', fontWeight: 'bold', marginTop: 4 },
   subtitle: { fontSize: 14, color: '#666', marginBottom: 15, textAlign: 'center' },
   bigText: { fontSize: 20, fontWeight: 'bold', color: '#333', marginBottom: 10 },
   message: { textAlign: 'center', color: '#FF5722', marginVertical: 10, fontSize: 16 },

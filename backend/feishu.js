@@ -51,6 +51,7 @@ const {
     prioritizePendingRecords,
 } = require('./review-priority');
 const { calculateGameReward } = require('./game-reward');
+const { createSubmitRewardSummary } = require('./reward-submit-summary');
 const {
   APP_ID,
   APP_SECRET,
@@ -900,6 +901,10 @@ async function settleAnswers(testRecords, answers, userId, testId) {
 
     const allWordRecords = await getRecords(WORD_TABLE);
     const wordRecords = allWordRecords.filter(r => getFieldValue(r.fields.user) === userId);
+    const rewardBeforeWordRecords = wordRecords.map(record => ({
+        record_id: record.record_id,
+        fields: { ...record.fields },
+    }));
     const allTestRecords = await getRecords(TEST_TABLE);
     const userRealTests = filterAssessmentRecords(
         allTestRecords.filter(r => getFieldValue(r.fields.user) === userId && hasSubmittedAnswer(r)),
@@ -962,6 +967,11 @@ async function settleAnswers(testRecords, answers, userId, testId) {
     }
 
     console.log('submitAnswers results:', JSON.stringify(results).substring(0, 500));
+    const rewardSummary = createSubmitRewardSummary({
+        userId,
+        beforeRecords: rewardBeforeWordRecords,
+        afterRecords: wordRecords,
+    });
     return {
         alreadySubmitted: false,
         mode,
@@ -977,6 +987,7 @@ async function settleAnswers(testRecords, answers, userId, testId) {
             correct,
             total: results.length,
         }),
+        rewardSummary,
         stats: { total, mastered, pending: total - mastered }
     };
 }
