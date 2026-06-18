@@ -28,6 +28,7 @@ const { enrichQuestionOptionMeanings } = require('./option-meanings');
 const { createQuizBuilder } = require('./quiz-builder');
 const {
     createQuizTimingLogger,
+    shouldAllowLiveQuizFallback,
     shouldRunAiQuizAudit,
 } = require('./quiz-performance-policy');
 const {
@@ -36,6 +37,7 @@ const {
 } = require('./user-learning-settings');
 const {
     buildCacheRowsForRecord,
+    isCacheQuestionReady,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
 } = require('./question-cache');
@@ -525,6 +527,19 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 source: 'question_cache',
                 difficultyApplied: true,
                 questions: randomizedQuestions.map(({ cacheRecordId, testId: _, record_id: __, ...q }) => q),
+            };
+        }
+        if (!shouldAllowLiveQuizFallback({
+            cacheConfigured: Boolean(QUESTION_CACHE_TABLE),
+            flag: process.env.WORDBOT_ALLOW_LIVE_QUIZ_FALLBACK,
+        })) {
+            return {
+                error: '题库正在准备中，请先重建题目缓存后再开始测试',
+                code: 'QUESTION_CACHE_NOT_READY',
+                source: 'question_cache',
+                level: effectiveLevel,
+                readyCount: cachedQuestions.length,
+                requiredCount: 10,
             };
         }
     }
@@ -1295,6 +1310,23 @@ async function getQuestionCacheStatus(userId) {
     };
 }
 
+function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQuestion, sourceVersion }) {
+    const candidateRows = buildCacheRowsForRecord({
+        userId,
+        level,
+        primaryQuestion,
+        reviewQuestion,
+        sourceVersion,
+        now: Date.now(),
+    });
+    const [primaryRow, reviewRow] = candidateRows;
+    if (isCacheQuestionReady(primaryRow) && isCacheQuestionReady(reviewRow)) {
+        rows.push(...candidateRows);
+        return true;
+    }
+    return false;
+}
+
 async function rebuildQuestionCacheForUser(userId) {
     if (!QUESTION_CACHE_TABLE) {
         return { configured: false, skipped: true, count: 0 };
@@ -1334,21 +1366,37 @@ async function rebuildQuestionCacheForUser(userId) {
             letters
         );
         if (!primaryQuestion || !reviewQuestion) continue;
-        normalizeQuizArticleContexts([primaryQuestion, reviewQuestion]);
+        let cacheQuestions = [primaryQuestion, reviewQuestion];
+        if (level && MINIMAX_API_KEY) {
+            await adaptContextsByLevel(cacheQuestions, level);
+        }
+        if (shouldRunAiQuizAudit({
+            enabled: process.env.WORDBOT_AI_QUIZ_AUDIT === '1',
+            hasApiKey: Boolean(MINIMAX_API_KEY),
+            questionCount: cacheQuestions.length,
+        })) {
+            cacheQuestions = (await validateAndFixQuiz(
+                cacheQuestions,
+                pool,
+                'cache-quality',
+                letters
+            )).filter(Boolean);
+        }
+        if (cacheQuestions.length !== 2) continue;
+        normalizeQuizArticleContexts(cacheQuestions);
         await enrichQuestionOptionMeanings({
-            questions: [primaryQuestion, reviewQuestion],
+            questions: cacheQuestions,
             records: wordRecords,
             translateWords: translateWordsToCN,
             updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
         });
-        rows.push(...buildCacheRowsForRecord({
+        appendReadyCacheRows(rows, {
             userId,
             level,
-            primaryQuestion,
-            reviewQuestion,
+            primaryQuestion: cacheQuestions[0],
+            reviewQuestion: cacheQuestions[1],
             sourceVersion: 'phase-2',
-            now: Date.now(),
-        }));
+        });
     }
     await addQuestionCacheRecords(rows);
     return {

@@ -1,5 +1,10 @@
-﻿function shouldRunAiQuizAudit({ enabled, hasApiKey, questionCount }) {
+function shouldRunAiQuizAudit({ enabled, hasApiKey, questionCount }) {
     return Boolean(enabled && hasApiKey && questionCount > 0);
+}
+
+function shouldAllowLiveQuizFallback({ cacheConfigured, flag }) {
+    if (!cacheConfigured) return true;
+    return flag === '1';
 }
 
 function createQuizTimingLogger({ enabled = false, now = Date.now, log = console.log } = {}) {
@@ -15,5 +20,6 @@ function createQuizTimingLogger({ enabled = false, now = Date.now, log = console
 
 module.exports = {
     createQuizTimingLogger,
+    shouldAllowLiveQuizFallback,
     shouldRunAiQuizAudit,
 };

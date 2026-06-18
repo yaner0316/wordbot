@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
     QUESTION_CACHE_STATUS,
     buildCacheRowsForRecord,
+    isCacheQuestionReady,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
 } = require('../question-cache');
@@ -78,6 +79,30 @@ test('selects ready current-level primary questions before older used ones', () 
     });
 
     assert.deepEqual(selected.map(item => item.word), ['fresh', 'used']);
+});
+
+test('rejects ready cache rows that are missing quality-critical fields', () => {
+    assert.equal(isCacheQuestionReady(question()), true);
+    assert.equal(isCacheQuestionReady(question({ options: JSON.stringify(['A. apple', 'B. pear']) })), false);
+    assert.equal(isCacheQuestionReady(question({ option_meanings: JSON.stringify(['苹果', '梨', '椅子']) })), false);
+    assert.equal(isCacheQuestionReady(question({ answer: 'E' })), false);
+    assert.equal(isCacheQuestionReady(question({ question_text: '' })), false);
+});
+
+test('selects only structurally valid ready cached questions', () => {
+    const selected = selectReadyCachedQuestions({
+        rows: [
+            question({ word_record_id: 'rec-valid', word: 'valid' }),
+            question({ word_record_id: 'rec-bad-options', word: 'bad-options', options: JSON.stringify(['A. apple']) }),
+            question({ word_record_id: 'rec-bad-meanings', word: 'bad-meanings', option_meanings: JSON.stringify([]) }),
+        ],
+        userId: 'qiuqiu',
+        level: '中学',
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.deepEqual(selected.map(item => item.word), ['valid']);
 });
 
 test('cache status summary reports ready counts by level and round type', () => {

@@ -76,6 +76,22 @@ function normalizeCacheRow(row) {
     };
 }
 
+function isCacheQuestionReady(row) {
+    const normalized = row && row.question ? row : normalizeCacheRow(row);
+    const question = normalized.question;
+    return normalized.qualityStatus === QUESTION_CACHE_STATUS.READY &&
+        Boolean(question.record_id) &&
+        Boolean(question.word) &&
+        Boolean(String(question.context || '').trim()) &&
+        ['A', 'B', 'C', 'D'].includes(question.answer) &&
+        Array.isArray(question.options) &&
+        question.options.length === 4 &&
+        question.options.every(option => /^[A-D]\.\s+\S/.test(String(option || ''))) &&
+        Array.isArray(question.optionMeanings) &&
+        question.optionMeanings.length === 4 &&
+        question.optionMeanings.every(meaning => Boolean(String(meaning || '').trim()));
+}
+
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
     return (rows || [])
         .map(normalizeCacheRow)
@@ -83,6 +99,7 @@ function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary'
         .filter(row => row.level === level)
         .filter(row => row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
+        .filter(row => isCacheQuestionReady(row))
         .filter(row => !excludedRecordIds.has(row.wordRecordId))
         .sort((left, right) =>
             left.usedCount - right.usedCount ||
@@ -115,6 +132,7 @@ function summarizeCacheStatus(rows) {
 module.exports = {
     QUESTION_CACHE_STATUS,
     buildCacheRowsForRecord,
+    isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
