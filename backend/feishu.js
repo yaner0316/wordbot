@@ -1452,7 +1452,7 @@ async function validateWords(words) {
     return { errors, multiMeanings };
 }
 
-function requesthttp(url) {
+function requesthttp(url, timeout = 8000) {
     return new Promise((resolve, reject) => {
         const req = https.request(url, (res) => {
             const chunks = [];
@@ -1463,6 +1463,9 @@ function requesthttp(url) {
             });
         });
         req.on('error', reject);
+        req.setTimeout(timeout, () => {
+            req.destroy(new Error('request timeout'));
+        });
         req.end();
     });
 }
@@ -1693,79 +1696,99 @@ async function fetchWordDefinition(word) {
     };
 }
 
+function pickFallbackDistractors(word, allWords) {
+    const lowerWord = word.toLowerCase();
+    const candidates = [...allWords];
+    const fallback = [];
+    while (fallback.length < 3 && candidates.length > 0) {
+        const idx = crypto.randomInt(0, candidates.length);
+        const candidate = candidates[idx];
+        if (candidate !== lowerWord && !fallback.includes(candidate)) {
+            fallback.push(candidate);
+        }
+        candidates.splice(idx, 1);
+    }
+    return fallback;
+}
+
+async function prepareWordFields(targetUser, word, fallbackWords) {
+    const def = await fetchWordDefinition(word);
+    let distractors = null;
+    let example = isContextUsableForWord(word, def.context) ? def.context : '';
+    let cnMeaning = '';
+
+    if (!example) {
+        example = await generateExampleWithAI(word, def.meaning) || '';
+    }
+
+    if (example) {
+        distractors = await generateDistractorsWithContext(word, example);
+    }
+
+    if (!distractors || distractors.length < 3) {
+        if (example) {
+            distractors = await generateDistractorsWithCollocation(word, example);
+        }
+    }
+
+    if (!distractors || distractors.length < 3) {
+        const fallback = pickFallbackDistractors(word, fallbackWords);
+        if (distractors) {
+            distractors = [...distractors, ...fallback].slice(0, 3);
+        } else {
+            distractors = fallback;
+        }
+    }
+
+    cnMeaning = await translateToCN(def.meaning);
+    if (!cnMeaning) {
+        cnMeaning = '';
+    }
+
+    const wordFields = {
+        user: targetUser,
+        Word: toSimp(word),
+        Meaning: def.meaning,
+        CN_Meaning: cnMeaning || '',
+        Distractors: Array.isArray(distractors) ? distractors.join(',') : '',
+        Status: 'Pending',
+        record_time: Date.now()
+    };
+    if (def.pos) wordFields.POS = def.pos;
+    if (example) wordFields.Context = example;
+
+    return { wordFields, distractors, cnMeaning };
+}
+
 async function addWords(targetUser, words) {
     console.log('addWords 被调用', targetUser, words);
     let count = 0;
     const errors = [];
-    
-    for (const word of words) {
+    const { pool: distPool } = await getDistractorPool();
+    const fallbackWords = [...new Set(Object.values(distPool).map(r => r.word?.toLowerCase()).filter(Boolean))];
+
+    const prepared = await Promise.all(words.map(async word => {
         try {
-            const def = await fetchWordDefinition(word);
-            
-            let distractors = null;
-            let example = isContextUsableForWord(word, def.context) ? def.context : '';
-            let cnMeaning = '';
-
-            if (!example) {
-                example = await generateExampleWithAI(word, def.meaning) || '';
-            }
-
-            if (example) {
-                distractors = await generateDistractorsWithContext(word, example);
-            }
-
-            if (!distractors || distractors.length < 3) {
-                if (example) {
-                    distractors = await generateDistractorsWithCollocation(word, example);
-                }
-            }
-
-            if (!distractors || distractors.length < 3) {
-                const { pool: distPool } = await getDistractorPool();
-                const lowerWord = word.toLowerCase();
-                const allWords = [...new Set(Object.values(distPool).map(r => r.word?.toLowerCase()).filter(Boolean))];
-                const fallback = [];
-                while (fallback.length < 3 && allWords.length > 0) {
-                    const idx = crypto.randomInt(0, allWords.length);
-                    const candidate = allWords[idx];
-                    if (candidate !== lowerWord && !fallback.includes(candidate)) {
-                        fallback.push(candidate);
-                    }
-                    allWords.splice(idx, 1);
-                }
-                if (distractors) {
-                    distractors = [...distractors, ...fallback].slice(0, 3);
-                } else {
-                    distractors = fallback;
-                }
-            }
-
-            cnMeaning = await translateToCN(def.meaning);
-            if (!cnMeaning) {
-                cnMeaning = '';
-            }
-            
-            const wordFields = {
-                user: targetUser,
-                Word: toSimp(word),
-                Meaning: def.meaning,
-                CN_Meaning: cnMeaning || '',
-                Distractors: Array.isArray(distractors) ? distractors.join(',') : '',
-                Status: 'Pending',
-                record_time: Date.now()
-            };
-            if (def.pos) wordFields.POS = def.pos;
-            if (example) wordFields.Context = example;
-            
-            await addRecord(WORD_TABLE, wordFields);
-            count++;
-            console.log(`成功写入: ${word}, 干扰词: ${distractors.join(', ')}, 中文: ${cnMeaning?.substring(0, 15)}...`);
+            return { word, ok: true, ...(await prepareWordFields(targetUser, word, fallbackWords)) };
         } catch (e) {
-            console.log(`写入失败 ${word}: ${e.message}`);
-            errors.push(`${word}: ${e.message}`);
+            console.log(`准备失败 ${word}: ${e.message}`);
+            return { word, ok: false, error: `${word}: ${e.message}` };
         }
-        
-        await new Promise(r => setTimeout(r, 1000));
+    }));
+
+    for (const item of prepared) {
+        if (!item.ok) {
+            errors.push(item.error);
+            continue;
+        }
+        try {
+            await addRecord(WORD_TABLE, item.wordFields);
+            count++;
+            console.log(`成功写入: ${item.word}, 干扰词: ${item.distractors.join(', ')}, 中文: ${item.cnMeaning?.substring(0, 15)}...`);
+        } catch (e) {
+            console.log(`写入失败 ${item.word}: ${e.message}`);
+            errors.push(`${item.word}: ${e.message}`);
+        }
     }
     
     if (errors.length > 0) {
