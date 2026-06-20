@@ -27,3 +27,34 @@ test('waitFor resolves immediately when no write is staged', async () => {
     await staging.waitFor('missing-test');
     assert.equal(staging.has('missing-test'), false);
 });
+
+test('staged write rejection is observed even before waitFor is called', async () => {
+    const staging = createQuizRecordWriteStaging();
+    const unhandled = [];
+    const onUnhandled = reason => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+        const failure = new Error('feishu write failed');
+        staging.stage('test-reject', Promise.reject(failure));
+
+        await new Promise(resolve => setImmediate(resolve));
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.deepEqual(unhandled, []);
+    } finally {
+        process.off('unhandledRejection', onUnhandled);
+    }
+});
+
+test('waitFor reports a staged write rejection to the submit path', async () => {
+    const staging = createQuizRecordWriteStaging();
+    const failure = new Error('feishu write failed');
+
+    staging.stage('test-reject', Promise.reject(failure));
+
+    await assert.rejects(
+        () => staging.waitFor('test-reject'),
+        /feishu write failed/
+    );
+});
