@@ -23,3 +23,15 @@ test('distractor pool statistics are declared before use', () => {
         'getDistractorPool should log the computed canType3 count without referencing an undeclared stats variable'
     );
 });
+
+test('runtime console logs stay concise', () => {
+    const longLogs = feishuLines
+        .map((line, index) => ({ line, lineNumber: index + 1 }))
+        .filter(({ line }) => line.includes('console.log') && line.length > 500);
+
+    assert.deepEqual(
+        longLogs.map(({ lineNumber }) => lineNumber),
+        [],
+        'Replace huge mojibake console.log lines with short diagnostic messages'
+    );
+});
