@@ -64,3 +64,23 @@ test('register rejects a different password for an account that already has cred
         /用户已注册/
     );
 });
+test('register does not scan account fields before a normal credential write', async () => {
+    let ensureCalls = 0;
+    const added = [];
+    const service = createAuthService({
+        listAccountRecords: async () => [],
+        listWordUsers: async () => [],
+        addAccountRecord: async fields => { added.push(fields); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => {
+            ensureCalls++;
+            throw new Error('field scan should be lazy');
+        },
+        randomBytes: size => Buffer.alloc(size, 8),
+    });
+
+    await service.register({ username: 'Draggy', password: 'secret1' });
+
+    assert.equal(ensureCalls, 0);
+    assert.equal(added[0].user, 'Draggy');
+});

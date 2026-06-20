@@ -39,16 +39,12 @@ function createAuthService({
 
     async function register({ username, password }) {
         const { user, password: rawPassword } = validateCredentials(username, password);
-        await ensureAccountFields();
         const records = await listAccountRecords();
         const existing = findAccount(records, user);
         if (existing?.fields?.auth_password_hash) {
             throw new Error('用户已注册，请直接登录');
         }
 
-        const knownWordUsers = typeof listWordUsers === 'function'
-            ? await listWordUsers()
-            : [];
         const salt = randomBytes(16).toString('hex');
         const fields = {
             user,
@@ -56,12 +52,19 @@ function createAuthService({
             auth_password_hash: hashPassword(rawPassword, salt),
             auth_created_at: Date.now(),
         };
-        if (existing) {
-            await updateAccountRecord(existing.record_id, fields);
-        } else {
-            // New account records also cover existing word-library users that do not yet have stats.
-            void knownWordUsers;
-            await addAccountRecord(fields);
+        async function writeCredentials() {
+            if (existing) {
+                await updateAccountRecord(existing.record_id, fields);
+            } else {
+                await addAccountRecord(fields);
+            }
+        }
+
+        try {
+            await writeCredentials();
+        } catch (error) {
+            await ensureAccountFields();
+            await writeCredentials();
         }
         return { user };
     }
