@@ -24,14 +24,15 @@ test('distractor pool statistics are declared before use', () => {
     );
 });
 
-test('runtime console logs stay concise', () => {
-    const longLogs = feishuLines
+test('runtime console diagnostics stay concise', () => {
+    const longDiagnostics = feishuLines
         .map((line, index) => ({ line, lineNumber: index + 1 }))
-        .filter(({ line }) => line.includes('console.log') && line.length > 500);
+        .filter(({ line }) => /console\.(log|warn|error)/.test(line) && line.length > 500);
 
     assert.deepEqual(
-        longLogs.map(({ lineNumber }) => lineNumber),
+        longDiagnostics.map(({ lineNumber }) => lineNumber),
         [],
-        'Replace huge mojibake console.log lines with short diagnostic messages'
+        'Replace huge mojibake console diagnostics with short messages'
     );
 });
+
