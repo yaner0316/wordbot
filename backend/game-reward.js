@@ -2,7 +2,7 @@ const { ASSESSMENT_MODE } = require('./assessment-mode');
 const { ASSESSMENT_KIND, getAssessmentKind } = require('./review-session');
 
 const DEFAULT_EXCELLENT_MINUTES = 5;
-const DEFAULT_PERFECT_MINUTES = 10;
+const DEFAULT_PERFECT_MINUTES = 12;
 
 function readMinutes(name, fallback) {
     const value = Number(process.env[name]);

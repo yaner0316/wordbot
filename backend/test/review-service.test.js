@@ -94,6 +94,19 @@ test('creates the first round from only wrong source-test questions', async () =
     assert.equal(added[0][0].source_question_id, 'q-row-2');
 });
 
+
+test('does not write question context to review records', async () => {
+    const { service, added } = createFixture();
+
+    const round = await service.createRound({
+        userId: 'student',
+        sourceTestId: 'real-q1',
+    });
+
+    assert.equal(round.questions[0].context, 'A new _____ context.');
+    assert.equal(Object.hasOwn(added[0][0], 'context'), false);
+});
+
 test('returns the existing active round for an idempotent retry', async () => {
     const { service, added } = createFixture();
 

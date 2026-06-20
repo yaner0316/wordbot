@@ -1,4 +1,4 @@
-# WordBot Release Checklist
+﻿# WordBot Release Checklist
 
 Use this checklist before publishing the current staged release.
 
@@ -26,7 +26,7 @@ Optional:
 Then verify the local environment before starting the server:
 
 ```powershell
-cd D:\feishu-knowledge\wordbot\backend
+cd D:\Projects\04-Wordbot-开发任务\app\backend
 npm.cmd run check:env
 ```
 
@@ -37,7 +37,7 @@ The command exits with code `1` and prints `missing` when required values are ab
 Run the review-field setup once before release:
 
 ```powershell
-cd D:\feishu-knowledge\wordbot\backend
+cd D:\Projects\04-Wordbot-开发任务\app\backend
 npm.cmd run setup:review-fields
 ```
 
@@ -57,7 +57,7 @@ Expected result on a configured table:
 Backend:
 
 ```powershell
-cd D:\feishu-knowledge\wordbot\backend
+cd D:\Projects\04-Wordbot-开发任务\app\backend
 npm.cmd test
 node --check server.js
 node --check http-app.js
@@ -69,7 +69,7 @@ node --check game-reward.js
 Frontend:
 
 ```powershell
-cd D:\feishu-knowledge\wordbot-web
+cd D:\Projects\04-Wordbot-开发任务\web
 node --test test/*.test.cjs
 node --check src/app.js
 node --check src/quiz-logic.js
@@ -79,10 +79,10 @@ node --check src/review-flow.js
 Repository checks:
 
 ```powershell
-cd D:\feishu-knowledge\wordbot
+cd D:\Projects\04-Wordbot-开发任务\app
 git diff --check
 
-cd D:\feishu-knowledge\wordbot-web
+cd D:\Projects\04-Wordbot-开发任务\web
 git diff --check
 ```
 
@@ -102,7 +102,7 @@ Release only when:
 
 ## 5. Manual Smoke Test
 
-Use `file:///D:/feishu-knowledge/wordbot-web/index.html?demo=1` for local preview, then repeat on the published URL.
+Use `file:///D:/Projects/04-Wordbot-开发任务/web/index.html?demo=1` for local preview, then repeat on the published URL.
 
 Check:
 
@@ -133,3 +133,4 @@ If release has to be rolled back:
 - Restore the previous backend and frontend build.
 - Do not delete Feishu review fields; they are additive and harmless to older code.
 - Test-mode rows can be removed with the admin cleanup action.
+

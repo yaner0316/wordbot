@@ -33,8 +33,28 @@ function addErrorContract(req, res, next) {
     next();
 }
 
+function hasWrongAnswers(result) {
+    return Array.isArray(result?.results) && result.results.some(item => item && item.correct === false);
+}
+
+function startReviewPrebuild({ createReviewRound, user, testId, result }) {
+    if (typeof createReviewRound !== 'function' || !hasWrongAnswers(result)) return;
+    try {
+        Promise.resolve(createReviewRound({
+            userId: user,
+            sourceTestId: testId,
+            parentReviewId: '',
+        })).catch(error => {
+            console.warn('review prebuild failed:', error.message);
+        });
+    } catch (error) {
+        console.warn('review prebuild failed:', error.message);
+    }
+}
 function createApp({
     submitAnswers,
+    registerUser,
+    loginUser,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,
@@ -51,6 +71,27 @@ function createApp({
     app.use(express.json());
     app.use(addErrorContract);
 
+    if (typeof registerUser === 'function') {
+        app.post('/api/auth/register', async (req, res) => {
+            try {
+                const { username, password } = req.body;
+                res.json(await registerUser({ username, password }));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof loginUser === 'function') {
+        app.post('/api/auth/login', async (req, res) => {
+            try {
+                const { username, password } = req.body;
+                res.json(await loginUser({ username, password }));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
     app.get('/api/health', (req, res) => {
         const health = typeof getRuntimeHealth === 'function'
             ? getRuntimeHealth()
@@ -69,6 +110,7 @@ function createApp({
             }
 
             const data = await submitAnswers(user, testId, answers);
+            startReviewPrebuild({ createReviewRound, user, testId, result: data });
             res.json(data);
         } catch (error) {
             const status = isClientError(error) ? 400 : 500;

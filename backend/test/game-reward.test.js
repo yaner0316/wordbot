@@ -13,7 +13,7 @@ test('grants the high reward for a perfect real quiz score', () => {
         }),
         {
             eligible: true,
-            minutes: 10,
+            minutes: 12,
             tier: 'perfect',
             reason: 'perfect_score',
         }

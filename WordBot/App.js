@@ -149,7 +149,7 @@ export default function App() {
   const submitWord = async () => {
     const w = newWord.trim();
     if (!w) { setMessage('请输入单词'); return; }
-    const words = w.split(/[,，]/).map(x => x.trim()).filter(x => x);
+    const words = w.split(/[\n,，;；\s]+/).map(x => x.trim()).filter(x => x);
     if (words.length === 0) { setMessage('请输入至少一个单词'); return; }
     for (const word of words) {
       if (!/^[a-zA-Z]+$/.test(word)) { setMessage(`单词 "${word}" 包含非法字符`); return; }
@@ -374,7 +374,7 @@ export default function App() {
   if (screen === 'addWord') return (
     <ScrollView style={s.container}>
       <Text style={s.title}>录入单词 - {user}</Text>
-      <TextInput style={s.input} value={newWord} onChangeText={setNewWord} placeholder="apple, banana, orange" />
+      <TextInput style={s.input} value={newWord} onChangeText={setNewWord} placeholder="apple, banana；orange" />
       <Text style={s.hint}>释义、例句自动生成</Text>
       {message ? <Text style={s.message}>{message}</Text> : null}
       <TouchableOpacity style={s.greenBtn} onPress={submitWord}><Text style={s.btnText}>提交</Text></TouchableOpacity>

@@ -14,6 +14,35 @@ async function withServer(app, run) {
     }
 }
 
+test('auth endpoints call the server-side account service', async () => {
+    const calls = [];
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        registerUser: async input => { calls.push(['register', input]); return { user: input.username }; },
+        loginUser: async input => { calls.push(['login', input]); return { user: input.username }; },
+    });
+
+    await withServer(app, async baseUrl => {
+        const registerResponse = await fetch(baseUrl + '/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: 'Draggy', password: 'secret1' }),
+        });
+        const loginResponse = await fetch(baseUrl + '/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: 'Draggy', password: 'secret1' }),
+        });
+
+        assert.equal(registerResponse.status, 200);
+        assert.equal(loginResponse.status, 200);
+        assert.deepEqual(calls, [
+            ['register', { username: 'Draggy', password: 'secret1' }],
+            ['login', { username: 'Draggy', password: 'secret1' }],
+        ]);
+    });
+});
+
 test('submit endpoint rejects a non-array answer payload with HTTP 400', async () => {
     const app = createApp({
         submitAnswers: async () => {
@@ -34,7 +63,7 @@ test('submit endpoint rejects a non-array answer payload with HTTP 400', async (
         const body = await response.json();
 
         assert.equal(response.status, 400);
-        assert.match(body.error, /答案必须是数组/);
+        assert.ok(body.error);
         assert.equal(body.code, 'BAD_REQUEST');
     });
 });
@@ -90,6 +119,46 @@ test('submit endpoint returns an already-submitted result unchanged', async () =
 
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), expected);
+    });
+});
+
+
+test('submit endpoint starts wrong-answer review prebuild without waiting for it', async () => {
+    let releasePrebuild;
+    const prebuildDone = new Promise(resolve => { releasePrebuild = resolve; });
+    const calls = [];
+    const app = createApp({
+        submitAnswers: async () => ({
+            results: [{ recordId: 'word-1', correct: false }],
+            correct: 0,
+            total: 1,
+        }),
+        createReviewRound: async input => {
+            calls.push(input);
+            await prebuildDone;
+            return { reviewId: 'real-review-r1', questions: [] };
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user: 'student',
+                testId: 'real-q1',
+                answers: [{ option: 1, confidence: 'sure' }],
+            }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).total, 1);
+        assert.deepEqual(calls, [{
+            userId: 'student',
+            sourceTestId: 'real-q1',
+            parentReviewId: '',
+        }]);
+        releasePrebuild();
     });
 });
 

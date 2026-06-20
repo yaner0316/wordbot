@@ -164,7 +164,6 @@ function createReviewService({
             record_id: question.record_id,
             word: question.word,
             question_type: question.type,
-            context: question.context,
             correct_answer: question.answer,
             options: JSON.stringify(question.options),
             test_time: baseTime + index,
