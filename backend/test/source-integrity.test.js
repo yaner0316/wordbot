@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -68,4 +68,22 @@ test('Feishu request timeout is enforced as total wall time', () => {
         feishuSource.includes('totalTimer = setTimeout'),
         'request timeout must use an explicit wall-clock timer, not only socket idle timeout'
     );
+});
+
+
+test('learning settings are stored on the stats table, not word records', () => {
+    const getStart = feishuSource.indexOf('async function getUserLearningSettings');
+    const updateStart = feishuSource.indexOf('async function updateUserLearningSettings');
+    const statusStart = feishuSource.indexOf('async function getQuestionCacheStatus');
+    assert.ok(getStart >= 0 && updateStart > getStart && statusStart > updateStart);
+
+    const getSettingsSource = feishuSource.slice(getStart, updateStart);
+    const updateSettingsSource = feishuSource.slice(updateStart, statusStart);
+
+    assert.ok(getSettingsSource.includes('getRecords(STATS_TABLE)'));
+    assert.ok(!getSettingsSource.includes('getRecords(WORD_TABLE)'));
+    assert.ok(updateSettingsSource.includes('getRecords(STATS_TABLE)'));
+    assert.ok(updateSettingsSource.includes('updateRecord(STATS_TABLE'));
+    assert.ok(updateSettingsSource.includes('addRecord(STATS_TABLE'));
+    assert.ok(!updateSettingsSource.includes('updateRecord(WORD_TABLE'));
 });
