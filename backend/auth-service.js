@@ -8,6 +8,10 @@ function normalizeUsername(value) {
     return String(value || '').trim().replace(/\s+/g, '');
 }
 
+function shouldEnsureAccountFields(error) {
+    return /field|字段/i.test(String(error?.message || ''));
+}
+
 function validateCredentials(username, password) {
     const user = normalizeUsername(username);
     if (!user) throw new Error('请输入用户名');
@@ -85,6 +89,7 @@ function createAuthService({
         try {
             await writeCredentials();
         } catch (error) {
+            if (!shouldEnsureAccountFields(error)) throw error;
             logger.warn('auth credential write failed, ensuring account fields');
             await withTimeout(
                 ensureAccountFields(),

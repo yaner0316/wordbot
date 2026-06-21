@@ -175,3 +175,23 @@ test('register times out account field preparation after a write failure', async
     );
     assert.deepEqual(logs, ['auth credential write failed, ensuring account fields']);
 });
+
+
+test('register does not retry field recovery after a timeout', async () => {
+    let ensureCalls = 0;
+    const service = createAuthService({
+        listAccountRecords: async () => [],
+        listWordUsers: async () => [],
+        addAccountRecord: async () => { throw new Error('Feishu request timeout after 5000ms: POST /records'); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => { ensureCalls++; },
+        fieldPreparationTimeoutMs: 5,
+        randomBytes: size => Buffer.alloc(size, 13),
+    });
+
+    await assert.rejects(
+        service.register({ username: 'newkid', password: 'secret1' }),
+        /Feishu request timeout/
+    );
+    assert.equal(ensureCalls, 0);
+});

@@ -61,3 +61,11 @@ test('search record timeout is applied to each Feishu request', () => {
         'searchRecords must pass its timeout to the underlying Feishu request'
     );
 });
+
+
+test('Feishu request timeout is enforced as total wall time', () => {
+    assert.ok(
+        feishuSource.includes('totalTimer = setTimeout'),
+        'request timeout must use an explicit wall-clock timer, not only socket idle timeout'
+    );
+});
