@@ -120,6 +120,24 @@ test('builds a definition question from the first semicolon-separated meaning', 
     assert.equal(question.correctMeaning, '有韧性的');
 });
 
+test('rejects definition questions that contain AI meta-response text', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-meta',
+        {
+            word: 'chick',
+            CN_Meaning: "The text you've shared looks like a long passage in Chinese characters. Could you let me know whether you want a translation or decoding?",
+            distractors: ['roll', 'handsome', 'cow'],
+        },
+        3,
+        'test-meta',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});
+
 test('rejects a question when fewer than three usable distractors remain', () => {
     const buildQuizQuestion = createBuilder();
 

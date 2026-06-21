@@ -11,6 +11,23 @@ function isLikelyPluralNoun(word) {
     return value.length > 3 && value.endsWith('s') && !value.endsWith('ss');
 }
 
+function hasAiMetaResponse(text) {
+    const value = String(text || '').toLowerCase();
+    if (!value) return false;
+    const directMarkers = [
+        "the text you've shared looks like",
+        'the text you have shared looks like',
+        'could you let me know',
+        "i'll be happy to help",
+        'i will be happy to help',
+        'would you like:',
+    ];
+    if (directMarkers.some(marker => value.includes(marker))) return true;
+    const helpIntentMarkers = ['translation', 'decoding', 'de-ciphering', 'deciphering', 'analysis'];
+    const metaMarkerCount = helpIntentMarkers.filter(marker => value.includes(marker)).length;
+    return value.includes('chinese characters') && metaMarkerCount >= 2;
+}
+
 function hasPluralListMismatch(word, context) {
     const key = String(word || '').toLowerCase();
     const text = String(context || '').toLowerCase();
@@ -46,6 +63,7 @@ function hasInvalidFillInGrammar({ word, context }) {
 
 function isQuestionQualityAcceptable(question) {
     if (!question) return false;
+    if (hasAiMetaResponse(question.context) || hasAiMetaResponse(question.correctMeaning)) return false;
     if (Number(question.type) !== 1) return true;
     const answerPrefix = `${question.answer}.`;
     const word = stripOptionLabel(
@@ -57,6 +75,7 @@ function isQuestionQualityAcceptable(question) {
 }
 
 module.exports = {
+    hasAiMetaResponse,
     hasInvalidFillInGrammar,
     isQuestionQualityAcceptable,
 };

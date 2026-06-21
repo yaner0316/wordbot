@@ -1,4 +1,4 @@
-const { hasInvalidFillInGrammar } = require('./question-quality');
+const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
 
 function createQuizBuilder({
     choose,
@@ -139,6 +139,7 @@ function createQuizBuilder({
         }
 
         if (!question || !question.context) return null;
+        if (!isQuestionQualityAcceptable(question)) return null;
         question.testId = testId;
         question.record_id = recordId;
         return question;

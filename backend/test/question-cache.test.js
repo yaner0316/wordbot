@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
@@ -98,6 +98,18 @@ test('rejects cached fill-in questions with numeric quantity and singular target
         options: JSON.stringify(['A. pump', 'B. cheek', 'C. kitten', 'D. corn']),
         option_meanings: JSON.stringify(['泵', '脸颊', '小猫', '谷物']),
         answer: 'D',
+    })), false);
+});
+
+test('rejects cached definition questions that contain AI meta-response text', () => {
+    assert.equal(isCacheQuestionReady(question({
+        word_record_id: 'rec-meta',
+        word: 'chick',
+        question_type: 3,
+        question_text: "The text you've shared looks like a long passage in Chinese characters. Could you let me know whether you want a translation or decoding?",
+        options: JSON.stringify(['A. roll', 'B. handsome', 'C. chick', 'D. cow']),
+        option_meanings: JSON.stringify(['roll', 'handsome', 'chick', 'cow']),
+        answer: 'C',
     })), false);
 });
 
