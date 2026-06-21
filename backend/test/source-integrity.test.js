@@ -36,3 +36,16 @@ test('runtime console diagnostics stay concise', () => {
     );
 });
 
+
+
+test('runtime errors stay concise enough for HTTP responses', () => {
+    const longErrors = feishuLines
+        .map((line, index) => ({ line, lineNumber: index + 1 }))
+        .filter(({ line }) => /throw new Error/.test(line) && line.length > 500);
+
+    assert.deepEqual(
+        longErrors.map(({ lineNumber }) => lineNumber),
+        [],
+        'Replace huge mojibake thrown errors with short operational messages'
+    );
+});
