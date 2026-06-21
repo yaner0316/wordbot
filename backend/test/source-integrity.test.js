@@ -49,3 +49,15 @@ test('runtime errors stay concise enough for HTTP responses', () => {
         'Replace huge mojibake thrown errors with short operational messages'
     );
 });
+
+
+test('search record timeout is applied to each Feishu request', () => {
+    assert.ok(
+        feishuSource.includes('function request(method, path, body, token, timeoutOverrideMs)'),
+        'Feishu request must allow a per-call timeout override'
+    );
+    assert.ok(
+        feishuSource.includes("records/search`, body, token, timeout)"),
+        'searchRecords must pass its timeout to the underlying Feishu request'
+    );
+});
