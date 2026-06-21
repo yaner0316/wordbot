@@ -15,6 +15,14 @@ function validateCredentials(username, password) {
     return { user, password: String(password) };
 }
 
+function withTimeout(promise, timeoutMs, message) {
+    if (!timeoutMs || timeoutMs <= 0) return promise;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
+    ]);
+}
+
 function hashPassword(password, salt) {
     return crypto.pbkdf2Sync(
         String(password),
@@ -34,6 +42,7 @@ function createAuthService({
     ensureAccountFields = async () => {},
     randomBytes = crypto.randomBytes,
     logger = console,
+    fieldPreparationTimeoutMs = 3000,
 }) {
     function findAccount(records, user) {
         return records.find(record => String(record.fields?.user || '') === user) || null;
@@ -76,7 +85,12 @@ function createAuthService({
         try {
             await writeCredentials();
         } catch (error) {
-            await ensureAccountFields();
+            logger.warn('auth credential write failed, ensuring account fields');
+            await withTimeout(
+                ensureAccountFields(),
+                fieldPreparationTimeoutMs,
+                'auth account field preparation timed out'
+            );
             await writeCredentials();
         }
         return { user };

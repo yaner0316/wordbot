@@ -154,3 +154,24 @@ test('account lookup falls back to full scan when targeted lookup fails', async 
     assert.ok(stats[0].fields.auth_password_hash);
     assert.deepEqual(logs, ['targeted auth lookup failed, falling back to full scan']);
 });
+
+
+test('register times out account field preparation after a write failure', async () => {
+    const logs = [];
+    const service = createAuthService({
+        listAccountRecords: async () => [],
+        listWordUsers: async () => [],
+        addAccountRecord: async () => { throw new Error('field not found'); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => new Promise(() => {}),
+        logger: { warn: message => logs.push(message) },
+        fieldPreparationTimeoutMs: 5,
+        randomBytes: size => Buffer.alloc(size, 12),
+    });
+
+    await assert.rejects(
+        service.register({ username: 'newkid', password: 'secret1' }),
+        /auth account field preparation timed out/
+    );
+    assert.deepEqual(logs, ['auth credential write failed, ensuring account fields']);
+});
