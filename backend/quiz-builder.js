@@ -1,3 +1,5 @@
+const { hasInvalidFillInGrammar } = require('./question-quality');
+
 function createQuizBuilder({
     choose,
     escapeRegExp,
@@ -80,7 +82,7 @@ function createQuizBuilder({
         if (usableDistractors.length < 3) return null;
         let articleNormalized = false;
         if (qType === 1 && isContextUsableForWord(key, info.context)) {
-            if (hasPluralListMismatch(key, info.context)) return null;
+            if (hasInvalidFillInGrammar({ word: key, context: info.context })) return null;
             usableDistractors = usableDistractors.filter(distractor =>
                 !distractor.includes(key) && !key.includes(distractor)
             );

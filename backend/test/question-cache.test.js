@@ -89,6 +89,18 @@ test('rejects ready cache rows that are missing quality-critical fields', () => 
     assert.equal(isCacheQuestionReady(question({ question_text: '' })), false);
 });
 
+test('rejects cached fill-in questions with numeric quantity and singular target mismatch', () => {
+    assert.equal(isCacheQuestionReady(question({
+        word_record_id: 'rec-corn',
+        word: 'corn',
+        question_type: 1,
+        question_text: 'He paid her the nominal fee of two _____ of barley.',
+        options: JSON.stringify(['A. pump', 'B. cheek', 'C. kitten', 'D. corn']),
+        option_meanings: JSON.stringify(['泵', '脸颊', '小猫', '谷物']),
+        answer: 'D',
+    })), false);
+});
+
 test('selects only structurally valid ready cached questions', () => {
     const selected = selectReadyCachedQuestions({
         rows: [

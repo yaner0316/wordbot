@@ -1,4 +1,6 @@
-﻿const QUESTION_CACHE_STATUS = {
+const { isQuestionQualityAcceptable } = require('./question-quality');
+
+const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
     READY: 'ready',
     FAILED: 'failed',
@@ -87,6 +89,7 @@ function isCacheQuestionReady(row) {
         Array.isArray(question.options) &&
         question.options.length === 4 &&
         question.options.every(option => /^[A-D]\.\s+\S/.test(String(option || ''))) &&
+        isQuestionQualityAcceptable(question) &&
         Array.isArray(question.optionMeanings) &&
         question.optionMeanings.length === 4 &&
         question.optionMeanings.every(meaning => Boolean(String(meaning || '').trim()));

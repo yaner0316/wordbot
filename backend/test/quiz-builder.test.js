@@ -80,6 +80,25 @@ test('rejects fill-in questions with obvious plural list and singular target mis
     assert.equal(question, null);
 });
 
+test('rejects fill-in questions with numeric quantity and singular target mismatch', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-1c',
+        {
+            word: 'corn',
+            context: 'He paid her the nominal fee of two corn of barley.',
+            distractors: ['pump', 'cheek', 'kitten'],
+            CN_Meaning: '谷物',
+        },
+        1,
+        'test-1c',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});
+
 test('builds a definition question from the first semicolon-separated meaning', () => {
     const buildQuizQuestion = createBuilder();
 
