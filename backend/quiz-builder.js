@@ -66,7 +66,11 @@ function createQuizBuilder({
             : [];
 
         let usableDistractors = forcedDistractors === null
-            ? [...new Set([...specificDistractors, ...fallbackDistractors])]
+            ? [...new Set(
+                specificDistractors.length >= 3
+                    ? specificDistractors
+                    : [...specificDistractors, ...fallbackDistractors]
+            )]
             : [...new Set(
                 forcedDistractors
                     .map(distractor => String(distractor || '').trim().toLowerCase())

@@ -205,6 +205,36 @@ test('rejects invalid forced distractors instead of reusing old ones', () => {
     assert.equal(question, null);
 });
 
+
+test('does not mix fallback distractors when local distractors are sufficient', () => {
+    const buildQuizQuestion = createQuizBuilder({
+        choose: (items, count) => items.slice(-count),
+        escapeRegExp: text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        getWordForms: word => [word],
+        isContextUsableForWord: (word, context) =>
+            new RegExp(`\\b${word}\\b`, 'i').test(context || ''),
+        normalizeArticleContext,
+        getFallbackDistractors: () => ['test_word', 'aware', 'milk'],
+    });
+
+    const question = buildQuizQuestion(
+        'rec-section',
+        {
+            word: 'section',
+            meaning: 'one of the parts of something',
+            distractors: ['introduction', 'conclusion', 'appendix'],
+            CN_Meaning: 'part',
+        },
+        2,
+        'test-section',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.deepEqual(
+        question.options.map(option => option.replace(/^[A-D]\.\s*/, '')),
+        ['section', 'introduction', 'conclusion', 'appendix']
+    );
+});
 test('uses fallback distractors when local distractors were already used in this quiz', () => {
     const buildQuizQuestion = createBuilderWithPool();
 

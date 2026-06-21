@@ -64,12 +64,19 @@ function createReviewService({
         )[0];
         if (!match) return null;
         const reviewId = fieldValue(match.fields.test_id);
-        return buildRoundResponse(
+        return await buildRoundResponse(
             records.filter(record => fieldValue(record.fields?.test_id) === reviewId)
         );
     }
 
-    function buildRoundResponse(records) {
+    function contextFromWordInfo(info, type) {
+        if (!info) return '';
+        if (type === 1) return fieldValue(info.context);
+        if (type === 2) return fieldValue(info.meaning).split(';')[0];
+        return fieldValue(info.CN_Meaning || info.cn_meaning);
+    }
+
+    async function buildRoundResponse(records) {
         if (!records.length) return null;
         const first = records[0].fields || {};
         return {
@@ -79,13 +86,22 @@ function createReviewService({
             round: Number(fieldValue(first.review_round)) || 1,
             mode: getAssessmentMode(fieldValue(first.test_id)),
             status: fieldValue(first.review_status),
-            questions: records.map(record => ({
-                recordId: fieldValue(record.fields?.record_id),
-                type: Number(fieldValue(record.fields?.question_type)) || 1,
-                word: fieldValue(record.fields?.word),
-                context: fieldValue(record.fields?.context),
-                options: parseOptions(record.fields?.options),
-                answer: fieldValue(record.fields?.correct_answer),
+            questions: await Promise.all(records.map(async record => {
+                const recordId = fieldValue(record.fields?.record_id);
+                const type = Number(fieldValue(record.fields?.question_type)) || 1;
+                let context = fieldValue(record.fields?.context);
+                if (!context && recordId) {
+                    const info = await loadWordInfo(recordId);
+                    context = contextFromWordInfo(info, type);
+                }
+                return {
+                    recordId,
+                    type,
+                    word: fieldValue(record.fields?.word),
+                    context,
+                    options: parseOptions(record.fields?.options),
+                    answer: fieldValue(record.fields?.correct_answer),
+                };
             })),
         };
     }
@@ -164,6 +180,7 @@ function createReviewService({
             record_id: question.record_id,
             word: question.word,
             question_type: question.type,
+            context: question.context,
             correct_answer: question.answer,
             options: JSON.stringify(question.options),
             test_time: baseTime + index,

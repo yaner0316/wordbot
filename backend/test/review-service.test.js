@@ -41,7 +41,7 @@ function createFixture() {
         loadWordInfo: async recordId => ({
             word: recordId === 'word-2' ? 'beta' : 'alpha',
             meaning: 'a definition',
-            CN_Meaning: '释义',
+            CN_Meaning: 'definition clue',
             context: 'This context contains beta with several useful clue words.',
             distractors: ['new-a', 'new-b', 'new-c'],
         }),
@@ -95,7 +95,7 @@ test('creates the first round from only wrong source-test questions', async () =
 });
 
 
-test('does not write question context to review records', async () => {
+test('writes question context to review records', async () => {
     const { service, added } = createFixture();
 
     const round = await service.createRound({
@@ -104,7 +104,7 @@ test('does not write question context to review records', async () => {
     });
 
     assert.equal(round.questions[0].context, 'A new _____ context.');
-    assert.equal(Object.hasOwn(added[0][0], 'context'), false);
+    assert.equal(added[0][0].context, 'A new _____ context.');
 });
 
 test('returns the existing active round for an idempotent retry', async () => {
@@ -114,9 +114,34 @@ test('returns the existing active round for an idempotent retry', async () => {
     const second = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
 
     assert.equal(second.reviewId, first.reviewId);
+    assert.equal(second.questions[0].context, 'A new _____ context.');
     assert.equal(added.length, 1);
 });
 
+
+test('fills missing context for an existing active review round', async () => {
+    const { service, assessments } = createFixture();
+    assessments.set('real-review-r1', [record('review-row-legacy', {
+        user: 'student',
+        test_id: 'real-review-r1',
+        source_test_id: 'real-q1',
+        parent_review_id: '',
+        review_round: 1,
+        review_status: 'active',
+        record_id: 'word-2',
+        word: 'beta',
+        question_type: 3,
+        options: '["A. beta","B. new-a","C. new-b","D. new-c"]',
+        correct_answer: 'A',
+    })]);
+
+    const round = await service.getActiveRound({
+        userId: 'student',
+        sourceTestId: 'real-q1',
+    });
+
+    assert.equal(round.questions[0].context, 'definition clue');
+});
 test('rejects a source test owned by another user', async () => {
     const { service } = createFixture();
 

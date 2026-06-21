@@ -508,6 +508,10 @@ function escapeRegExp(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function isReservedTestWord(word) {
+    return /^test(?:_|$)/i.test(String(word || '').trim());
+}
+
 function getWordForms(word) {
     const key = String(word || '').toLowerCase();
     const forms = new Set([key]);
@@ -727,7 +731,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     const letters = ['A', 'B', 'C', 'D'];
     const fallbackWords = valid
         .map(record => String(record.word || '').trim().toLowerCase())
-        .filter(Boolean);
+        .filter(word => word && !isReservedTestWord(word));
     const buildFreshQuestion = (recordId, info, qType) => {
         const question = buildQuizQuestion(
             recordId,
@@ -1497,7 +1501,7 @@ async function rebuildQuestionCacheForUser(userId) {
     const pending = await getPendingWords(userId, wordRecords);
     const fallbackWords = pending
         .map(record => String(record.word || '').trim().toLowerCase())
-        .filter(Boolean);
+        .filter(word => word && !isReservedTestWord(word));
     const letters = ['A', 'B', 'C', 'D'];
     const rows = [];
     for (const rec of pending) {
