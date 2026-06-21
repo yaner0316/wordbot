@@ -1507,7 +1507,7 @@ async function rebuildQuestionCacheForUser(userId) {
     for (const rec of pending) {
         const info = pool[rec.record_id];
         if (!info || (info.distractors || []).filter(Boolean).length < 3) continue;
-        const primaryType = info.CN_Meaning?.trim()
+        const primaryType = hasMeaningfulChineseMeaning(info.CN_Meaning)
             ? 3
             : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
         const reviewType = primaryType === 1
@@ -1768,23 +1768,22 @@ async function translateToCN(text) {
 
 async function translateWordsToCN(words) {
     if (!words.length) return {};
+    const translations = {};
     const prompt = `Translate each English word to Simplified Chinese. Return ONLY a JSON object mapping each word to its Chinese translation. No explanations, no extra text.\n\nWords: ${JSON.stringify(words)}`;
     try {
         const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 30000);
         const match = result?.match(/\{[\s\S]*\}/);
         if (match) {
             const parsed = JSON.parse(match[0]);
-            const translations = {};
             for (const word of words) {
                 const meaning = String(parsed[word] || '').trim();
                 if (meaning && hasMeaningfulChineseMeaning(meaning)) translations[word] = toSimp(meaning);
             }
-            if (Object.keys(translations).length === words.length) return translations;
         }
     } catch (e) { }
 
-    const translations = {};
-    for (const word of words) {
+    const missingWords = words.filter(word => !translations[word]);
+    for (const word of missingWords) {
         const definition = await fetchWordDefinition(word);
         const translated = await translateToCN(definition.meaning || word);
         if (translated) translations[word] = toSimp(translated);

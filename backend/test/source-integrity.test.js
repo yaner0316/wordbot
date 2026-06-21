@@ -175,3 +175,34 @@ test('live quiz generation tries fallback question types to fill ten questions',
         'fallback slots should run after the preferred question mix'
     );
 });
+test('batch word translation keeps partial results and falls back only missing words', () => {
+    const start = feishuSource.indexOf('async function translateWordsToCN');
+    const end = feishuSource.indexOf('async function fetchWordDefinition');
+    assert.ok(start >= 0 && end > start);
+    const translateSource = feishuSource.slice(start, end);
+
+    assert.ok(
+        translateSource.includes('const missingWords = words.filter(word => !translations[word]);'),
+        'partial batch translations should be reused instead of discarded'
+    );
+    assert.ok(
+        !translateSource.includes('if (Object.keys(translations).length === words.length) return translations;'),
+        'incomplete batch translations must not trigger fallback for every word'
+    );
+});
+
+test('question cache rebuild only uses meaningful Chinese meanings for type 3', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(
+        rebuildSource.includes('hasMeaningfulChineseMeaning(info.CN_Meaning)'),
+        'cache rebuild should not treat AI meta-responses or English text as usable Chinese meanings'
+    );
+    assert.ok(
+        !rebuildSource.includes('info.CN_Meaning?.trim()'),
+        'cache rebuild should not use a plain trim check for Chinese meanings'
+    );
+});
