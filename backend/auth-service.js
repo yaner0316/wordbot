@@ -34,6 +34,7 @@ function createAuthService({
     ensureAccountFields = async () => {},
     prepareAccountStorage = async () => {},
     randomBytes = crypto.randomBytes,
+    logger = console,
 }) {
     function findAccount(records, user) {
         return records.find(record => String(record.fields?.user || '') === user) || null;
@@ -41,7 +42,11 @@ function createAuthService({
 
     async function lookupAccount(user) {
         if (typeof findAccountRecord === 'function') {
-            return await findAccountRecord(user);
+            try {
+                return await findAccountRecord(user);
+            } catch (error) {
+                logger.warn('targeted auth lookup failed, falling back to full scan');
+            }
         }
         const records = await listAccountRecords();
         return findAccount(records, user);

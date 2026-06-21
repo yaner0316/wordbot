@@ -147,3 +147,29 @@ test('register prepares account storage before credential lookup and write', asy
 
     assert.deepEqual(calls, ['prepare', 'lookup:Draggy', 'add:Draggy']);
 });
+
+
+test('account lookup falls back to full scan when targeted lookup fails', async () => {
+    const logs = [];
+    const stats = [{ record_id: 'stats-1', fields: { user: 'Draggy' } }];
+    const service = createAuthService({
+        listAccountRecords: async () => stats,
+        findAccountRecord: async () => { throw new Error('search timeout'); },
+        listWordUsers: async () => [],
+        addAccountRecord: async () => { throw new Error('should not add'); },
+        updateAccountRecord: async (recordId, fields) => {
+            assert.equal(recordId, 'stats-1');
+            Object.assign(stats[0].fields, fields);
+        },
+        ensureAccountFields: async () => {},
+        prepareAccountStorage: async () => {},
+        logger: { warn: message => logs.push(message) },
+        randomBytes: size => Buffer.alloc(size, 11),
+    });
+
+    await service.register({ username: 'Draggy', password: 'secret1' });
+
+    assert.equal(stats[0].fields.user, 'Draggy');
+    assert.ok(stats[0].fields.auth_password_hash);
+    assert.deepEqual(logs, ['targeted auth lookup failed, falling back to full scan']);
+});
