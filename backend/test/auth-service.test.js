@@ -129,6 +129,16 @@ test('login uses targeted account lookup when available', async () => {
     assert.deepEqual(lookupUsers, ['qiuqiu']);
 });
 
+test('login accepts Feishu text field objects for stored credentials', async () => {
+    const seed = fixture();
+    await seed.service.register({ username: 'qiuqiu', password: 'goodpass' });
+    const account = seed.stats[0];
+    account.fields.auth_password_hash = [{ text: account.fields.auth_password_hash }];
+    account.fields.auth_password_salt = [{ text: account.fields.auth_password_salt }];
+
+    assert.deepEqual(await seed.service.login({ username: 'qiuqiu', password: 'goodpass' }), { user: 'qiuqiu' });
+});
+
 
 
 test('account lookup falls back to full scan when targeted lookup fails', async () => {

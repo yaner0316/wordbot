@@ -27,6 +27,12 @@ function withTimeout(promise, timeoutMs, message) {
     ]);
 }
 
+function extractText(v) {
+    if (Array.isArray(v)) return extractText(v[0]);
+    if (v && typeof v === 'object') return String(v.text ?? v.value ?? '');
+    return String(v ?? '');
+}
+
 function hashPassword(password, salt) {
     return crypto.pbkdf2Sync(
         String(password),
@@ -107,8 +113,8 @@ function createAuthService({
         if (!account?.fields?.auth_password_hash || !account?.fields?.auth_password_salt) {
             throw new Error('用户不存在或尚未注册密码');
         }
-        const expected = String(account.fields.auth_password_hash);
-        const actual = hashPassword(rawPassword, account.fields.auth_password_salt);
+        const expected = extractText(account.fields.auth_password_hash);
+        const actual = hashPassword(rawPassword, extractText(account.fields.auth_password_salt));
         const ok = crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
         if (!ok) throw new Error('密码错误');
         return { user };
