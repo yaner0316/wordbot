@@ -84,3 +84,47 @@ test('register does not scan account fields before a normal credential write', a
     assert.equal(ensureCalls, 0);
     assert.equal(added[0].user, 'Draggy');
 });
+
+test('register uses targeted account lookup when available', async () => {
+    const added = [];
+    const lookupUsers = [];
+    const service = createAuthService({
+        listAccountRecords: async () => { throw new Error('full account scan should not run'); },
+        findAccountRecord: async user => {
+            lookupUsers.push(user);
+            return null;
+        },
+        listWordUsers: async () => [],
+        addAccountRecord: async fields => { added.push(fields); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => {},
+        randomBytes: size => Buffer.alloc(size, 9),
+    });
+
+    await service.register({ username: ' Draggy ', password: 'secret1' });
+
+    assert.deepEqual(lookupUsers, ['Draggy']);
+    assert.equal(added[0].user, 'Draggy');
+});
+
+test('login uses targeted account lookup when available', async () => {
+    const seed = fixture();
+    await seed.service.register({ username: 'qiuqiu', password: 'goodpass' });
+    const account = seed.stats[0];
+    const lookupUsers = [];
+    const service = createAuthService({
+        listAccountRecords: async () => { throw new Error('full account scan should not run'); },
+        findAccountRecord: async user => {
+            lookupUsers.push(user);
+            return account;
+        },
+        listWordUsers: async () => [],
+        addAccountRecord: async () => { throw new Error('should not add'); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => {},
+        randomBytes: size => Buffer.alloc(size, 9),
+    });
+
+    assert.deepEqual(await service.login({ username: 'qiuqiu', password: 'goodpass' }), { user: 'qiuqiu' });
+    assert.deepEqual(lookupUsers, ['qiuqiu']);
+});

@@ -27,6 +27,7 @@ function hashPassword(password, salt) {
 
 function createAuthService({
     listAccountRecords,
+    findAccountRecord,
     listWordUsers,
     addAccountRecord,
     updateAccountRecord,
@@ -37,10 +38,17 @@ function createAuthService({
         return records.find(record => String(record.fields?.user || '') === user) || null;
     }
 
+    async function lookupAccount(user) {
+        if (typeof findAccountRecord === 'function') {
+            return await findAccountRecord(user);
+        }
+        const records = await listAccountRecords();
+        return findAccount(records, user);
+    }
+
     async function register({ username, password }) {
         const { user, password: rawPassword } = validateCredentials(username, password);
-        const records = await listAccountRecords();
-        const existing = findAccount(records, user);
+        const existing = await lookupAccount(user);
         if (existing?.fields?.auth_password_hash) {
             throw new Error('用户已注册，请直接登录');
         }
@@ -71,8 +79,7 @@ function createAuthService({
 
     async function login({ username, password }) {
         const { user, password: rawPassword } = validateCredentials(username, password);
-        const records = await listAccountRecords();
-        const account = findAccount(records, user);
+        const account = await lookupAccount(user);
         if (!account?.fields?.auth_password_hash || !account?.fields?.auth_password_salt) {
             throw new Error('用户不存在或尚未注册密码');
         }
