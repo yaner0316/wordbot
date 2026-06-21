@@ -152,3 +152,26 @@ test('learning settings write does not block on field preparation before normal 
         'normal learning settings saves must not scan table fields before writing'
     );
 });
+
+test('assessment record lookup uses quoted Feishu filter fields', () => {
+    const start = feishuSource.indexOf('async function getUserAssessmentRecords');
+    const end = feishuSource.indexOf('async function getRecentQuizFootprint');
+    assert.ok(start >= 0 && end > start);
+    const lookupSource = feishuSource.slice(start, end);
+
+    assert.ok(lookupSource.includes("conjunction: 'and'"));
+    assert.ok(lookupSource.includes("field_name: 'user'"));
+    assert.ok(lookupSource.includes("operator: 'is'"));
+    assert.ok(lookupSource.includes("field_name: 'test_time'"));
+});
+
+test('live quiz generation tries fallback question types to fill ten questions', () => {
+    assert.ok(
+        feishuSource.includes('const fallbackTypeSlots = [1, 2, 3]'),
+        'live quiz generation should retry alternate question types when the planned slot cannot build'
+    );
+    assert.ok(
+        feishuSource.includes('for (const slot of [...typeSlots, ...fallbackTypeSlots])'),
+        'fallback slots should run after the preferred question mix'
+    );
+});

@@ -143,3 +143,40 @@ test('cache status summary reports ready counts by level and round type', () => 
     assert.equal(summary.byRoundType.primary.ready, 2);
     assert.equal(summary.byRoundType.review.ready, 1);
 });
+
+test('rejects cached definition questions that contain Chinese AI meta-response text', () => {
+    assert.equal(isCacheQuestionReady(question({
+        word_record_id: 'rec-meta-cn',
+        word: 'corn',
+        question_type: 3,
+        question_text: '您好！您提供的内容非常长，目前没有明确说明您希望我如何处理。请告诉我您的具体需求，我将竭诚为您提供帮助！',
+        options: JSON.stringify(['A. lamb', 'B. clap', 'C. eraser', 'D. corn']),
+        option_meanings: JSON.stringify(['lamb', 'clap', 'eraser', 'corn']),
+        answer: 'D',
+    })), false);
+});
+
+test('rejects cached definition questions that contain English AI task-request text', () => {
+    assert.equal(isCacheQuestionReady(question({
+        word_record_id: 'rec-meta-en-task',
+        word: 'lamb',
+        question_type: 3,
+        question_text: 'It looks like the message you sent contains a large amount of garbled or encoded text. Could you please let me know what you would like me to do with it?',
+        options: JSON.stringify(['A. kitten', 'B. cow', 'C. lamb', 'D. foal']),
+        option_meanings: JSON.stringify(['kitten', 'cow', 'lamb', 'foal']),
+        answer: 'C',
+    })), false);
+});
+
+
+test('rejects cached terse English AI garbled-text explanations', () => {
+    assert.equal(isCacheQuestionReady(question({
+        word_record_id: 'rec-meta-en-garbled',
+        word: 'eraser',
+        question_type: 3,
+        question_text: "I'm sorry, but I can't make sense of the text you've provided - it appears to be corrupted or garbled.",
+        options: JSON.stringify(['A. kitten', 'B. cow', 'C. eraser', 'D. foal']),
+        option_meanings: JSON.stringify(['kitten', 'cow', 'eraser', 'foal']),
+        answer: 'C',
+    })), false);
+});

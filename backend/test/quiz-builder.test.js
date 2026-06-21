@@ -230,3 +230,58 @@ test('uses fallback distractors when local distractors were already used in this
         'D. fresh-c',
     ]);
 });
+
+test('rejects definition questions that contain Chinese AI meta-response text', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-meta-cn',
+        {
+            word: 'corn',
+            CN_Meaning: '您好！您提供的内容非常长，目前没有明确说明您希望我如何处理。您是想让我帮您翻译、摘要或提取关键信息？请告诉我您的具体需求，我将竭诚为您提供帮助！',
+            distractors: ['lamb', 'clap', 'eraser'],
+        },
+        3,
+        'test-meta-cn',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});
+
+test('rejects definition questions that contain English AI task-request text', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-meta-en-task',
+        {
+            word: 'lamb',
+            CN_Meaning: 'It looks like the message you sent contains a large amount of garbled or encoded text. Could you please let me know what you would like me to do with it?',
+            distractors: ['kitten', 'cow', 'foal'],
+        },
+        3,
+        'test-meta-en-task',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});
+
+
+test('rejects terse English AI garbled-text explanations', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-meta-en-garbled',
+        {
+            word: 'eraser',
+            CN_Meaning: "I'm sorry, but I can't make sense of the text you've provided - it appears to be corrupted or garbled.",
+            distractors: ['kitten', 'cow', 'foal'],
+        },
+        3,
+        'test-meta-en-garbled',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question, null);
+});

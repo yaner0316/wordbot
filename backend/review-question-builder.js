@@ -1,3 +1,5 @@
+const { hasMeaningfulChineseMeaning } = require('./question-quality');
+
 function optionWord(option) {
     return String(option || '').replace(/^[A-D]\.\s*/, '').trim().toLowerCase();
 }
@@ -6,7 +8,7 @@ function validQuestionTypes(info) {
     const types = [];
     if (info.context) types.push(1);
     if (info.meaning) types.push(2);
-    if (info.CN_Meaning) types.push(3);
+    if (hasMeaningfulChineseMeaning(info.CN_Meaning)) types.push(3);
     return types;
 }
 

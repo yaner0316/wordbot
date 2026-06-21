@@ -1,3 +1,5 @@
+const { hasMeaningfulChineseMeaning } = require('./question-quality');
+
 function fieldText(value) {
     if (value === undefined || value === null) return '';
     if (Array.isArray(value)) return fieldText(value[0]);
@@ -29,7 +31,7 @@ async function enrichQuestionOptionMeanings({
     for (const [word, matchingRecords] of recordIndex) {
         const meaning = matchingRecords
             .map(record => fieldText(record.fields?.CN_Meaning).trim())
-            .find(Boolean);
+            .find(hasMeaningfulChineseMeaning);
         if (meaning) knownMeanings.set(word, meaning);
     }
 

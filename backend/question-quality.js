@@ -21,11 +21,38 @@ function hasAiMetaResponse(text) {
         "i'll be happy to help",
         'i will be happy to help',
         'would you like:',
+        'what you would like me to do',
+        'what you would like me to help',
+        'what you would like me to do with it',
+        'could you please let me know',
+        'please let me know what you need',
+        'please let me know what you would like',
+        'what would you like me to do',
+        'how you would like me to help',
+        'message you sent contains a large amount of garbled or encoded text',
+        'message you sent contains a very long',
+        'text you provided appears to be corrupted or garbled',
+        "can't make sense of the text you've provided",
+        'seemingly garbled or encoded',
+        'large block of text that appears',
+        '您好',
+        '您提供的内容',
+        '您发送的',
+        '请告诉我您的具体需求',
+        '我将竭诚为您提供帮助',
+        '我会尽力为您提供帮助',
+        '无法理解您发送的这段文字',
     ];
-    if (directMarkers.some(marker => value.includes(marker))) return true;
+    if (directMarkers.some(marker => value.includes(marker.toLowerCase()))) return true;
     const helpIntentMarkers = ['translation', 'decoding', 'de-ciphering', 'deciphering', 'analysis'];
     const metaMarkerCount = helpIntentMarkers.filter(marker => value.includes(marker)).length;
-    return value.includes('chinese characters') && metaMarkerCount >= 2;
+    if (value.includes('chinese characters') && metaMarkerCount >= 2) return true;
+    const taskRequestMarkers = ['could you let me know', 'could you please let me know', 'please let me know', 'what you would like me to do', 'what would you like me to do'];
+    const inputDescriptionMarkers = ['text you provided', 'text you shared', 'message you sent', 'you sent contains', 'you provided appears', 'you shared a', 'garbled or encoded text', 'garbled string'];
+    if (taskRequestMarkers.some(marker => value.includes(marker)) && inputDescriptionMarkers.some(marker => value.includes(marker))) return true;
+    const chineseHelpMarkers = ['翻译', '摘要', '提取关键信息', '解释', '纠错', '其他需求', '具体需求'];
+    const chineseMetaCount = chineseHelpMarkers.filter(marker => value.includes(marker)).length;
+    return (value.includes('您希望') || value.includes('您想让我') || value.includes('您是想让我')) && chineseMetaCount >= 2;
 }
 
 function hasPluralListMismatch(word, context) {
@@ -61,9 +88,19 @@ function hasInvalidFillInGrammar({ word, context }) {
         hasNumericQuantitySingularMismatch(word, context);
 }
 
+function hasMeaningfulChineseMeaning(value) {
+    const cn = String(value || '').trim();
+    return cn.length > 0 && cn.length <= 50 && /[一-鿿]/.test(cn) && !hasAiMetaResponse(cn);
+}
+
 function isQuestionQualityAcceptable(question) {
     if (!question) return false;
-    if (hasAiMetaResponse(question.context) || hasAiMetaResponse(question.correctMeaning)) return false;
+    if (Number(question.type) === 3) {
+        if (!hasMeaningfulChineseMeaning(question.context)) return false;
+    } else if (hasAiMetaResponse(question.context)) {
+        return false;
+    }
+    if (hasAiMetaResponse(question.correctMeaning)) question.correctMeaning = '';
     if (Number(question.type) !== 1) return true;
     const answerPrefix = `${question.answer}.`;
     const word = stripOptionLabel(
@@ -76,6 +113,7 @@ function isQuestionQualityAcceptable(question) {
 
 module.exports = {
     hasAiMetaResponse,
+    hasMeaningfulChineseMeaning,
     hasInvalidFillInGrammar,
     isQuestionQualityAcceptable,
 };
