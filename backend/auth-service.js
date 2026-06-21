@@ -32,6 +32,7 @@ function createAuthService({
     addAccountRecord,
     updateAccountRecord,
     ensureAccountFields = async () => {},
+    prepareAccountStorage = async () => {},
     randomBytes = crypto.randomBytes,
 }) {
     function findAccount(records, user) {
@@ -48,6 +49,7 @@ function createAuthService({
 
     async function register({ username, password }) {
         const { user, password: rawPassword } = validateCredentials(username, password);
+        await prepareAccountStorage();
         const existing = await lookupAccount(user);
         if (existing?.fields?.auth_password_hash) {
             throw new Error('用户已注册，请直接登录');

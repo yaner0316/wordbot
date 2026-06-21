@@ -128,3 +128,22 @@ test('login uses targeted account lookup when available', async () => {
     assert.deepEqual(await service.login({ username: 'qiuqiu', password: 'goodpass' }), { user: 'qiuqiu' });
     assert.deepEqual(lookupUsers, ['qiuqiu']);
 });
+
+
+test('register prepares account storage before credential lookup and write', async () => {
+    const calls = [];
+    const service = createAuthService({
+        prepareAccountStorage: async () => { calls.push('prepare'); },
+        listAccountRecords: async () => { calls.push('scan'); return []; },
+        findAccountRecord: async user => { calls.push('lookup:' + user); return null; },
+        listWordUsers: async () => [],
+        addAccountRecord: async fields => { calls.push('add:' + fields.user); },
+        updateAccountRecord: async () => { throw new Error('should not update'); },
+        ensureAccountFields: async () => { calls.push('ensure'); },
+        randomBytes: size => Buffer.alloc(size, 10),
+    });
+
+    await service.register({ username: 'Draggy', password: 'secret1' });
+
+    assert.deepEqual(calls, ['prepare', 'lookup:Draggy', 'add:Draggy']);
+});
