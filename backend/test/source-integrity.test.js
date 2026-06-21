@@ -73,19 +73,23 @@ test('Feishu request timeout is enforced as total wall time', () => {
 
 test('learning settings are stored on the stats table, not word records', () => {
     const getStart = feishuSource.indexOf('async function getUserLearningSettings');
+    const helperStart = feishuSource.indexOf('async function writeLearningSettingsRecord');
     const updateStart = feishuSource.indexOf('async function updateUserLearningSettings');
     const statusStart = feishuSource.indexOf('async function getQuestionCacheStatus');
-    assert.ok(getStart >= 0 && updateStart > getStart && statusStart > updateStart);
+    assert.ok(getStart >= 0 && helperStart > getStart && updateStart > helperStart && statusStart > updateStart);
 
-    const getSettingsSource = feishuSource.slice(getStart, updateStart);
+    const getSettingsSource = feishuSource.slice(getStart, helperStart);
+    const writeSettingsSource = feishuSource.slice(helperStart, updateStart);
     const updateSettingsSource = feishuSource.slice(updateStart, statusStart);
 
     assert.ok(getSettingsSource.includes('getRecords(STATS_TABLE)'));
     assert.ok(!getSettingsSource.includes('getRecords(WORD_TABLE)'));
     assert.ok(updateSettingsSource.includes('getRecords(STATS_TABLE)'));
-    assert.ok(updateSettingsSource.includes('updateRecord(STATS_TABLE'));
-    assert.ok(updateSettingsSource.includes('addRecord(STATS_TABLE'));
+    assert.ok(updateSettingsSource.includes('writeLearningSettingsRecord(userRecord, updateFields)'));
+    assert.ok(writeSettingsSource.includes('updateRecord(STATS_TABLE'));
+    assert.ok(writeSettingsSource.includes('addRecord(STATS_TABLE'));
     assert.ok(!updateSettingsSource.includes('updateRecord(WORD_TABLE'));
+    assert.ok(!writeSettingsSource.includes('updateRecord(WORD_TABLE'));
 });
 test('learning settings use a short-lived overlay after write consistency gaps', () => {
     assert.ok(
@@ -103,5 +107,48 @@ test('learning settings use a short-lived overlay after write consistency gaps',
     assert.ok(
         feishuSource.includes('change.unchanged && !userRecord && hasPendingSettings'),
         're-saving the just-saved level should not add a duplicate stats row while Feishu list is stale'
+    );
+});
+
+test('table field listing stops on repeated page tokens', () => {
+    const start = feishuSource.indexOf('async function listTableFields');
+    const end = feishuSource.indexOf('async function createTableField');
+    assert.ok(start >= 0 && end > start);
+    const listFieldsSource = feishuSource.slice(start, end);
+
+    assert.ok(
+        listFieldsSource.includes('prevPageToken'),
+        'field pagination must guard against repeated Feishu page tokens'
+    );
+    assert.ok(
+        listFieldsSource.includes('pageToken === prevPageToken'),
+        'field pagination should stop instead of looping forever on repeated page tokens'
+    );
+});
+
+test('learning settings write does not block on field preparation before normal saves', () => {
+    const helperStart = feishuSource.indexOf('async function writeLearningSettingsRecord');
+    const updateStart = feishuSource.indexOf('async function updateUserLearningSettings');
+    const statusStart = feishuSource.indexOf('async function getQuestionCacheStatus');
+    assert.ok(helperStart >= 0 && updateStart > helperStart && statusStart > updateStart);
+
+    const helperSource = feishuSource.slice(helperStart, updateStart);
+    const updateSource = feishuSource.slice(updateStart, statusStart);
+
+    assert.ok(
+        helperSource.includes('FieldNameNotFound'),
+        'learning settings should repair missing fields only after Feishu reports a missing field'
+    );
+    assert.ok(
+        helperSource.includes('LEARNING_SETTINGS_WRITE_TIMEOUT_MS'),
+        'learning settings writes need an explicit short timeout'
+    );
+    assert.ok(
+        updateSource.includes('writeLearningSettingsRecord(userRecord, updateFields)'),
+        'updateUserLearningSettings should delegate writes through the guarded writer'
+    );
+    assert.ok(
+        !updateSource.includes('await ensureLearningSettingsFields();'),
+        'normal learning settings saves must not scan table fields before writing'
     );
 });
