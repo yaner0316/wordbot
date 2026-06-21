@@ -1,4 +1,4 @@
-﻿const DEFAULT_LEARNING_LEVEL = '中学';
+const DEFAULT_LEARNING_LEVEL = '中学';
 const LEVELS = ['小学', '中学', '高中', 'CET4_6_TOEFL'];
 const LEVEL_ALIASES = new Map([
     ['CET/TOEFL', 'CET4_6_TOEFL'],
@@ -50,11 +50,35 @@ function buildLearningSettings({ userId, record, now = Date.now() }) {
     };
 }
 
+function createLearningSettingsOverlay({ ttlMs = 2 * 60 * 1000, now = Date.now } = {}) {
+    const entries = new Map();
+
+    function get(userId) {
+        const entry = entries.get(userId);
+        if (!entry) return null;
+        if (now() >= entry.expiresAt) {
+            entries.delete(userId);
+            return null;
+        }
+        return entry.settings;
+    }
+
+    function set(userId, settings) {
+        entries.set(userId, {
+            settings,
+            expiresAt: now() + ttlMs,
+        });
+    }
+
+    return { get, set };
+}
+
 module.exports = {
     DEFAULT_LEARNING_LEVEL,
     LEVELS,
     LEVEL_CHANGE_COOLDOWN_MS,
     buildLearningSettings,
+    createLearningSettingsOverlay,
     normalizeLearningLevel,
     validateLearningLevelChange,
 };

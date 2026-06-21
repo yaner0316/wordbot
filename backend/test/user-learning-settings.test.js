@@ -1,10 +1,11 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
     DEFAULT_LEARNING_LEVEL,
     normalizeLearningLevel,
     buildLearningSettings,
+    createLearningSettingsOverlay,
     validateLearningLevelChange,
 } = require('../user-learning-settings');
 
@@ -49,4 +50,23 @@ test('normalizes known learning levels and rejects unknown values', () => {
     assert.equal(normalizeLearningLevel('小学'), '小学');
     assert.equal(normalizeLearningLevel('CET/TOEFL'), 'CET4_6_TOEFL');
     assert.throws(() => normalizeLearningLevel('大学'), /invalid learning level/);
+});
+
+test('learning settings overlay returns saved settings during the consistency window', () => {
+    let now = NOW;
+    const overlay = createLearningSettingsOverlay({ ttlMs: 1000, now: () => now });
+    const saved = {
+        userId: 'temp-user',
+        learningLevel: '小学',
+        levelChangedAt: NOW,
+        nextLevelChangeAt: NOW + 30 * DAY,
+        canChangeLevel: false,
+        questionCacheStatus: 'building',
+    };
+
+    overlay.set('temp-user', saved);
+
+    assert.deepEqual(overlay.get('temp-user'), saved);
+    now += 1001;
+    assert.equal(overlay.get('temp-user'), null);
 });

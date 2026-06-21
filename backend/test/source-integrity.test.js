@@ -87,3 +87,21 @@ test('learning settings are stored on the stats table, not word records', () => 
     assert.ok(updateSettingsSource.includes('addRecord(STATS_TABLE'));
     assert.ok(!updateSettingsSource.includes('updateRecord(WORD_TABLE'));
 });
+test('learning settings use a short-lived overlay after write consistency gaps', () => {
+    assert.ok(
+        feishuSource.includes('const learningSettingsOverlay = createLearningSettingsOverlay'),
+        'learning settings need a write-through overlay for immediate read-after-write consistency'
+    );
+    assert.ok(
+        feishuSource.includes('return resolveLearningSettings(userId, userRecord || null);'),
+        'getUserLearningSettings should read through the overlay'
+    );
+    assert.ok(
+        feishuSource.includes('learningSettingsOverlay.set(userId, settings);'),
+        'updateUserLearningSettings should publish saved settings to the overlay'
+    );
+    assert.ok(
+        feishuSource.includes('change.unchanged && !userRecord && hasPendingSettings'),
+        're-saving the just-saved level should not add a duplicate stats row while Feishu list is stale'
+    );
+});
