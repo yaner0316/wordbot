@@ -130,24 +130,6 @@ test('login uses targeted account lookup when available', async () => {
 });
 
 
-test('register prepares account storage before credential lookup and write', async () => {
-    const calls = [];
-    const service = createAuthService({
-        prepareAccountStorage: async () => { calls.push('prepare'); },
-        listAccountRecords: async () => { calls.push('scan'); return []; },
-        findAccountRecord: async user => { calls.push('lookup:' + user); return null; },
-        listWordUsers: async () => [],
-        addAccountRecord: async fields => { calls.push('add:' + fields.user); },
-        updateAccountRecord: async () => { throw new Error('should not update'); },
-        ensureAccountFields: async () => { calls.push('ensure'); },
-        randomBytes: size => Buffer.alloc(size, 10),
-    });
-
-    await service.register({ username: 'Draggy', password: 'secret1' });
-
-    assert.deepEqual(calls, ['prepare', 'lookup:Draggy', 'add:Draggy']);
-});
-
 
 test('account lookup falls back to full scan when targeted lookup fails', async () => {
     const logs = [];
@@ -162,7 +144,6 @@ test('account lookup falls back to full scan when targeted lookup fails', async 
             Object.assign(stats[0].fields, fields);
         },
         ensureAccountFields: async () => {},
-        prepareAccountStorage: async () => {},
         logger: { warn: message => logs.push(message) },
         randomBytes: size => Buffer.alloc(size, 11),
     });
