@@ -44,6 +44,37 @@ const parseOptions = (v) => {
     }
 };
 
+
+const questionCacheRebuildJobs = new Map();
+
+function startQuestionCacheRebuild(userId) {
+    const current = questionCacheRebuildJobs.get(userId);
+    if (current?.status === 'running') {
+        return { started: false, alreadyRunning: true, userId, startedAt: current.startedAt };
+    }
+    const job = { status: 'running', startedAt: Date.now() };
+    questionCacheRebuildJobs.set(userId, job);
+    rebuildQuestionCacheForUser(userId)
+        .then(result => {
+            questionCacheRebuildJobs.set(userId, {
+                ...job,
+                status: 'completed',
+                finishedAt: Date.now(),
+                result,
+            });
+            console.log(`question cache rebuild completed user=${userId} count=${result?.count ?? 0}`);
+        })
+        .catch(error => {
+            questionCacheRebuildJobs.set(userId, {
+                ...job,
+                status: 'failed',
+                finishedAt: Date.now(),
+                error: error.message,
+            });
+            console.error(`question cache rebuild failed user=${userId}: ${error.message}`);
+        });
+    return { started: true, userId, startedAt: job.startedAt };
+}
 const app = createApp({
     submitAnswers,
     registerUser,
@@ -213,8 +244,7 @@ app.post('/api/admin/questionCache/rebuild', async (req, res) => {
     try {
         const { userId } = req.body;
         if (!userId) return res.status(400).json({ error: '缺少userId' });
-        const result = await rebuildQuestionCacheForUser(userId);
-        res.json(result);
+        res.status(202).json(startQuestionCacheRebuild(userId));
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

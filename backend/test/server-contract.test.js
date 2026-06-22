@@ -291,3 +291,36 @@ test('history endpoint preserves grouped history response shape', async () => {
         assert.equal(body.history[0].questions[0].word, 'apple');
     });
 });
+test('question cache rebuild endpoint starts background job without waiting for completion', async () => {
+    let calledWith = null;
+    let resolveRebuild;
+    const rebuildPromise = new Promise(resolve => { resolveRebuild = resolve; });
+    const app = loadServerWithFeishu(createFakeFeishu({
+        rebuildQuestionCacheForUser: async userId => {
+            calledWith = userId;
+            return rebuildPromise;
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        try {
+            const responsePromise = fetch(`${baseUrl}/api/admin/questionCache/rebuild`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: 'Draggy' }),
+            });
+            const response = await Promise.race([
+                responsePromise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timed out waiting for rebuild response')), 100)),
+            ]);
+            const body = await response.json();
+
+            assert.equal(response.status, 202);
+            assert.equal(body.started, true);
+            assert.equal(body.userId, 'Draggy');
+            assert.equal(calledWith, 'Draggy');
+        } finally {
+            resolveRebuild({ success: true });
+        }
+    });
+});
