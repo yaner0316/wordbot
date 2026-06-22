@@ -235,3 +235,13 @@ test('quiz response keeps difficultyApplied for frontend guards', () => {
     assert.ok(feishuSource.slice(cacheReturnStart, cacheReturnEnd).includes('difficultyApplied: true'));
     assert.ok(feishuSource.slice(liveReturnStart, liveReturnEnd).includes('difficultyApplied'));
 });
+
+test('question cache usage writes text timestamp for Feishu text field', () => {
+    const markStart = feishuSource.indexOf('async function markQuestionCacheUsed');
+    const markEnd = feishuSource.indexOf('async function updateRecord', markStart);
+    assert.ok(markStart >= 0 && markEnd > markStart);
+
+    const markSource = feishuSource.slice(markStart, markEnd);
+    assert.ok(!markSource.includes('last_used_at: Date.now()'));
+    assert.ok(markSource.includes('last_used_at: String(Date.now())'));
+});

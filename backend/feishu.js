@@ -383,7 +383,7 @@ async function markQuestionCacheUsed(cacheRecordIds) {
     for (const recordId of cacheRecordIds.filter(Boolean)) {
         await updateRecord(QUESTION_CACHE_TABLE, recordId, {
             used_count: 1,
-            last_used_at: Date.now(),
+            last_used_at: String(Date.now()),
         });
     }
 }
