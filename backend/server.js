@@ -223,6 +223,9 @@ app.put('/api/admin/userSettings', async (req, res) => {
         if (!result.success && result.error === 'cooldown') {
             return res.status(409).json(result);
         }
+        if (result.success && result.settings?.questionCacheStatus === 'building') {
+            startQuestionCacheRebuild(userId);
+        }
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });

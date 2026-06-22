@@ -24,6 +24,7 @@ function getRuntimeHealth({
         service: 'wordbot-backend',
         version,
         time: now(),
+        dataSource: env.WORDBOT_DATA_SOURCE || 'feishu',
         env: envStatus,
         missing,
     };

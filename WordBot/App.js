@@ -235,7 +235,9 @@ export default function App() {
       });
       const data = await res.json();
       setLearningSettings(data.settings || learningSettings);
-      setMessage(res.ok ? '\u5b66\u4e60\u96be\u5ea6\u5df2\u4fdd\u5b58' : '\u5b66\u4e60\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25');
+      setMessage(res.ok
+        ? (data.settings?.questionCacheStatus === 'building' ? '\u5b66\u4e60\u96be\u5ea6\u5df2\u4fdd\u5b58\uff0c\u65b0\u96be\u5ea6\u9898\u5e93\u51c6\u5907\u4e2d\u2026' : '\u5b66\u4e60\u96be\u5ea6\u5df2\u4fdd\u5b58')
+        : '\u5b66\u4e60\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25');
     } catch (e) {
       setMessage('\u5b66\u4e60\u8bbe\u7f6e\u4fdd\u5b58\u5931\u8d25');
     }
