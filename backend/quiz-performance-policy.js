@@ -4,7 +4,7 @@ function shouldRunAiQuizAudit({ enabled, hasApiKey, questionCount }) {
 
 function shouldAllowLiveQuizFallback({ cacheConfigured, flag }) {
     if (!cacheConfigured) return true;
-    return flag === '1';
+    return flag !== '0';
 }
 
 function createQuizTimingLogger({ enabled = false, now = Date.now, log = console.log } = {}) {

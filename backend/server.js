@@ -69,6 +69,7 @@ app.post('/api/quiz', async (req, res) => {
             level || null,
             normalizeAssessmentMode(mode || ASSESSMENT_MODE.REAL)
         );
+        if (data.error) return res.status(503).json({ error: data.error, code: data.code });
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

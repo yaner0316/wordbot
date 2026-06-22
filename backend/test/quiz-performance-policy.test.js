@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
@@ -16,8 +16,8 @@ test('runs AI quiz audit only when explicitly enabled with questions and an API 
     assert.equal(shouldRunAiQuizAudit({ enabled: true, hasApiKey: true, questionCount: 0 }), false);
 });
 
-test('live quiz fallback is disabled by default when cache is configured', () => {
-    assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: undefined }), false);
+test('live quiz fallback stays on by default while cache warms up', () => {
+    assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: undefined }), true);
     assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: '0' }), false);
     assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: '1' }), true);
 });
