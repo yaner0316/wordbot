@@ -628,6 +628,8 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 correct_answer: q.answer,
                 options: JSON.stringify(q.options),
                 test_time: baseTestTime + index,
+                level: effectiveLevel || '',
+                source: 'question_cache',
             })));
             await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId));
             markTiming('question-cache-hit');
@@ -851,7 +853,9 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             question_type: q.type,
             correct_answer: q.answer,
             options: JSON.stringify(q.options),
-            test_time: baseTestTime + index
+            test_time: baseTestTime + index,
+            level: effectiveLevel || '',
+            source: 'live_fallback',
     }));
     quizRecordWrites.stage(
         testId,

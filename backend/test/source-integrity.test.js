@@ -206,3 +206,32 @@ test('question cache rebuild only uses meaningful Chinese meanings for type 3', 
         'cache rebuild should not use a plain trim check for Chinese meanings'
     );
 });
+
+test('quiz assessment rows persist level and source trace fields', () => {
+    const cacheStart = feishuSource.indexOf('if (cachedQuestions.length >= 10)');
+    const cacheEnd = feishuSource.indexOf("markTiming('question-cache-hit')");
+    const liveStart = feishuSource.indexOf('const testRows = randomizedQuestions.map');
+    const liveEnd = feishuSource.indexOf('quizRecordWrites.stage');
+    assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
+    assert.ok(liveStart >= 0 && liveEnd > liveStart);
+
+    const cacheWriteSource = feishuSource.slice(cacheStart, cacheEnd);
+    const liveWriteSource = feishuSource.slice(liveStart, liveEnd);
+
+    assert.ok(cacheWriteSource.includes('level: effectiveLevel'));
+    assert.ok(cacheWriteSource.includes("source: 'question_cache'"));
+    assert.ok(liveWriteSource.includes('level: effectiveLevel'));
+    assert.ok(liveWriteSource.includes("source: 'live_fallback'"));
+});
+
+test('quiz response keeps difficultyApplied for frontend guards', () => {
+    const cacheReturnStart = feishuSource.indexOf("source: 'question_cache'");
+    const cacheReturnEnd = feishuSource.indexOf('questions: randomizedQuestions.map', cacheReturnStart);
+    const liveReturnStart = feishuSource.indexOf('return {', feishuSource.indexOf("markTiming('test-record-write-staged')"));
+    const liveReturnEnd = feishuSource.indexOf('questions: randomizedQuestions.map', liveReturnStart);
+    assert.ok(cacheReturnStart >= 0 && cacheReturnEnd > cacheReturnStart);
+    assert.ok(liveReturnStart >= 0 && liveReturnEnd > liveReturnStart);
+
+    assert.ok(feishuSource.slice(cacheReturnStart, cacheReturnEnd).includes('difficultyApplied: true'));
+    assert.ok(feishuSource.slice(liveReturnStart, liveReturnEnd).includes('difficultyApplied'));
+});
