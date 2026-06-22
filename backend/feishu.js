@@ -1506,12 +1506,19 @@ async function rebuildQuestionCacheForUser(userId) {
         .filter(word => word && !isReservedTestWord(word));
     const letters = ['A', 'B', 'C', 'D'];
     const rows = [];
+    const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];
+    let wordIndex = 0;
     for (const rec of pending) {
         const info = pool[rec.record_id];
         if (!info || (info.distractors || []).filter(Boolean).length < 3) continue;
-        const primaryType = hasMeaningfulChineseMeaning(info.CN_Meaning)
-            ? 3
-            : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
+        const availableTypes = [
+            ...(isContextUsableForWord(info.word, info.context) ? [1] : []),
+            ...(info.meaning?.trim() ? [2] : []),
+            ...(hasMeaningfulChineseMeaning(info.CN_Meaning) ? [3] : []),
+        ];
+        const preferred = PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
+        const primaryType = availableTypes.includes(preferred) ? preferred : (availableTypes[0] || 1);
+        wordIndex++;
         const reviewType = primaryType === 1
             ? (info.meaning?.trim() ? 2 : primaryType)
             : (isContextUsableForWord(info.word, info.context) ? 1 : primaryType);

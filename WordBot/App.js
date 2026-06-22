@@ -463,7 +463,7 @@ export default function App() {
 
   return (
     <View style={s.center}>
-      <Text style={s.title}>单词机器人</Text>
+      <Text style={s.title}>小龙戏单词</Text>
       <TouchableOpacity style={s.btn} onPress={() => chooseUser('yusi')}><Text style={s.btnText}>yusi</Text></TouchableOpacity>
       <TouchableOpacity style={s.btn} onPress={() => chooseUser('qiuqiu')}><Text style={s.btnText}>qiuqiu</Text></TouchableOpacity>
       <TouchableOpacity style={s.btn} onPress={showDashboard}><Text style={s.btnText}>看板</Text></TouchableOpacity>

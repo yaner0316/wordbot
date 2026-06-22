@@ -96,21 +96,31 @@ function isCacheQuestionReady(row) {
 }
 
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
-    return (rows || [])
+    const QUOTA = { 1: 6, 2: 3, 3: 1 };
+    const eligible = (rows || [])
         .map(normalizeCacheRow)
-        .filter(row => row.user === userId)
-        .filter(row => row.level === level)
-        .filter(row => row.roundType === roundType)
+        .filter(row => row.user === userId && row.level === level && row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
         .filter(row => isCacheQuestionReady(row))
         .filter(row => !excludedRecordIds.has(row.wordRecordId))
-        .sort((left, right) =>
-            left.usedCount - right.usedCount ||
-            right.generatedAt - left.generatedAt ||
-            left.word.localeCompare(right.word)
-        )
-        .slice(0, limit)
-        .map(row => ({ ...row.question, cacheRecordId: row.recordId }));
+        .sort((a, b) => a.usedCount - b.usedCount || b.generatedAt - a.generatedAt || a.word.localeCompare(b.word));
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    const selected = [];
+    for (const row of eligible) {
+        if (selected.length >= limit) break;
+        if ((counts[row.type] || 0) < (QUOTA[row.type] || 0)) {
+            selected.push(row);
+            counts[row.type] = (counts[row.type] || 0) + 1;
+        }
+    }
+    if (selected.length < limit) {
+        const taken = new Set(selected.map(r => r.recordId));
+        for (const row of eligible) {
+            if (selected.length >= limit) break;
+            if (!taken.has(row.recordId)) selected.push(row);
+        }
+    }
+    return selected.map(row => ({ ...row.question, cacheRecordId: row.recordId }));
 }
 
 function incrementSummary(bucket, row) {
