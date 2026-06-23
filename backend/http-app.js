@@ -55,6 +55,9 @@ function createApp({
     submitAnswers,
     registerUser,
     loginUser,
+    requestAuthOtp,
+    loginWithOtp,
+    verifyParentOtp,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,
@@ -74,8 +77,8 @@ function createApp({
     if (typeof registerUser === 'function') {
         app.post('/api/auth/register', async (req, res) => {
             try {
-                const { username, password } = req.body;
-                res.json(await registerUser({ username, password }));
+                const { username, phone, password } = req.body;
+                res.json(await registerUser({ username, phone, password }));
             } catch (error) {
                 res.status(400).json({ error: error.message });
             }
@@ -85,13 +88,48 @@ function createApp({
     if (typeof loginUser === 'function') {
         app.post('/api/auth/login', async (req, res) => {
             try {
-                const { username, password } = req.body;
-                res.json(await loginUser({ username, password }));
+                const { identifier, username, password } = req.body;
+                res.json(await loginUser({ username: identifier || username, password }));
             } catch (error) {
                 res.status(400).json({ error: error.message });
             }
         });
     }
+    if (typeof requestAuthOtp === 'function') {
+        app.post('/api/auth/requestOtp', async (req, res) => {
+            try {
+                const { phone, purpose, user } = req.body;
+                const input = { phone, purpose };
+                if (user) input.user = user;
+                res.json(await requestAuthOtp(input));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof loginWithOtp === 'function') {
+        app.post('/api/auth/otpLogin', async (req, res) => {
+            try {
+                const { phone, otp } = req.body;
+                res.json(await loginWithOtp({ phone, otp }));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof verifyParentOtp === 'function') {
+        app.post('/api/auth/parentOtp', async (req, res) => {
+            try {
+                const { user, phone, otp } = req.body;
+                res.json(await verifyParentOtp({ user, phone, otp }));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
     app.get('/api/health', (req, res) => {
         const health = typeof getRuntimeHealth === 'function'
             ? getRuntimeHealth()

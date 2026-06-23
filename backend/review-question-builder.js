@@ -4,9 +4,9 @@ function optionWord(option) {
     return String(option || '').replace(/^[A-D]\.\s*/, '').trim().toLowerCase();
 }
 
-function validQuestionTypes(info) {
+function validQuestionTypes(info, isContextUsableForWord) {
     const types = [];
-    if (info.context) types.push(1);
+    if (isContextUsableForWord ? isContextUsableForWord(info.word, info.context) : Boolean(info.context)) types.push(1);
     if (info.meaning) types.push(2);
     if (hasMeaningfulChineseMeaning(info.CN_Meaning)) types.push(3);
     return types;
@@ -17,6 +17,7 @@ function createReviewQuestionBuilder({
     rewriteContext,
     generateDistractors,
     chooseType,
+    isContextUsableForWord,
 }) {
     return async function buildReviewQuestion({
         reviewId,
@@ -33,7 +34,7 @@ function createReviewQuestionBuilder({
             ...usedDistractors,
         ]);
 
-        const availableTypes = validQuestionTypes(info);
+        const availableTypes = validQuestionTypes(info, isContextUsableForWord);
         const alternativeTypes = availableTypes.filter(type => type !== source.type);
         const type = alternativeTypes.length > 0
             ? chooseType(alternativeTypes)

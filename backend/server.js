@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -79,6 +79,9 @@ const app = createApp({
     submitAnswers,
     registerUser,
     loginUser,
+    requestAuthOtp,
+    loginWithOtp,
+    verifyParentOtp,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,

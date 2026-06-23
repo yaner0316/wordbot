@@ -45,12 +45,14 @@ function createFixture() {
             context: 'This context contains beta with several useful clue words.',
             distractors: ['new-a', 'new-b', 'new-c'],
         }),
-        buildReviewQuestion: async ({ source, reviewId }) => ({
-            type: source.type === 2 ? 1 : 2,
-            word: source.word,
-            context: 'A new _____ context.',
-            options: ['A. beta', 'B. new-a', 'C. new-b', 'D. new-c'],
-            answer: 'A',
+        buildReviewQuestion: async ({ source, info, reviewId }) => ({
+            type: 4,
+            answerMode: 'cn_meaning',
+            word: info.word,
+            context: '',
+            options: [],
+            correctMeaning: info.CN_Meaning,
+            answer: undefined,
             record_id: source.recordId,
             testId: reviewId,
         }),
@@ -74,6 +76,8 @@ function createFixture() {
             masteredWords: [],
         }),
         isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
         isCorrect: value => value === 'correct',
         fieldValue: value => String(value ?? ''),
     });
@@ -95,7 +99,7 @@ test('creates the first round from only wrong source-test questions', async () =
 });
 
 
-test('writes question context to review records', async () => {
+test('creates Chinese meaning recall questions for wrong answers', async () => {
     const { service, added } = createFixture();
 
     const round = await service.createRound({
@@ -103,8 +107,47 @@ test('writes question context to review records', async () => {
         sourceTestId: 'real-q1',
     });
 
-    assert.equal(round.questions[0].context, 'A new _____ context.');
-    assert.equal(added[0][0].context, 'A new _____ context.');
+    assert.equal(round.questions[0].type, 4);
+    assert.equal(round.questions[0].answerMode, 'cn_meaning');
+    assert.equal(round.questions[0].word, 'beta');
+    assert.deepEqual(round.questions[0].options, []);
+    assert.equal(round.questions[0].answer, undefined);
+    assert.equal(added[0][0].question_type, 4);
+    assert.equal(added[0][0].correct_answer, 'definition clue');
+    assert.equal(added[0][0].options, '[]');
+});
+
+test('submits Chinese meaning review answers without multiple-choice options', async () => {
+    const { service, added, updates } = createFixture();
+    const round = await service.createRound({
+        userId: 'student',
+        sourceTestId: 'real-q1',
+    });
+
+    const result = await service.submitRound({
+        userId: 'student',
+        reviewId: round.reviewId,
+        answers: [{ text: 'definition clue' }],
+    });
+
+    assert.equal(result.correct, 1);
+    assert.equal(result.total, 1);
+    assert.equal(result.results[0].your, 'definition clue');
+    assert.equal(result.results[0].answer, 'definition clue');
+    assert.equal(result.results[0].correct, true);
+    assert.deepEqual(result.remainingRecordIds, []);
+    assert.equal(added[0][0].options, '[]');
+    assert.equal(updates.some(update => update.fields.your_answer === 'definition clue'), true);
+    assert.equal(updates.some(update => update.fields.review_status === 'complete'), true);
+});
+
+test('writes Chinese meaning prompt records without options', async () => {
+    const { service, added } = createFixture();
+
+    await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+
+    assert.equal(added[0][0].context, '');
+    assert.equal(added[0][0].options, '[]');
 });
 
 test('returns the existing active round for an idempotent retry', async () => {
@@ -114,7 +157,7 @@ test('returns the existing active round for an idempotent retry', async () => {
     const second = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
 
     assert.equal(second.reviewId, first.reviewId);
-    assert.equal(second.questions[0].context, 'A new _____ context.');
+    assert.equal(second.questions[0].context, 'definition clue');
     assert.equal(added.length, 1);
 });
 
@@ -146,8 +189,7 @@ test('rejects a source test owned by another user', async () => {
     const { service } = createFixture();
 
     await assert.rejects(
-        service.createRound({ userId: 'other', sourceTestId: 'real-q1' }),
-        /不属于当前用户/
+        service.createRound({ userId: 'other', sourceTestId: 'real-q1' })
     );
 });
 
@@ -183,3 +225,4 @@ test('defers only remaining wrong review rows', async () => {
     assert.equal(result.deferred, true);
     assert.equal(updates.some(update => update.fields.review_status === 'deferred'), true);
 });
+

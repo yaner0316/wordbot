@@ -278,6 +278,8 @@ const ACCOUNT_FIELDS = [
     { field_name: 'auth_password_hash', type: 1 },
     { field_name: 'auth_password_salt', type: 1 },
     { field_name: 'auth_created_at', type: 5 },
+    { field_name: 'phone', type: 1 },
+    { field_name: 'phone_verified_at', type: 5 },
 ];
 const LEARNING_SETTINGS_FIELDS = [
     { field_name: 'Learning_Level', type: 1 },
@@ -351,9 +353,20 @@ async function findAccountRecord(userId) {
     return records.find(record => getFieldValue(record.fields?.user) === userId) || null;
 }
 
+async function findAccountByPhone(phone) {
+    const records = await searchRecords(
+        STATS_TABLE,
+        { conjunction: 'and', conditions: [{ field_name: 'phone', operator: 'is', value: [phone] }] },
+        null,
+        800
+    );
+    return records.find(record => getFieldValue(record.fields?.phone).replace(/\D/g, '') === phone) || null;
+}
+
 const authService = createAuthService({
     listAccountRecords: () => getRecords(STATS_TABLE),
     findAccountRecord,
+    findAccountByPhone,
     listWordUsers: getAllUsers,
     addAccountRecord: fields => addRecord(STATS_TABLE, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
     updateAccountRecord: (recordId, fields) => updateRecord(STATS_TABLE, recordId, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
@@ -367,6 +380,18 @@ async function registerUser(input) {
 
 async function loginUser(input) {
     return authService.login(input);
+}
+
+async function requestAuthOtp(input) {
+    return authService.requestOtp(input);
+}
+
+async function loginWithOtp(input) {
+    return authService.loginWithOtp(input);
+}
+
+async function verifyParentOtp(input) {
+    return authService.verifyParentOtp(input);
 }
 async function getQuestionCacheRecords() {
     if (!QUESTION_CACHE_TABLE) return [];
@@ -647,7 +672,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             flag: process.env.WORDBOT_ALLOW_LIVE_QUIZ_FALLBACK,
         })) {
             return {
-                error: '题库正在准备中，请先重建题目缓存后再开始测试',
+                error: 'Question cache is still preparing. Please rebuild the question cache and try again.',
                 code: 'QUESTION_CACHE_NOT_READY',
                 source: 'question_cache',
                 level: effectiveLevel,
@@ -1241,6 +1266,7 @@ const buildReviewQuestionCore = createReviewQuestionBuilder({
     rewriteContext: rewriteReviewQuestion,
     generateDistractors: generateReviewDistractors,
     chooseType: types => secureRandom(types, 1)[0],
+    isContextUsableForWord,
 });
 
 const reviewService = createReviewService({
@@ -1269,18 +1295,32 @@ const reviewService = createReviewService({
         };
     },
     buildReviewQuestion: async input => {
-        const question = await buildReviewQuestionCore(input);
-        const records = (input.wordRecords || await getRecords(WORD_TABLE)).filter(record =>
-            getFieldValue(record.fields.user) === input.userId
-        );
-        await enrichQuestionOptionMeanings({
-            questions: [question],
-            records,
-            translateWords: translateWordsToCN,
-            updateRecord: (recordId, fields) =>
-                updateRecord(WORD_TABLE, recordId, fields),
-        });
-        return question;
+        const info = input.info || {};
+        let correctMeaning = String(info.CN_Meaning || '').trim();
+        if (!correctMeaning || hasAiMetaResponse(correctMeaning)) {
+            const translated = await translateToCN(info.meaning || info.word).catch(() => '');
+            if (translated && !hasAiMetaResponse(translated)) {
+                correctMeaning = toSimp(translated).trim();
+                if (correctMeaning && input.source?.recordId) {
+                    updateRecord(WORD_TABLE, input.source.recordId, {
+                        CN_Meaning: correctMeaning,
+                    }).catch(error => {
+                        console.log(`review meaning backfill failed record=${input.source.recordId}: ${error.message}`);
+                    });
+                }
+            }
+        }
+        return {
+            type: 4,
+            answerMode: 'cn_meaning',
+            word: info.word,
+            context: '',
+            options: [],
+            correctMeaning,
+            answer: undefined,
+            record_id: input.source.recordId,
+            testId: input.reviewId,
+        };
     },
     addReviewRecords: rows => addRecords(TEST_TABLE, rows),
     updateReviewRecord: (rowId, fields) => updateRecord(TEST_TABLE, rowId, fields),
@@ -1768,7 +1808,7 @@ Return JSON only: {"example": "sentence"}`;
 
 async function translateToCN(text) {
     if (!text) return null;
-    const prompt = `Translate the following English word or phrase to Simplified Chinese. Return ONLY the Chinese translation — no explanations, no greetings, no extra text.\n\nEnglish: ${text}`;
+    const prompt = `Translate the following English word or phrase to Simplified Chinese. Return ONLY the Chinese translation 闁?no explanations, no greetings, no extra text.\n\nEnglish: ${text}`;
     try {
         const result = await callMiniMaxAPI(prompt);
         if (!result) return null;
@@ -1937,7 +1977,7 @@ async function addWords(targetUser, words) {
         try {
             return { word, ok: true, ...(await prepareWordFields(targetUser, word, fallbackWords)) };
         } catch (e) {
-            console.log(`准备失败 ${word}: ${e.message}`);
+            console.log(`闁告垵妫楅ˇ顒佸緞鏉堫偉袝 ${word}: ${e.message}`);
             return { word, ok: false, error: `${word}: ${e.message}` };
         }
     }));
@@ -1950,9 +1990,9 @@ async function addWords(targetUser, words) {
         try {
             await addRecord(WORD_TABLE, item.wordFields);
             count++;
-            console.log(`成功写入: ${item.word}, 干扰词: ${item.distractors.join(', ')}, 中文: ${item.cnMeaning?.substring(0, 15)}...`);
+            console.log(`闁瑰瓨鍔曟慨娑㈠礃濞嗗繐寮? ${item.word}, 妤犵偛寮舵竟鍫㈡嫚? ${item.distractors.join(', ')}, 濞戞搩鍘介弸? ${item.cnMeaning?.substring(0, 15)}...`);
         } catch (e) {
-            console.log(`写入失败 ${item.word}: ${e.message}`);
+            console.log(`闁告劖鐟ラ崣鍡樺緞鏉堫偉袝 ${item.word}: ${e.message}`);
             errors.push(`${item.word}: ${e.message}`);
         }
     }
@@ -1962,7 +2002,7 @@ async function addWords(targetUser, words) {
     }
 
     if (errors.length > 0) {
-        return { count, errors, error: `部分单词添加失败: ${errors.join('; ')}` };
+        return { count, errors, error: `闂侇喓鍔岄崹搴ㄥ础閺囷紕妲ゆ繛锝堫嚙婵偞寰勬潏顐バ? ${errors.join('; ')}` };
     }
     
     return { count, success: true };
@@ -2233,4 +2273,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { registerUser, loginUser, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };

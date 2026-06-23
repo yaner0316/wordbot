@@ -1,4 +1,5 @@
 const { getAssessmentMode } = require('./assessment-mode');
+const { isMeaningAnswerCorrect } = require('./meaning-review');
 const { buildReviewRecordFields } = require('./review-record');
 const {
     REVIEW_STATUS,
@@ -16,6 +17,20 @@ function parseOptions(value) {
     }
 }
 
+function buildMeaningRecallQuestion({ reviewId, source, info }) {
+    return {
+        type: 4,
+        answerMode: 'cn_meaning',
+        word: info.word,
+        context: '',
+        options: [],
+        correctMeaning: info.CN_Meaning || info.cn_meaning || '',
+        answer: undefined,
+        record_id: source.recordId,
+        testId: reviewId,
+    };
+}
+
 function createReviewService({
     createId,
     loadAssessmentRecords,
@@ -26,6 +41,8 @@ function createReviewService({
     addReviewRecords,
     updateReviewRecord,
     submitAssessment,
+    correctValue,
+    wrongValue,
     isSubmitted,
     isCorrect,
     fieldValue,
@@ -100,7 +117,8 @@ function createReviewService({
                     word: fieldValue(record.fields?.word),
                     context,
                     options: parseOptions(record.fields?.options),
-                    answer: fieldValue(record.fields?.correct_answer),
+                    answer: type === 4 ? undefined : fieldValue(record.fields?.correct_answer),
+                    answerMode: type === 4 ? 'cn_meaning' : undefined,
                 };
             })),
         };
@@ -120,13 +138,13 @@ function createReviewService({
 
         const sourceAssessmentId = parentReviewId || sourceTestId;
         const sourceRecords = await loadAssessmentRecords(sourceAssessmentId);
-        if (!sourceRecords.length) throw new Error('未找到复习来源记录');
+        if (!sourceRecords.length) throw new Error('Review source records not found');
         const owners = assessmentOwner(sourceRecords);
         if (owners.size !== 1 || !owners.has(userId)) {
-            throw new Error('测验不属于当前用户');
+            throw new Error('Review source does not belong to current user');
         }
         if (!sourceRecords.every(isSubmitted)) {
-            throw new Error('必须先提交并查看上一轮结果');
+            throw new Error('Source assessment must be submitted before review');
         }
 
         const wrongRecords = sourceRecords.filter(
@@ -162,7 +180,7 @@ function createReviewService({
         for (const record of wrongRecords) {
             const source = toSource(record);
             const info = await loadWordInfo(source.recordId, wordRecords);
-            const question = await buildReviewQuestion({
+            const question = await (buildReviewQuestion || buildMeaningRecallQuestion)({
                 userId,
                 reviewId,
                 source,
@@ -181,7 +199,9 @@ function createReviewService({
             word: question.word,
             question_type: question.type,
             context: question.context,
-            correct_answer: question.answer,
+            correct_answer: question.type === 4
+                ? question.correctMeaning
+                : question.answer,
             options: JSON.stringify(question.options),
             test_time: baseTime + index,
             ...buildReviewRecordFields({
@@ -206,7 +226,8 @@ function createReviewService({
                 word: question.word,
                 context: question.context,
                 options: question.options,
-                answer: question.answer,
+                answer: question.type === 4 ? undefined : question.answer,
+                answerMode: question.type === 4 ? 'cn_meaning' : question.answerMode,
             })),
         };
     }
@@ -240,9 +261,57 @@ function createReviewService({
 
     async function submitRound({ userId, reviewId, answers }) {
         const records = await loadAssessmentRecords(reviewId);
-        if (!records.length) throw new Error('未找到复习记录');
+        if (!records.length) throw new Error('Review records not found');
         const first = records[0].fields || {};
-        const result = await submitAssessment(userId, reviewId, answers);
+        if (records.every(record => Number(fieldValue(record.fields?.question_type)) === 4)) {
+            const sortedRecords = [...records].sort((left, right) =>
+                Number(fieldValue(left.fields?.test_time)) -
+                Number(fieldValue(right.fields?.test_time))
+            );
+            const results = [];
+            for (let index = 0; index < sortedRecords.length; index++) {
+                const record = sortedRecords[index];
+                const answer = answers[index] || {};
+                const submitted = String(answer.text ?? '').trim();
+                const expected = fieldValue(record.fields?.correct_answer);
+                const correct = isMeaningAnswerCorrect(submitted, expected);
+                const recordId = fieldValue(record.fields?.record_id);
+                await updateReviewRecord(record.record_id, {
+                    your_answer: submitted,
+                    is_correct: correct ? correctValue : wrongValue,
+                });
+                results.push({
+                    q: index + 1,
+                    word: fieldValue(record.fields?.word),
+                    recordId,
+                    your: submitted,
+                    answer: expected,
+                    correct,
+                    confidence: answer.confidence || '',
+                });
+            }
+            const summary = summarizeReviewRound(results);
+            submittedResults.set(reviewId, summary);
+            for (const record of records) {
+                await updateReviewRecord(record.record_id, {
+                    review_status: summary.status,
+                });
+            }
+            const total = results.length;
+            const correct = results.filter(result => result.correct).length;
+            return {
+                mode: getAssessmentMode(reviewId),
+                results,
+                correct,
+                total,
+                accuracy: total ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
+                masteredWords: [],
+                ...summary,
+                reviewId,
+                sourceTestId: fieldValue(first.source_test_id),
+                round: Number(fieldValue(first.review_round)) || 1,
+            };
+        }        const result = await submitAssessment(userId, reviewId, answers);
         const summary = summarizeReviewRound(result.results || []);
         submittedResults.set(reviewId, summary);
         for (const record of records) {
@@ -261,10 +330,10 @@ function createReviewService({
 
     async function deferRound({ userId, reviewId }) {
         const records = await loadAssessmentRecords(reviewId);
-        if (!records.length) throw new Error('未找到复习记录');
+        if (!records.length) throw new Error('Review records not found');
         const owners = assessmentOwner(records);
         if (owners.size !== 1 || !owners.has(userId)) {
-            throw new Error('复习不属于当前用户');
+            throw new Error('Review source does not belong to current user');
         }
         const cached = submittedResults.get(reviewId);
         const remaining = new Set(
@@ -273,7 +342,7 @@ function createReviewService({
                 .filter(record => !isCorrect(record.fields?.is_correct))
                 .map(record => fieldValue(record.fields?.record_id))
         );
-        if (!remaining.size) throw new Error('当前复习没有待延期错词');
+        if (!remaining.size) throw new Error('No review words remain deferred');
         for (const record of records) {
             const recordId = fieldValue(record.fields?.record_id);
             await updateReviewRecord(record.record_id, {
