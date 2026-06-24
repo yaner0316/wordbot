@@ -324,3 +324,113 @@ test('question cache rebuild endpoint starts background job without waiting for 
         }
     });
 });
+
+
+test('quiz endpoint returns cache hit diagnostics', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        generateQuiz: async () => ({
+            testId: 'real-cache-hit',
+            mode: 'real',
+            level: '中学',
+            source: 'question_cache',
+            diagnostics: {
+                cacheConfigured: true,
+                cacheAttempted: true,
+                level: '中学',
+                readyCount: 12,
+                requiredCount: 10,
+                fallbackUsed: false,
+                cacheReadLatencyMs: 42,
+                liveGenerationLatencyMs: null,
+            },
+            questions: [{ word: 'apple', answer: 'A' }],
+        }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'student', level: '中学', mode: 'real' }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(body.source, 'question_cache');
+        assert.equal(body.diagnostics.fallbackUsed, false);
+        assert.equal(body.diagnostics.readyCount, 12);
+    });
+});
+
+test('quiz endpoint returns live fallback diagnostics', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        generateQuiz: async () => ({
+            testId: 'real-live-generation',
+            mode: 'real',
+            level: '中学',
+            source: 'live_generation',
+            diagnostics: {
+                cacheConfigured: true,
+                cacheAttempted: true,
+                level: '中学',
+                readyCount: 7,
+                requiredCount: 10,
+                fallbackUsed: true,
+                cacheReadLatencyMs: 30,
+                liveGenerationLatencyMs: 15800,
+            },
+            questions: [{ word: 'apple', answer: 'A' }],
+        }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'student', level: '中学', mode: 'real' }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(body.source, 'live_generation');
+        assert.equal(body.diagnostics.fallbackUsed, true);
+        assert.equal(body.diagnostics.readyCount, 7);
+        assert.equal(body.diagnostics.liveGenerationLatencyMs, 15800);
+    });
+});
+
+test('quiz endpoint preserves cache-not-ready diagnostics on 503', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        generateQuiz: async () => ({
+            error: 'Question cache is still preparing. Please rebuild the question cache and try again.',
+            code: 'QUESTION_CACHE_NOT_READY',
+            source: 'question_cache',
+            diagnostics: {
+                cacheConfigured: true,
+                cacheAttempted: true,
+                level: '小学',
+                readyCount: 3,
+                requiredCount: 10,
+                fallbackUsed: false,
+                cacheReadLatencyMs: 18,
+                liveGenerationLatencyMs: null,
+            },
+        }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'student', level: '小学', mode: 'real' }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 503);
+        assert.equal(body.code, 'QUESTION_CACHE_NOT_READY');
+        assert.equal(body.source, 'question_cache');
+        assert.equal(body.diagnostics.readyCount, 3);
+        assert.equal(body.diagnostics.requiredCount, 10);
+        assert.equal(body.diagnostics.fallbackUsed, false);
+    });
+});

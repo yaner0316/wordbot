@@ -27,3 +27,20 @@ test('runtime health is ok when all required variables are present', () => {
     assert.equal(health.ok, true);
     assert.deepEqual(health.missing, []);
 });
+
+
+test('runtime health reports question cache configuration booleans without secrets', () => {
+    const env = {
+        ...Object.fromEntries(REQUIRED_ENV.map(name => [name, 'set'])),
+        FEISHU_QUESTION_CACHE_APP_TOKEN: 'secret-app-token',
+        FEISHU_QUESTION_CACHE_TABLE_ID: 'secret-table-id',
+    };
+    const health = getRuntimeHealth({ env });
+
+    assert.deepEqual(health.questionCache, {
+        configured: true,
+        appTokenConfigured: true,
+        tableIdConfigured: true,
+    });
+    assert.doesNotMatch(JSON.stringify(health), /secret-app-token|secret-table-id/);
+});

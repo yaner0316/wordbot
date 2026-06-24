@@ -625,23 +625,39 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         enabled: process.env.WORDBOT_QUIZ_TIMING === '1',
     });
     const assessmentMode = normalizeAssessmentMode(mode);
+    const requiredQuestionCount = 10;
+    const cacheConfigured = Boolean(QUESTION_CACHE_TABLE);
     let effectiveLevel = level || null;
+    const diagnostics = {
+        cacheConfigured,
+        cacheAttempted: false,
+        level: effectiveLevel,
+        readyCount: null,
+        requiredCount: requiredQuestionCount,
+        fallbackUsed: false,
+        cacheReadLatencyMs: null,
+        liveGenerationLatencyMs: null,
+    };
     if (QUESTION_CACHE_TABLE && effectiveLevel) {
+        diagnostics.cacheAttempted = true;
+        const cacheReadStarted = Date.now();
         const cachedRows = await getQuestionCacheRecords();
         const cachedQuestions = selectReadyCachedQuestions({
             rows: cachedRows,
             userId,
             level: effectiveLevel,
             roundType: 'primary',
-            limit: 10,
+            limit: requiredQuestionCount,
         });
+        diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
+        diagnostics.readyCount = cachedQuestions.length;
         markTiming('question-cache-read');
         if (cachedQuestions.length >= 10) {
             const testId = createAssessmentId(
                 assessmentMode,
                 () => crypto.randomUUID().split('-')[0]
             );
-            const randomizedQuestions = secureRandom(cachedQuestions, 10);
+            const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);
             const baseTestTime = Date.now();
             await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
                 user: userId,
@@ -663,6 +679,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 mode: assessmentMode,
                 level: effectiveLevel,
                 source: 'question_cache',
+                diagnostics,
                 difficultyApplied: true,
                 questions: randomizedQuestions.map(({ cacheRecordId, testId: _, record_id: __, ...q }) => q),
             };
@@ -676,15 +693,22 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 code: 'QUESTION_CACHE_NOT_READY',
                 source: 'question_cache',
                 level: effectiveLevel,
+                diagnostics: {
+                    ...diagnostics,
+                    fallbackUsed: false,
+                },
                 readyCount: cachedQuestions.length,
-                requiredCount: 10,
+                requiredCount: requiredQuestionCount,
             };
         }
+        diagnostics.fallbackUsed = true;
     }
+    const liveGenerationStarted = Date.now();
     const wordRecords = await getRecords(WORD_TABLE);
     if (!effectiveLevel) {
         const userRecord = wordRecords.find(record => getFieldValue(record.fields.user) === userId);
         effectiveLevel = buildLearningSettings({ userId, record: userRecord || null }).learningLevel;
+        diagnostics.level = effectiveLevel;
     }
     markTiming('word-records');
     const { pool } = await getDistractorPool(wordRecords);
@@ -891,10 +915,13 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     );
 
     markTiming('test-record-write-staged');
+    diagnostics.liveGenerationLatencyMs = Date.now() - liveGenerationStarted;
     return {
         testId,
         mode: assessmentMode,
         level: effectiveLevel || null,
+        source: 'live_generation',
+        diagnostics,
         difficultyApplied,
         warning: effectiveLevel && !difficultyApplied ? 'AI difficulty adjustment was not applied.' : null,
         questions: randomizedQuestions.map(({ testId: _, record_id: __, ...q }) => q)

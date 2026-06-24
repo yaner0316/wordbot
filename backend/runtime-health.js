@@ -19,6 +19,11 @@ function getRuntimeHealth({
         envStatus[name] = Boolean(env[name]);
     }
     const missing = REQUIRED_ENV.filter(name => !envStatus[name]);
+    const questionCache = {
+        appTokenConfigured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN),
+        tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),
+    };
+    questionCache.configured = questionCache.appTokenConfigured && questionCache.tableIdConfigured;
     return {
         ok: missing.length === 0,
         service: 'wordbot-backend',
@@ -26,6 +31,7 @@ function getRuntimeHealth({
         time: now(),
         dataSource: env.WORDBOT_DATA_SOURCE || 'feishu',
         env: envStatus,
+        questionCache,
         missing,
     };
 }
