@@ -639,6 +639,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         liveGenerationLatencyMs: null,
         testRecordWriteLatencyMs: null,
         cacheUsageWriteLatencyMs: null,
+        cacheUsageWriteScheduled: false,
     };
     if (QUESTION_CACHE_TABLE && effectiveLevel) {
         diagnostics.cacheAttempted = true;
@@ -676,9 +677,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 source: 'question_cache',
             })));
             diagnostics.testRecordWriteLatencyMs = Date.now() - testRecordWriteStarted;
-            const cacheUsageWriteStarted = Date.now();
-            await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId));
-            diagnostics.cacheUsageWriteLatencyMs = Date.now() - cacheUsageWriteStarted;
+            diagnostics.cacheUsageWriteScheduled = true;
+            markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))
+                .then(() => console.log('question cache usage marked count=' + randomizedQuestions.length))
+                .catch(error => console.log('question cache usage mark failed: ' + error.message));
             markTiming('question-cache-hit');
             return {
                 testId,

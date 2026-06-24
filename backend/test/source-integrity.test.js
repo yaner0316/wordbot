@@ -249,5 +249,17 @@ test('quiz cache diagnostics include Feishu write latencies', () => {
     assert.ok(feishuSource.includes('testRecordWriteLatencyMs'));
     assert.ok(feishuSource.includes('cacheUsageWriteLatencyMs'));
     assert.ok(feishuSource.includes('const testRecordWriteStarted = Date.now()'));
-    assert.ok(feishuSource.includes('const cacheUsageWriteStarted = Date.now()'));
+    assert.ok(feishuSource.includes('cacheUsageWriteScheduled'));
+    assert.ok(!feishuSource.includes('const cacheUsageWriteStarted = Date.now()'));
+});
+
+test('question cache usage marking runs after response is prepared', () => {
+    const cacheStart = feishuSource.indexOf('if (cachedQuestions.length >= 10)');
+    const cacheEnd = feishuSource.indexOf('questions: randomizedQuestions.map', cacheStart);
+    assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
+    const cacheHitSource = feishuSource.slice(cacheStart, cacheEnd);
+
+    assert.ok(cacheHitSource.includes('markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))'));
+    assert.ok(!cacheHitSource.includes('await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))'));
+    assert.ok(cacheHitSource.includes('cacheUsageWriteScheduled'));
 });
