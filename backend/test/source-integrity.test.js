@@ -245,3 +245,9 @@ test('question cache usage writes text timestamp for Feishu text field', () => {
     assert.ok(!markSource.includes('last_used_at: Date.now()'));
     assert.ok(markSource.includes('last_used_at: String(Date.now())'));
 });
+test('quiz cache diagnostics include Feishu write latencies', () => {
+    assert.ok(feishuSource.includes('testRecordWriteLatencyMs'));
+    assert.ok(feishuSource.includes('cacheUsageWriteLatencyMs'));
+    assert.ok(feishuSource.includes('const testRecordWriteStarted = Date.now()'));
+    assert.ok(feishuSource.includes('const cacheUsageWriteStarted = Date.now()'));
+});

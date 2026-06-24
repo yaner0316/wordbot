@@ -342,6 +342,8 @@ test('quiz endpoint returns cache hit diagnostics', async () => {
                 fallbackUsed: false,
                 cacheReadLatencyMs: 42,
                 liveGenerationLatencyMs: null,
+                testRecordWriteLatencyMs: 123,
+                cacheUsageWriteLatencyMs: 45,
             },
             questions: [{ word: 'apple', answer: 'A' }],
         }),
@@ -414,6 +416,8 @@ test('quiz endpoint preserves cache-not-ready diagnostics on 503', async () => {
                 fallbackUsed: false,
                 cacheReadLatencyMs: 18,
                 liveGenerationLatencyMs: null,
+                testRecordWriteLatencyMs: 123,
+                cacheUsageWriteLatencyMs: 45,
             },
         }),
     }));
