@@ -7,6 +7,8 @@ function createQuizBuilder({
     isContextUsableForWord,
     normalizeArticleContext,
     getFallbackDistractors = () => [],
+    getFormKey = null,
+    inflectWord = null,
 }) {
     function hasPluralListMismatch(word, context) {
         const key = String(word || '').toLowerCase();
@@ -98,7 +100,7 @@ function createQuizBuilder({
             : usableDistractors;
         const allOptions = choose([key, ...pickedDistractors], 4);
         const correctIndex = allOptions.indexOf(key);
-        const options = allOptions.map(
+        let options = allOptions.map(
             (option, index) => `${letters[index]}. ${option}`
         );
 
@@ -107,8 +109,20 @@ function createQuizBuilder({
             if (!isContextUsableForWord(key, info.context)) return null;
             const forms = getWordForms(key).map(escapeRegExp).join('|');
             const pattern = new RegExp(`\\b(${forms})\\b`, 'gi');
-            let context = (info.context || '').replace(pattern, '_____');
+            let matchedSurface = null;
+            let context = (info.context || '').replace(pattern, match => {
+                if (matchedSurface === null) matchedSurface = match.toLowerCase();
+                return '_____';
+            });
             if (!context.includes('_____')) return null;
+            if (getFormKey && inflectWord && matchedSurface) {
+                const formKey = getFormKey(key, matchedSurface);
+                if (formKey !== 'base') {
+                    options = allOptions.map((option, index) =>
+                        `${letters[index]}. ${inflectWord(option, formKey)}`
+                    );
+                }
+            }
             const normalized = normalizeArticleContext(context);
             context = normalized.text;
             articleNormalized = normalized.normalized;

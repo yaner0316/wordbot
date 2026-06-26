@@ -141,6 +141,40 @@ test('submits Chinese meaning review answers without multiple-choice options', a
     assert.equal(updates.some(update => update.fields.review_status === 'complete'), true);
 });
 
+test('retries a freshly-created review round when Feishu search is briefly empty', async () => {
+    const { service, assessments } = createFixture();
+    const round = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+    let reads = 0;
+    const flakyService = createReviewService({
+        createId: () => 'unused',
+        loadAssessmentRecords: async assessmentId => {
+            if (assessmentId === round.reviewId && reads++ === 0) return [];
+            return assessments.get(assessmentId) || [];
+        },
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordInfo: async () => ({ word: 'beta', meaning: 'a definition', CN_Meaning: 'definition clue' }),
+        addReviewRecords: async () => {},
+        updateReviewRecord: async () => {},
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+        recordReadRetryAttempts: 2,
+        recordReadRetryDelayMs: 0,
+    });
+
+    const result = await flakyService.submitRound({
+        userId: 'student',
+        reviewId: round.reviewId,
+        answers: [{ text: 'definition clue' }],
+    });
+
+    assert.equal(reads, 2);
+    assert.equal(result.correct, 1);
+});
+
 test('writes Chinese meaning prompt records without options', async () => {
     const { service, added } = createFixture();
 

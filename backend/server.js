@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -253,9 +253,14 @@ app.get('/api/admin/questionCache/status', async (req, res) => {
 
 app.post('/api/admin/questionCache/rebuild', async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, flush, type } = req.body;
         if (!userId) return res.status(400).json({ error: '缺少userId' });
-        res.status(202).json(startQuestionCacheRebuild(userId));
+        let flushed = null;
+        if (flush) {
+            flushed = await deleteQuestionCacheRows(userId, type != null ? Number(type) : null);
+        }
+        const result = startQuestionCacheRebuild(userId);
+        res.status(202).json({ ...result, flushed });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

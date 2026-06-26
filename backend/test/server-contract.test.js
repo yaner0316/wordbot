@@ -325,6 +325,43 @@ test('question cache rebuild endpoint starts background job without waiting for 
     });
 });
 
+test('question cache rebuild endpoint can flush selected cache type before rebuilding', async () => {
+    const calls = [];
+    let resolveRebuild;
+    const rebuildPromise = new Promise(resolve => { resolveRebuild = resolve; });
+    const app = loadServerWithFeishu(createFakeFeishu({
+        deleteQuestionCacheRows: async (userId, type) => {
+            calls.push(['flush', userId, type]);
+            return { deleted: 7 };
+        },
+        rebuildQuestionCacheForUser: async userId => {
+            calls.push(['rebuild', userId]);
+            return rebuildPromise;
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        try {
+            const response = await fetch(`${baseUrl}/api/admin/questionCache/rebuild`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: 'draggy', flush: true, type: 1 }),
+            });
+            const body = await response.json();
+
+            assert.equal(response.status, 202);
+            assert.deepEqual(body.flushed, { deleted: 7 });
+            assert.equal(body.started, true);
+            assert.deepEqual(calls, [
+                ['flush', 'draggy', 1],
+                ['rebuild', 'draggy'],
+            ]);
+        } finally {
+            resolveRebuild({ success: true });
+        }
+    });
+});
+
 
 test('quiz endpoint returns cache hit diagnostics', async () => {
     const app = loadServerWithFeishu(createFakeFeishu({

@@ -1,3 +1,5 @@
+const { inflectWord } = require('./word-inflector');
+
 function escapeRegExp(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -93,6 +95,19 @@ function hasMeaningfulChineseMeaning(value) {
     return cn.length > 0 && cn.length <= 50 && /[一-鿿]/.test(cn) && !hasAiMetaResponse(cn);
 }
 
+function hasDistractorFormOverlap(word, question) {
+    const forms = new Set(
+        ['third_singular', 'past', 'past_participle', 'present_participle']
+            .map(formKey => inflectWord(word, formKey))
+            .filter(form => form !== word)
+    );
+    const answerPrefix = `${question.answer}.`;
+    return (question.options || [])
+        .filter(option => !String(option || '').startsWith(answerPrefix))
+        .map(stripOptionLabel)
+        .some(distractor => forms.has(distractor));
+}
+
 function isQuestionQualityAcceptable(question) {
     if (!question) return false;
     if (Number(question.type) === 3) {
@@ -101,6 +116,11 @@ function isQuestionQualityAcceptable(question) {
         return false;
     }
     if (hasAiMetaResponse(question.correctMeaning)) question.correctMeaning = '';
+    if (Number(question.type) === 2) {
+        const word = String(question.word || '').toLowerCase();
+        const context = String(question.context || '').toLowerCase();
+        if (word && context && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(context)) return false;
+    }
     if (Number(question.type) !== 1) return true;
     const answerPrefix = `${question.answer}.`;
     const word = stripOptionLabel(
@@ -108,7 +128,8 @@ function isQuestionQualityAcceptable(question) {
         question.word
     );
     const context = String(question.context || '').replace(/_{3,}/g, word);
-    return !hasInvalidFillInGrammar({ word, context });
+    return !hasInvalidFillInGrammar({ word, context }) &&
+        !hasDistractorFormOverlap(word, question);
 }
 
 module.exports = {

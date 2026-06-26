@@ -1,4 +1,5 @@
 const https = require('https');
+const { getFormKey, inflectWord } = require('./word-inflector');
 const { createAuthService } = require('./auth-service');
 const { createTableCache } = require('./table-cache');
 const crypto = require('crypto');
@@ -403,6 +404,36 @@ async function addQuestionCacheRecords(rows) {
     return addRecords(QUESTION_CACHE_TABLE, rows);
 }
 
+async function deleteQuestionCacheRows(userId, type) {
+    if (!QUESTION_CACHE_TABLE) return { skipped: true, deleted: 0 };
+    const rows = await getQuestionCacheRecords();
+    const ids = rows
+        .filter(row =>
+            getFieldValue(row.fields?.user) === userId &&
+            (type == null || Number(row.fields?.question_type) === type)
+        )
+        .map(row => row.record_id)
+        .filter(Boolean);
+    if (ids.length === 0) return { deleted: 0 };
+    const token = await getToken();
+    let deleted = 0;
+    for (let i = 0; i < ids.length; i += 500) {
+        const batch = ids.slice(i, i + 500);
+        const res = await request(
+            'POST',
+            `/open-apis/bitable/v1/apps/${QUESTION_CACHE_TABLE.appToken}/tables/${QUESTION_CACHE_TABLE.tableId}/records/batch_delete`,
+            { records: batch },
+            token
+        );
+        if (res.code !== 0) {
+            throw new Error('Feishu delete question cache rows failed: ' + (res.msg || res.code));
+        }
+        deleted += batch.length;
+    }
+    invalidateRecordsCache(QUESTION_CACHE_TABLE);
+    return { deleted };
+}
+
 async function markQuestionCacheUsed(cacheRecordIds) {
     if (!QUESTION_CACHE_TABLE) return;
     for (const recordId of cacheRecordIds.filter(Boolean)) {
@@ -573,6 +604,8 @@ const buildQuizQuestion = createQuizBuilder({
     isContextUsableForWord,
     normalizeArticleContext,
     getFallbackDistractors: info => info.fallbackDistractors || [],
+    getFormKey,
+    inflectWord,
 });
 const adaptContextsByLevel = createContextDifficultyAdapter({
     callAI: prompt => callMiniMaxAPI(prompt, 'MiniMax-M2.7', 12000),
@@ -972,13 +1005,13 @@ async function checkQuizAmbiguity(questions) {
     for (let offset = 0; offset < questions.length; offset += batchSize) {
         const batch = questions.slice(offset, offset + batchSize);
         const quizText = batch.map((q, i) =>
-            `Q${offset + i + 1}: ${q.context}  Opts: ${q.options.join(' ')}`
+            `Q${offset + i + 1}: ${q.context}  Correct:${q.answer}. ${q.options.join(' ')}`
         ).join('\n');
 
         checks.push((async () => {
             try {
                 const r = await callMiniMaxAPI(
-                    `Check each: if >1 option fits, list Q numbers. Return numbers only, comma-separated. None->empty.\n\n${quizText}`,
+                    `For each question the correct answer is marked. Check if any WRONG option could also correctly answer the question. List Q numbers where wrong options also work. Return numbers only, comma-separated. None->empty.\n\n${quizText}`,
                     'MiniMax-M2.7', 60000
                 );
                 if (!r) return [];
@@ -1003,9 +1036,10 @@ async function generateBetterDistractors(q, info) {
     const prompt = q.type === 1
         ? `Context: "${q.context}"
 Correct word: "${info.word}"
+Correct meaning: "${info.meaning || info.CN_Meaning || ''}"
 The current wrong options also fit the blank, making the question ambiguous.
 Generate 3 new wrong options that are COMPLETELY WRONG when put in this blank:
-- Different meaning
+- Different meaning from "${info.word}"
 - Different part of speech
 - Obviously incorrect in context
 Return JSON: {"distractors": ["word1", "word2", "word3"]}`
@@ -1585,7 +1619,7 @@ async function rebuildQuestionCacheForUser(userId) {
     let wordIndex = 0;
     for (const rec of pending) {
         const info = pool[rec.record_id];
-        if (!info || (info.distractors || []).filter(Boolean).length < 3) continue;
+        if (!info) continue;
         const availableTypes = [
             ...(isContextUsableForWord(info.word, info.context) ? [1] : []),
             ...(info.meaning?.trim() ? [2] : []),
@@ -2308,4 +2342,4 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };

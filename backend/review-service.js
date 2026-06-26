@@ -46,8 +46,24 @@ function createReviewService({
     isSubmitted,
     isCorrect,
     fieldValue,
+    recordReadRetryAttempts = 5,
+    recordReadRetryDelayMs = 250,
 }) {
     const submittedResults = new Map();
+
+    function wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function loadAssessmentRecordsWithRetry(assessmentId) {
+        let records = [];
+        for (let attempt = 0; attempt < recordReadRetryAttempts; attempt++) {
+            records = await loadAssessmentRecords(assessmentId);
+            if (records.length) return records;
+            if (recordReadRetryDelayMs > 0) await wait(recordReadRetryDelayMs);
+        }
+        return records;
+    }
 
     function assessmentOwner(records) {
         return new Set(records.map(item => fieldValue(item.fields?.user)));
@@ -137,7 +153,7 @@ function createReviewService({
         if (existing) return existing;
 
         const sourceAssessmentId = parentReviewId || sourceTestId;
-        const sourceRecords = await loadAssessmentRecords(sourceAssessmentId);
+        const sourceRecords = await loadAssessmentRecordsWithRetry(sourceAssessmentId);
         if (!sourceRecords.length) throw new Error('Review source records not found');
         const owners = assessmentOwner(sourceRecords);
         if (owners.size !== 1 || !owners.has(userId)) {
@@ -260,7 +276,7 @@ function createReviewService({
     }
 
     async function submitRound({ userId, reviewId, answers }) {
-        const records = await loadAssessmentRecords(reviewId);
+        const records = await loadAssessmentRecordsWithRetry(reviewId);
         if (!records.length) throw new Error('Review records not found');
         const first = records[0].fields || {};
         if (records.every(record => Number(fieldValue(record.fields?.question_type)) === 4)) {
@@ -329,7 +345,7 @@ function createReviewService({
     }
 
     async function deferRound({ userId, reviewId }) {
-        const records = await loadAssessmentRecords(reviewId);
+        const records = await loadAssessmentRecordsWithRetry(reviewId);
         if (!records.length) throw new Error('Review records not found');
         const owners = assessmentOwner(records);
         if (owners.size !== 1 || !owners.has(userId)) {

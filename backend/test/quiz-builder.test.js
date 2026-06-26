@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const { createQuizBuilder } = require('../quiz-builder');
 const { normalizeArticleContext } = require('../article-context');
+const { getFormKey, inflectWord } = require('../word-inflector');
 
 function createBuilder() {
     return createQuizBuilder({
@@ -24,6 +25,21 @@ function createBuilderWithPool() {
             new RegExp(`\\b${word}\\b`, 'i').test(context || ''),
         normalizeArticleContext,
         getFallbackDistractors: () => ['fresh-a', 'fresh-b', 'fresh-c'],
+    });
+}
+
+function createInflectingBuilder() {
+    return createQuizBuilder({
+        choose: (items, count) => items.slice(0, count),
+        escapeRegExp: text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        getWordForms: word => [word, inflectWord(word, 'past')],
+        isContextUsableForWord: (word, context) => {
+            const forms = [word, inflectWord(word, 'past')].join('|');
+            return new RegExp(`\\b(${forms})\\b`, 'i').test(context || '');
+        },
+        normalizeArticleContext,
+        getFormKey,
+        inflectWord,
     });
 }
 
@@ -59,6 +75,32 @@ test('builds a fill-in question and neutralizes the indefinite article', () => {
         testId: 'test-1',
         record_id: 'rec-1',
     });
+});
+
+test('inflects all fill-in options to match the context surface form', () => {
+    const buildQuizQuestion = createInflectingBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-inflect',
+        {
+            word: 'abandon',
+            context: 'They abandoned the project after the storm damaged the site.',
+            distractors: ['accept', 'support', 'continue'],
+            CN_Meaning: '放弃',
+        },
+        1,
+        'test-inflect',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question.context, 'They _____ the project after the storm damaged the site.');
+    assert.deepEqual(question.options, [
+        'A. abandoned',
+        'B. accepted',
+        'C. supported',
+        'D. continued',
+    ]);
+    assert.equal(question.answer, 'A');
 });
 
 test('rejects fill-in questions with obvious plural list and singular target mismatch', () => {
