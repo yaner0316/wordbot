@@ -1605,6 +1605,14 @@ async function rebuildQuestionCacheForUser(userId) {
     if (!QUESTION_CACHE_TABLE) {
         return { configured: false, skipped: true, count: 0 };
     }
+    const QUESTION_CACHE_REBUILD_FLUSH_SIZE = 10;
+    async function flushQuestionCacheRows(bufferedRows, writtenRows) {
+        if (!bufferedRows.length) return;
+        const batch = bufferedRows.splice(0, bufferedRows.length);
+        await addQuestionCacheRecords(batch);
+        writtenRows.push(...batch);
+    }
+
     const settings = await getUserLearningSettings(userId);
     const level = settings.learningLevel;
     const wordRecords = await getRecords(WORD_TABLE);
@@ -1614,7 +1622,8 @@ async function rebuildQuestionCacheForUser(userId) {
         .map(record => String(record.word || '').trim().toLowerCase())
         .filter(word => word && !isReservedTestWord(word));
     const letters = ['A', 'B', 'C', 'D'];
-    const rows = [];
+    const bufferedRows = [];
+    const writtenRows = [];
     const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];
     let wordIndex = 0;
     for (const rec of pending) {
@@ -1671,20 +1680,23 @@ async function rebuildQuestionCacheForUser(userId) {
             translateWords: translateWordsToCN,
             updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
         });
-        appendReadyCacheRows(rows, {
+        appendReadyCacheRows(bufferedRows, {
             userId,
             level,
             primaryQuestion: cacheQuestions[0],
             reviewQuestion: cacheQuestions[1],
             sourceVersion: 'phase-2',
         });
+        if (bufferedRows.length >= QUESTION_CACHE_REBUILD_FLUSH_SIZE) {
+            await flushQuestionCacheRows(bufferedRows, writtenRows);
+        }
     }
-    await addQuestionCacheRecords(rows);
+    await flushQuestionCacheRows(bufferedRows, writtenRows);
     return {
         configured: true,
         level,
-        count: rows.length,
-        status: summarizeCacheStatus(rows),
+        count: writtenRows.length,
+        status: summarizeCacheStatus(writtenRows),
     };
 }
 

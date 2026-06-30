@@ -207,6 +207,18 @@ test('question cache rebuild only uses meaningful Chinese meanings for type 3', 
     );
 });
 
+test('question cache rebuild writes ready rows incrementally before the full rebuild finishes', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(rebuildSource.includes('QUESTION_CACHE_REBUILD_FLUSH_SIZE'));
+    assert.ok(rebuildSource.includes('flushQuestionCacheRows'));
+    assert.ok(rebuildSource.includes('await flushQuestionCacheRows(bufferedRows, writtenRows);'));
+    assert.ok(!rebuildSource.includes('await addQuestionCacheRecords(rows);'));
+});
+
 test('quiz assessment rows persist level and source trace fields', () => {
     const cacheStart = feishuSource.indexOf('if (cachedQuestions.length >= 10)');
     const cacheEnd = feishuSource.indexOf("markTiming('question-cache-hit')");
