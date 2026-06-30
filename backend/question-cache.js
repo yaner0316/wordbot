@@ -21,6 +21,10 @@ function parseJsonList(value) {
     }
 }
 
+function userKey(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
 function buildCacheRow({ userId, level, roundType, question, sourceVersion, now }) {
     return {
         user: userId,
@@ -97,9 +101,10 @@ function isCacheQuestionReady(row) {
 
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
     const QUOTA = { 1: 6, 2: 3, 3: 1 };
+    const targetUserKey = userKey(userId);
     const eligible = (rows || [])
         .map(normalizeCacheRow)
-        .filter(row => row.user === userId && row.level === level && row.roundType === roundType)
+        .filter(row => userKey(row.user) === targetUserKey && row.level === level && row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
         .filter(row => isCacheQuestionReady(row))
         .filter(row => !excludedRecordIds.has(row.wordRecordId))

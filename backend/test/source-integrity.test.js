@@ -97,11 +97,11 @@ test('learning settings use a short-lived overlay after write consistency gaps',
         'learning settings need a write-through overlay for immediate read-after-write consistency'
     );
     assert.ok(
-        feishuSource.includes('return resolveLearningSettings(userId, userRecord || null);'),
+        feishuSource.includes('return resolveLearningSettings(canonicalUserId, userRecord || null);'),
         'getUserLearningSettings should read through the overlay'
     );
     assert.ok(
-        feishuSource.includes('learningSettingsOverlay.set(userId, settings);'),
+        feishuSource.includes('learningSettingsOverlay.set(canonicalUserId, settings);'),
         'updateUserLearningSettings should publish saved settings to the overlay'
     );
     assert.ok(

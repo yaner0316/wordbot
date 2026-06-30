@@ -81,6 +81,18 @@ test('selects ready current-level primary questions before older used ones', () 
     assert.deepEqual(selected.map(item => item.word), ['fresh', 'used']);
 });
 
+test('selects cached questions case-insensitively by user', () => {
+    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const selected = selectReadyCachedQuestions({
+        rows: [question({ user: 'yusi', level: middleLevel, word_record_id: 'rec-yusi', word: 'apple' })],
+        userId: 'Yusi',
+        level: middleLevel,
+        roundType: 'primary',
+        limit: 1,
+    });
+
+    assert.deepEqual(selected.map(item => item.word), ['apple']);
+});
 test('rejects ready cache rows that are missing quality-critical fields', () => {
     assert.equal(isCacheQuestionReady(question()), true);
     assert.equal(isCacheQuestionReady(question({ options: JSON.stringify(['A. apple', 'B. pear']) })), false);

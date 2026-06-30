@@ -33,6 +33,13 @@ const getFieldVal = (v) => {
     return String(v);
 };
 
+const normalizeUserKey = (value) => String(getFieldVal(value) || '').trim().toLowerCase();
+const sameUser = (left, right) => {
+    const a = normalizeUserKey(left);
+    const b = normalizeUserKey(right);
+    return Boolean(a && b && a === b);
+};
+
 const parseOptions = (v) => {
     const raw = getFieldVal(v);
     if (!raw) return [];
@@ -47,16 +54,25 @@ const parseOptions = (v) => {
 
 const questionCacheRebuildJobs = new Map();
 
+function getCacheReadyCountForLevel(status, level) {
+    return Number(status?.byLevel?.[level]?.ready || 0);
+}
+
+function questionCacheJobKey(userId) {
+    return normalizeUserKey(userId) || String(userId || '');
+}
+
 function startQuestionCacheRebuild(userId) {
-    const current = questionCacheRebuildJobs.get(userId);
+    const jobKey = questionCacheJobKey(userId);
+    const current = questionCacheRebuildJobs.get(jobKey);
     if (current?.status === 'running') {
         return { started: false, alreadyRunning: true, userId, startedAt: current.startedAt };
     }
     const job = { status: 'running', startedAt: Date.now() };
-    questionCacheRebuildJobs.set(userId, job);
+    questionCacheRebuildJobs.set(jobKey, job);
     rebuildQuestionCacheForUser(userId)
         .then(result => {
-            questionCacheRebuildJobs.set(userId, {
+            questionCacheRebuildJobs.set(jobKey, {
                 ...job,
                 status: 'completed',
                 finishedAt: Date.now(),
@@ -65,7 +81,7 @@ function startQuestionCacheRebuild(userId) {
             console.log(`question cache rebuild completed user=${userId} count=${result?.count ?? 0}`);
         })
         .catch(error => {
-            questionCacheRebuildJobs.set(userId, {
+            questionCacheRebuildJobs.set(jobKey, {
                 ...job,
                 status: 'failed',
                 finishedAt: Date.now(),
@@ -129,7 +145,7 @@ app.get('/api/history/:user', async (req, res) => {
         const mode = normalizeAssessmentMode(req.query.mode || ASSESSMENT_MODE.REAL);
         const allRecords = await getRecords(TEST_TABLE);
         const records = filterAssessmentRecords(
-            allRecords.filter(r => getFieldVal(r.fields.user) === req.params.user),
+            allRecords.filter(r => sameUser(r.fields.user, req.params.user)),
             mode
         );
         console.log('Total records for user:', records.length);
@@ -139,7 +155,7 @@ app.get('/api/history/:user', async (req, res) => {
         const userRecords = records;
         
         const wordRecords = await getRecords(WORD_TABLE);
-        const userWordRecords = wordRecords.filter(r => getFieldVal(r.fields.user) === req.params.user);
+        const userWordRecords = wordRecords.filter(r => sameUser(r.fields.user, req.params.user));
         const wordMap = {};
         for (const w of userWordRecords) {
             const wn = getFieldVal(w.fields.Word);
@@ -231,8 +247,15 @@ app.put('/api/admin/userSettings', async (req, res) => {
         if (!result.success && result.error === 'cooldown') {
             return res.status(409).json(result);
         }
-        if (result.success && result.settings?.questionCacheStatus === 'building') {
-            startQuestionCacheRebuild(userId);
+        if (result.success) {
+            const canonicalUserId = result.settings?.userId || userId;
+            const selectedLevel = result.settings?.learningLevel || learningLevel;
+            let shouldRebuild = result.settings?.questionCacheStatus === 'building';
+            if (!shouldRebuild) {
+                const cacheStatus = await getQuestionCacheStatus(canonicalUserId);
+                shouldRebuild = Boolean(cacheStatus?.configured) && getCacheReadyCountForLevel(cacheStatus, selectedLevel) < 10;
+            }
+            if (shouldRebuild) startQuestionCacheRebuild(canonicalUserId);
         }
         res.json(result);
     } catch (e) {

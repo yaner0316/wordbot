@@ -64,6 +64,15 @@ test('register requires a unique phone number and stores it with credentials', a
     );
 });
 
+test('username login and registration are case-insensitive while preserving the stored account casing', async () => {
+    const { service } = fixture();
+    await service.register({ username: 'yusi', phone: '18621823161', password: 'secret1' });
+
+    assert.deepEqual(await service.login({ username: 'Yusi', password: 'secret1' }), { user: 'yusi' });
+    await assert.rejects(
+        service.register({ username: 'YUSI', phone: '13900000001', password: 'secret2' })
+    );
+});
 test('login accepts either username or phone with the bound password', async () => {
     const { service } = fixture();
     await service.register({ username: 'Draggy', phone: '15863061969', password: 'secret1' });

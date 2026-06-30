@@ -291,6 +291,44 @@ test('history endpoint preserves grouped history response shape', async () => {
         assert.equal(body.history[0].questions[0].word, 'apple');
     });
 });
+test('saving unchanged learning level starts rebuild when selected level cache is not ready', async () => {
+    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const calls = [];
+    let resolveRebuild;
+    const rebuildPromise = new Promise(resolve => { resolveRebuild = resolve; });
+    const app = loadServerWithFeishu(createFakeFeishu({
+        updateUserLearningSettings: async (userId, learningLevel) => ({
+            success: true,
+            settings: { userId, learningLevel, questionCacheStatus: 'not_started' },
+        }),
+        getQuestionCacheStatus: async () => ({
+            configured: true,
+            byLevel: { [middleLevel]: { ready: 4, total: 4 } },
+        }),
+        rebuildQuestionCacheForUser: async userId => {
+            calls.push(userId);
+            return rebuildPromise;
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        try {
+            const response = await fetch(baseUrl + '/api/admin/userSettings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: 'Yusi', learningLevel: middleLevel }),
+            });
+            const body = await response.json();
+
+            assert.equal(response.status, 200);
+            assert.equal(body.success, true);
+            await new Promise(resolve => setTimeout(resolve, 0));
+            assert.deepEqual(calls, ['Yusi']);
+        } finally {
+            resolveRebuild({ success: true });
+        }
+    });
+});
 test('question cache rebuild endpoint starts background job without waiting for completion', async () => {
     let calledWith = null;
     let resolveRebuild;

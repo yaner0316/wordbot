@@ -10,6 +10,10 @@ function normalizeUsername(value) {
     return String(value || '').trim().replace(/\s+/g, '');
 }
 
+function usernameKey(value) {
+    return normalizeUsername(value).toLowerCase();
+}
+
 function normalizePhone(value) {
     return String(value || '').replace(/\D/g, '');
 }
@@ -113,7 +117,8 @@ function createAuthService({
             }
         }
         const records = await listAccountRecords();
-        return records.find(record => accountUser(record) === user) || null;
+        const key = usernameKey(user);
+        return records.find(record => usernameKey(accountUser(record)) === key) || null;
     }
 
     async function lookupAccountByPhone(phone) {
@@ -163,7 +168,7 @@ function createAuthService({
             lookupAccountByUsername(user),
             lookupAccountByPhone(phone),
         ]);
-        if (existingPhone && accountUser(existingPhone) !== user) {
+        if (existingPhone && usernameKey(accountUser(existingPhone)) !== usernameKey(user)) {
             throw new Error('手机号已绑定其他账户');
         }
         const existing = existingUser || existingPhone;
@@ -207,7 +212,7 @@ function createAuthService({
         const account = await lookupAccountByPhone(normalizedPhone);
         if (!account) throw new Error('手机号未绑定账户');
         const expectedUser = normalizeUsername(user);
-        if (expectedUser && accountUser(account) !== expectedUser) {
+        if (expectedUser && usernameKey(accountUser(account)) !== usernameKey(expectedUser)) {
             throw new Error('手机号不属于当前账户');
         }
         const code = createOtp(randomBytes);
@@ -245,7 +250,7 @@ function createAuthService({
     async function verifyParentOtp({ user, phone, otp }) {
         const expectedUser = normalizeUsername(user);
         const stored = verifyStoredOtp({ phone, otp, purpose: 'parent' });
-        if (expectedUser && stored.user !== expectedUser) throw new Error('手机号不属于当前账户');
+        if (expectedUser && usernameKey(stored.user) !== usernameKey(expectedUser)) throw new Error('手机号不属于当前账户');
         return { ok: true, user: stored.user };
     }
 
@@ -256,5 +261,6 @@ module.exports = {
     createAuthService,
     hashPassword,
     normalizeUsername,
+    usernameKey,
     normalizePhone,
 };

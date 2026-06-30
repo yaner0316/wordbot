@@ -107,6 +107,23 @@ function getFieldValue(value) {
     return String(value);
 }
 
+function normalizeUserKey(value) {
+    return getFieldValue(value).trim().toLowerCase();
+}
+
+function userMatches(value, userId) {
+    const current = normalizeUserKey(value);
+    const target = normalizeUserKey(userId);
+    return Boolean(current && target && current === target);
+}
+
+function findCanonicalUserRecord(records, userId) {
+    const key = normalizeUserKey(userId);
+    const matches = (records || []).filter(record => userMatches(record.fields?.user, userId));
+    if (matches.length === 0) return null;
+    return matches.find(record => getFieldValue(record.fields?.user) === key) || matches[0];
+}
+
 function normalizeStatus(status) {
     const value = getFieldValue(status).trim();
     const lower = value.toLowerCase();
@@ -351,7 +368,9 @@ async function findAccountRecord(userId) {
         null,
         800
     );
-    return records.find(record => getFieldValue(record.fields?.user) === userId) || null;
+    const targeted = findCanonicalUserRecord(records, userId);
+    if (targeted) return targeted;
+    return findCanonicalUserRecord(await getRecords(STATS_TABLE), userId);
 }
 
 async function findAccountByPhone(phone) {
@@ -409,7 +428,7 @@ async function deleteQuestionCacheRows(userId, type) {
     const rows = await getQuestionCacheRecords();
     const ids = rows
         .filter(row =>
-            getFieldValue(row.fields?.user) === userId &&
+            userMatches(row.fields?.user, userId) &&
             (type == null || Number(row.fields?.question_type) === type)
         )
         .map(row => row.record_id)
@@ -504,7 +523,7 @@ async function getDistractorPool(records = null) {
 async function getPendingWords(userId, records = null) {
     records = records || await getRecords(WORD_TABLE);
     return records
-        .filter(r => getFieldValue(r.fields.user) === userId && !isMasteredStatus(r.fields.Status))
+        .filter(r => userMatches(r.fields.user, userId) && !isMasteredStatus(r.fields.Status))
         .map(r => ({
             record_id: r.record_id,
             word: getFieldValue(r.fields.Word),
@@ -747,7 +766,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     const liveGenerationStarted = Date.now();
     const wordRecords = await getRecords(WORD_TABLE);
     if (!effectiveLevel) {
-        const userRecord = wordRecords.find(record => getFieldValue(record.fields.user) === userId);
+        const userRecord = wordRecords.find(record => userMatches(record.fields.user, userId));
         effectiveLevel = buildLearningSettings({ userId, record: userRecord || null }).learningLevel;
         diagnostics.level = effectiveLevel;
     }
@@ -762,7 +781,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     const masteredRecordIds = new Set(
         wordRecords
             .filter(record =>
-                getFieldValue(record.fields.user) === userId &&
+                userMatches(record.fields.user, userId) &&
                 isMasteredStatus(record.fields.Status)
             )
             .map(record => record.record_id)
@@ -1136,14 +1155,14 @@ async function settleAnswers(testRecords, answers, userId, testId) {
     }
 
     const allWordRecords = await getRecords(WORD_TABLE);
-    const wordRecords = allWordRecords.filter(r => getFieldValue(r.fields.user) === userId);
+    const wordRecords = allWordRecords.filter(r => userMatches(r.fields.user, userId));
     const rewardBeforeWordRecords = wordRecords.map(record => ({
         record_id: record.record_id,
         fields: { ...record.fields },
     }));
     const allTestRecords = await getRecords(TEST_TABLE);
     const userRealTests = filterAssessmentRecords(
-        allTestRecords.filter(r => getFieldValue(r.fields.user) === userId && hasSubmittedAnswer(r)),
+        allTestRecords.filter(r => userMatches(r.fields.user, userId) && hasSubmittedAnswer(r)),
         ASSESSMENT_MODE.REAL
     );
     const masteredWords = [];
@@ -1184,7 +1203,7 @@ async function settleAnswers(testRecords, answers, userId, testId) {
 
     if (getAssessmentKind(testId) === ASSESSMENT_KIND.QUIZ) {
         const statsRecords = await getRecords(STATS_TABLE);
-        const userRecord = statsRecords.find(r => getFieldValue(r.fields.user) === userId);
+        const userRecord = statsRecords.find(r => userMatches(r.fields.user, userId));
         const statsFields = {
             user: userId,
             total_words: total,
@@ -1420,14 +1439,14 @@ async function getReviewSummary(input) {
 }
 
 async function getStats(userId) {
-    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => getFieldValue(r.fields.user) === userId);
+    const wordRecords = (await getRecords(WORD_TABLE)).filter(r => userMatches(r.fields.user, userId));
     const total = wordRecords.length;
     const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
     // Stats are based on submitted real assessment records only.
     const allTestRecords = await getRecords(TEST_TABLE);
     const testRecords = filterAssessmentRecords(
-        allTestRecords.filter(r => getFieldValue(r.fields.user) === userId),
+        allTestRecords.filter(r => userMatches(r.fields.user, userId)),
         ASSESSMENT_MODE.REAL
     );
     const submittedRecords = testRecords.filter(hasSubmittedAnswer);
@@ -1477,8 +1496,14 @@ async function addWord(targetUser, wordData) {
 
 async function getAllUsers() {
     const records = await getRecords(WORD_TABLE);
-    const userSet = new Set(records.map(r => getFieldValue(r.fields.user)).filter(u => u));
-    return Array.from(userSet).sort();
+    const userMap = new Map();
+    for (const record of records) {
+        const user = getFieldValue(record.fields.user);
+        if (!user) continue;
+        const key = normalizeUserKey(user);
+        if (!userMap.has(key) || user === key) userMap.set(key, user);
+    }
+    return Array.from(userMap.values()).sort((a, b) => a.localeCompare(b));
 }
 
 async function getAllStats() {
@@ -1504,8 +1529,9 @@ function resolveLearningSettings(userId, userRecord) {
 
 async function getUserLearningSettings(userId) {
     const records = await getRecords(STATS_TABLE);
-    const userRecord = records.find(record => getFieldValue(record.fields.user) === userId);
-    return resolveLearningSettings(userId, userRecord || null);
+    const userRecord = findCanonicalUserRecord(records, userId);
+    const canonicalUserId = getFieldValue(userRecord?.fields?.user) || userId;
+    return resolveLearningSettings(canonicalUserId, userRecord || null);
 }
 
 async function writeLearningSettingsRecord(userRecord, updateFields) {
@@ -1526,9 +1552,10 @@ async function writeLearningSettingsRecord(userRecord, updateFields) {
 }
 async function updateUserLearningSettings(userId, requestedLevel) {
     const records = await getRecords(STATS_TABLE);
-    const userRecord = records.find(record => getFieldValue(record.fields.user) === userId);
-    const hasPendingSettings = Boolean(learningSettingsOverlay.get(userId));
-    const current = resolveLearningSettings(userId, userRecord || null);
+    const userRecord = findCanonicalUserRecord(records, userId);
+    const canonicalUserId = getFieldValue(userRecord?.fields?.user) || userId;
+    const hasPendingSettings = Boolean(learningSettingsOverlay.get(canonicalUserId));
+    const current = resolveLearningSettings(canonicalUserId, userRecord || null);
     const change = validateLearningLevelChange({
         currentLevel: current.learningLevel,
         requestedLevel,
@@ -1548,15 +1575,15 @@ async function updateUserLearningSettings(userId, requestedLevel) {
     }
 
     const updateFields = change.unchanged
-        ? { user: userId, Learning_Level: change.learningLevel }
+        ? { user: canonicalUserId, Learning_Level: change.learningLevel }
         : {
-            user: userId,
+            user: canonicalUserId,
             Learning_Level: change.learningLevel,
             Level_Changed_At: Date.now(),
             Question_Cache_Status: 'building',
         };
     const settings = {
-        userId,
+        userId: canonicalUserId,
         learningLevel: change.learningLevel,
         levelChangedAt: updateFields.Level_Changed_At || current.levelChangedAt,
         nextLevelChangeAt: change.nextLevelChangeAt,
@@ -1567,7 +1594,7 @@ async function updateUserLearningSettings(userId, requestedLevel) {
     if (!(change.unchanged && !userRecord && hasPendingSettings)) {
         await writeLearningSettingsRecord(userRecord, updateFields);
     }
-    learningSettingsOverlay.set(userId, settings);
+    learningSettingsOverlay.set(canonicalUserId, settings);
 
     return {
         success: true,
@@ -1577,7 +1604,7 @@ async function updateUserLearningSettings(userId, requestedLevel) {
 
 async function getQuestionCacheStatus(userId) {
     const rows = (await getQuestionCacheRecords())
-        .filter(record => getFieldValue(record.fields?.user) === userId);
+        .filter(record => userMatches(record.fields?.user, userId));
     return {
         configured: Boolean(QUESTION_CACHE_TABLE),
         ...summarizeCacheStatus(rows),
@@ -2093,7 +2120,7 @@ async function updateMultiDefinition(targetUser, words) {
     console.log('updateMultiDefinition called:', targetUser, words);
     const records = await getRecords(WORD_TABLE);
     console.log('getAllStats records', records.length);
-    const userRecords = records.filter(r => r.fields.user === targetUser && words.includes(r.fields.Word));
+    const userRecords = records.filter(r => userMatches(r.fields.user, targetUser) && words.includes(r.fields.Word));
     console.log('getAllStats user records', userRecords.length);
     for (const record of userRecords) {
         console.log('getAllStats user record', record.record_id, record.fields.Word);
@@ -2103,7 +2130,7 @@ async function updateMultiDefinition(targetUser, words) {
 
 async function getWord(userId, word) {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    const record = records.find(r => userMatches(r.fields.user, userId) && r.fields.Word?.toLowerCase() === word.toLowerCase());
     if (!record) return null;
     return {
         word: record.fields.Word,
@@ -2144,8 +2171,8 @@ async function getWordByRecordId(recordId) {
 async function updateWord(userId, word, fields) {
     const records = await getRecords(WORD_TABLE);
     const record = fields.recordId
-        ? records.find(r => r.record_id === fields.recordId && (!userId || r.fields.user === userId))
-        : records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+        ? records.find(r => r.record_id === fields.recordId && (!userId || userMatches(r.fields.user, userId)))
+        : records.find(r => userMatches(r.fields.user, userId) && r.fields.Word?.toLowerCase() === word.toLowerCase());
     if (!record) return { error: 'Word not found' };
     const updateFields = {};
     if (fields.word !== undefined) updateFields.Word = fields.word;
@@ -2164,7 +2191,7 @@ async function updateWord(userId, word, fields) {
 async function getReviewWords(userId) {
     const records = await getRecords(WORD_TABLE);
     return records
-        .filter(r => !userId || r.fields.user === userId)
+        .filter(r => !userId || userMatches(r.fields.user, userId))
         .filter(r => getFieldValue(r.fields.Quality_Flags).trim() || getFieldValue(r.fields.Quality_Note).trim())
         .filter(r => !isMasteredStatus(r.fields.Status))
         .map(mapWordRecord);
@@ -2189,9 +2216,9 @@ async function clearWordReview(recordId) {
 async function rebuildUserWordStatus(userId) {
     // Recalculate status from current word and assessment records.
     const allWords = await getRecords(WORD_TABLE);
-    const userWords = allWords.filter(r => r.fields?.user === userId || getFieldValue(r.fields?.user) === userId);
+    const userWords = allWords.filter(r => userMatches(r.fields?.user, userId));
     const testRecords = await getRecords(TEST_TABLE);
-    const userTests = testRecords.filter(r => r.fields?.user === userId || getFieldValue(r.fields?.user) === userId);
+    const userTests = testRecords.filter(r => userMatches(r.fields?.user, userId));
 
     // Count submitted real-test answers by word.
     const wordCorrectMap = {};
@@ -2230,7 +2257,7 @@ async function deleteUserTestData(userId, days = null) {
     // Delete generated test records for a user, optionally limited by age.
     const testRecords = await getRecords(TEST_TABLE);
     let userTests = testRecords.filter(r => {
-        const belongsToUser = r.fields?.user === userId || getFieldValue(r.fields?.user) === userId;
+        const belongsToUser = userMatches(r.fields?.user, userId);
         return belongsToUser && isTestAssessment(getFieldValue(r.fields?.test_id));
     });
 
@@ -2291,7 +2318,7 @@ async function deleteUserTestData(userId, days = null) {
 async function rebuildUserStats(userId) {
     const testRecords = await getRecords(TEST_TABLE);
     const userTests = testRecords.filter(r => {
-        const belongsToUser = r.fields?.user === userId || getFieldValue(r.fields?.user) === userId;
+        const belongsToUser = userMatches(r.fields?.user, userId);
         return belongsToUser && isRealAssessment(getFieldValue(r.fields?.test_id));
     });
 
@@ -2319,7 +2346,7 @@ async function rebuildUserStats(userId) {
 
     // Sync aggregate stats rows for this user.
     const statsRecords = await getRecords(STATS_TABLE);
-    const userStats = statsRecords.filter(r => r.fields?.user === userId || getFieldValue(r.fields?.user) === userId);
+    const userStats = statsRecords.filter(r => userMatches(r.fields?.user, userId));
 
     for (const stat of userStats) {
         await updateRecord(STATS_TABLE, stat.record_id, {
@@ -2334,7 +2361,7 @@ async function rebuildUserStats(userId) {
 
 async function deleteWord(userId, word) {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(r => r.fields.user === userId && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    const record = records.find(r => userMatches(r.fields.user, userId) && r.fields.Word?.toLowerCase() === word.toLowerCase());
     if (!record) return { error: 'Word not found' };
     const token = await getToken();
     await new Promise((resolve, reject) => {
