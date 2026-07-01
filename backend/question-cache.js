@@ -96,7 +96,10 @@ function isCacheQuestionReady(row) {
         isQuestionQualityAcceptable(question) &&
         Array.isArray(question.optionMeanings) &&
         question.optionMeanings.length === 4 &&
-        question.optionMeanings.every(meaning => Boolean(String(meaning || '').trim()));
+        question.optionMeanings.every(meaning => {
+            const s = String(meaning || '').trim();
+            return Boolean(s) && !s.startsWith('中文释义补充');
+        });
 }
 
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {

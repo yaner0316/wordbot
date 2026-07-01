@@ -192,3 +192,15 @@ test('rejects cached terse English AI garbled-text explanations', () => {
         answer: 'C',
     })), false);
 });
+
+test('rejects cached questions whose option_meanings contain the failure placeholder', () => {
+    assert.equal(isCacheQuestionReady(question({
+        option_meanings: JSON.stringify(['苹果', '中文释义补充失败', '椅子', '书']),
+    })), false);
+    assert.equal(isCacheQuestionReady(question({
+        option_meanings: JSON.stringify(['苹果', '梨', '椅子', '中文释义补充']),
+    })), false);
+    assert.equal(isCacheQuestionReady(question({
+        option_meanings: JSON.stringify(['苹果', '梨', '椅子', '书']),
+    })), true);
+});

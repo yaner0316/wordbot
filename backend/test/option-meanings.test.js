@@ -85,3 +85,27 @@ test('keeps the tested meaning separate for multi-definition questions', async (
     assert.equal(questions[0].optionMeanings[0], '银行');
     assert.equal(questions[1].optionMeanings[0], '河岸');
 });
+
+test('retries translateWords once for words that returned empty on the first call', async () => {
+    const questions = [{
+        answer: 'A',
+        correctMeaning: '仁慈的',
+        options: ['A. benevolent', 'B. stoic', 'C. resilient', 'D. candid'],
+    }];
+    let callCount = 0;
+
+    await enrichQuestionOptionMeanings({
+        questions,
+        records: [],
+        translateWords: async words => {
+            callCount++;
+            if (callCount === 1) return { stoic: '坚忍的' };
+            return { resilient: '有韧性的', candid: '坦率的' };
+        },
+    });
+
+    assert.equal(callCount, 2);
+    assert.equal(questions[0].optionMeanings[1], '坚忍的');
+    assert.equal(questions[0].optionMeanings[2], '有韧性的');
+    assert.equal(questions[0].optionMeanings[3], '坦率的');
+});

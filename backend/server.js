@@ -289,6 +289,34 @@ app.post('/api/admin/questionCache/rebuild', async (req, res) => {
     }
 });
 
+app.post('/api/admin/questionCache/rebuildAll', async (req, res) => {
+    try {
+        const { flush } = req.body;
+        const users = await getAllUsers();
+        const results = [];
+        for (const userId of users) {
+            let flushed = null;
+            if (flush) {
+                flushed = await deleteQuestionCacheRows(userId, null);
+            }
+            const result = startQuestionCacheRebuild(userId);
+            results.push({ ...result, userId, flushed });
+        }
+        res.status(202).json({ total: users.length, results });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/questionCache/rebuildAll/status', async (req, res) => {
+    const entries = [...questionCacheRebuildJobs.entries()].map(([key, job]) => ({
+        userId: key,
+        ...job,
+        error: job.error || undefined,
+    }));
+    res.json({ jobs: entries });
+});
+
 app.post('/api/admin/addWord', async (req, res) => {
     try {
         const { targetUser, word, meaning, pos, context } = req.body;
@@ -421,14 +449,43 @@ app.post('/api/admin/cleanup', express.json(), async (req, res) => {
     }
 });
 
+const backfillJobs = new Map();
+
+function startBackfill(userId) {
+    const key = userId || '__all__';
+    const current = backfillJobs.get(key);
+    if (current?.status === 'running') {
+        return { started: false, alreadyRunning: true, userId: userId || null, startedAt: current.startedAt };
+    }
+    const job = { status: 'running', startedAt: Date.now() };
+    backfillJobs.set(key, job);
+    backfillTranslations(userId || null)
+        .then(result => {
+            backfillJobs.set(key, { ...job, status: 'completed', finishedAt: Date.now(), result });
+            console.log(`backfill completed user=${key}`, JSON.stringify(result));
+        })
+        .catch(error => {
+            backfillJobs.set(key, { ...job, status: 'failed', finishedAt: Date.now(), error: error.message });
+            console.error(`backfill failed user=${key}: ${error.message}`);
+        });
+    return { started: true, userId: userId || null, startedAt: job.startedAt };
+}
+
 app.post('/api/admin/backfill', async (req, res) => {
     try {
         const { userId } = req.body;
-        const result = await backfillTranslations(userId || null);
-        res.json(result);
+        const result = startBackfill(userId || null);
+        res.status(202).json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+app.get('/api/admin/backfill/status', async (req, res) => {
+    const { userId } = req.query;
+    const key = userId || '__all__';
+    const job = backfillJobs.get(key);
+    res.json(job || { status: 'not_started' });
 });
 const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
 

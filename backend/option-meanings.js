@@ -50,8 +50,14 @@ async function enrichQuestionOptionMeanings({
         ? await translateWords(missingWords)
         : {};
 
+    const retryWords = missingWords.filter(word => !fieldText(translated?.[word]).trim());
+    const retried = retryWords.length > 0
+        ? await translateWords(retryWords).catch(() => ({}))
+        : {};
+    const merged = { ...translated, ...retried };
+
     for (const word of missingWords) {
-        const meaning = fieldText(translated?.[word]).trim();
+        const meaning = fieldText(merged?.[word]).trim();
         if (!meaning) continue;
         knownMeanings.set(word, meaning);
         for (const record of recordIndex.get(word) || []) {
