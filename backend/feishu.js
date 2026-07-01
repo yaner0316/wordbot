@@ -501,6 +501,7 @@ async function getDistractorPool(records = null) {
                 pos: getFieldValue(r.fields.POS),
                 meaning: getFieldValue(r.fields.Meaning),
                 CN_Meaning: cn,
+                Context_CN: getFieldValue(r.fields.Context_CN),
                 distractors: dists,
                 context: context,
                 rawContext: context,
@@ -1480,15 +1481,21 @@ async function addWord(targetUser, wordData) {
     if (!Word || !Meaning) {
         throw new Error('Word and meaning are required');
     }
+    const [cnMeaning, contextCN] = await Promise.all([
+        translateToCN(Meaning),
+        Context ? translateContextToCN(Context) : Promise.resolve(null),
+    ]);
     const fields = {
         user: targetUser,
         Word: toSimp(Word),
         Meaning: toSimp(Meaning),
+        CN_Meaning: cnMeaning || '',
         Status: 'Pending',
         record_time: Date.now()
     };
     if (POS) fields.POS = POS;
     if (Context) fields.Context = toSimp(Context);
+    if (contextCN) fields.Context_CN = toSimp(contextCN);
     
     await addRecord(WORD_TABLE, fields);
     return { success: true, word: Word };
@@ -1929,6 +1936,19 @@ async function translateToCN(text) {
     return null;
 }
 
+async function translateContextToCN(text) {
+    if (!text) return null;
+    const prompt = `Translate the following English sentence to Simplified Chinese. Return ONLY the Chinese translation, no explanations.\n\nEnglish: ${text}`;
+    try {
+        const result = await callMiniMaxAPI(prompt);
+        if (!result) return null;
+        const trimmed = result.trim();
+        if (hasAiMetaResponse(trimmed)) return null;
+        if (!/[\u4e00-\u9fff]/.test(trimmed)) return null;
+        return toSimp(trimmed);
+    } catch (e) { }
+    return null;
+}
 async function translateWordsToCN(words) {
     if (!words.length) return {};
     const translations = {};
@@ -2058,6 +2078,7 @@ async function prepareWordFields(targetUser, word, fallbackWords) {
     if (!cnMeaning) {
         cnMeaning = '';
     }
+    const contextCN = example ? (await translateContextToCN(example) || '') : '';
 
     const wordFields = {
         user: targetUser,
@@ -2070,6 +2091,7 @@ async function prepareWordFields(targetUser, word, fallbackWords) {
     };
     if (def.pos) wordFields.POS = def.pos;
     if (example) wordFields.Context = example;
+    if (contextCN) wordFields.Context_CN = contextCN;
 
     return { wordFields, distractors, cnMeaning };
 }
@@ -2381,4 +2403,57 @@ async function deleteWord(userId, word) {
     return { success: true };
 }
 
-module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken };
+async function backfillTranslations(filterUser) {
+    const all = await getRecords(WORD_TABLE);
+    const records = filterUser
+        ? all.filter(record => userMatches(record.fields.user, filterUser))
+        : all;
+
+    const BATCH = 20;
+    let cnFilled = 0;
+    let cnSkipped = 0;
+    let ctxFilled = 0;
+    let ctxSkipped = 0;
+
+    const needCN = records.filter(record => {
+        const cn = getFieldValue(record.fields.CN_Meaning).trim();
+        const meaning = getFieldValue(record.fields.Meaning).trim();
+        return meaning && !hasMeaningfulChineseMeaning(cn);
+    });
+
+    for (let i = 0; i < needCN.length; i += BATCH) {
+        const batch = needCN.slice(i, i + BATCH);
+        const meanings = batch.map(record => getFieldValue(record.fields.Meaning).trim());
+        const translated = await translateWordsToCN(meanings);
+        for (const record of batch) {
+            const meaning = getFieldValue(record.fields.Meaning).trim();
+            const cn = translated[meaning];
+            if (cn) {
+                await updateRecord(WORD_TABLE, record.record_id, { CN_Meaning: cn });
+                cnFilled++;
+            } else {
+                cnSkipped++;
+            }
+        }
+    }
+
+    const needCtx = records.filter(record => {
+        const ctxCN = getFieldValue(record.fields.Context_CN).trim();
+        const ctx = getFieldValue(record.fields.Context).trim();
+        return ctx && !ctxCN;
+    });
+
+    for (const record of needCtx) {
+        const ctx = getFieldValue(record.fields.Context).trim();
+        const cn = await translateContextToCN(ctx);
+        if (cn) {
+            await updateRecord(WORD_TABLE, record.record_id, { Context_CN: cn });
+            ctxFilled++;
+        } else {
+            ctxSkipped++;
+        }
+    }
+
+    return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
+}
+module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };

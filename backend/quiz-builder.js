@@ -1,4 +1,4 @@
-const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
+﻿const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
 
 function createQuizBuilder({
     choose,
@@ -135,6 +135,7 @@ function createQuizBuilder({
                 articleNormalized,
                 correctMeaning: info.CN_Meaning || '',
             };
+            if (info.Context_CN) question.contextCN = info.Context_CN;
         } else if (qType === 2) {
             const meaning = (info.meaning || '').split(';')[0] || info.meaning || '';
             question = {

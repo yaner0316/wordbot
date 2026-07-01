@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords } = require('./feishu');
+const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -421,6 +421,15 @@ app.post('/api/admin/cleanup', express.json(), async (req, res) => {
     }
 });
 
+app.post('/api/admin/backfill', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        const result = await backfillTranslations(userId || null);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
 
 function startServer(port = PORT) {
