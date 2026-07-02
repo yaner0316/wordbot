@@ -289,6 +289,11 @@ test('history endpoint preserves grouped history response shape', async () => {
         assert.equal(body.history[0].testId, 'real-contract-quiz');
         assert.ok(Array.isArray(body.history[0].questions));
         assert.equal(body.history[0].questions[0].word, 'apple');
+        assert.equal(body.history[0].questions[0].question, 'a fruit');
+        assert.deepEqual(body.history[0].questions[0].options, ['A. apple', 'B. banana']);
+        assert.equal(body.history[0].questions[0].yourAnswer, 'A');
+        assert.equal(body.history[0].questions[0].correctAnswer, 'A');
+        assert.equal(body.history[0].questions[0].isCorrect, true);
     });
 });
 test('saving unchanged learning level starts rebuild when selected level cache is not ready', async () => {

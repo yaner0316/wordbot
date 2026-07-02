@@ -5,6 +5,13 @@ const {
 } = require('./mastery-evidence');
 const { calculateGameReward } = require('./game-reward');
 
+const DEFAULT_RECORD_LOAD_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2500];
+
+async function sleep(ms) {
+    if (!ms) return;
+    await new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function fieldValue(value) {
     if (value === undefined || value === null) return '';
     if (Array.isArray(value)) return value.length > 0 ? fieldValue(value[0]) : '';
@@ -72,11 +79,22 @@ function createSubmissionCoordinator({
     isSubmitted,
     rebuildResult,
     settle,
+    recordLoadRetryDelaysMs = DEFAULT_RECORD_LOAD_RETRY_DELAYS_MS,
 }) {
     const locks = new Map();
 
+    async function loadRecordsWithRetry(testId) {
+        let records = await loadRecords(testId);
+        for (const delayMs of recordLoadRetryDelaysMs) {
+            if (records.length > 0) return records;
+            await sleep(delayMs);
+            records = await loadRecords(testId);
+        }
+        return records;
+    }
+
     async function execute(userId, testId, answers) {
-        const records = await loadRecords(testId);
+        const records = await loadRecordsWithRetry(testId);
         if (records.length === 0) {
             throw new Error('未找到测试记录');
         }

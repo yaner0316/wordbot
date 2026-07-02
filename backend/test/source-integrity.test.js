@@ -207,6 +207,20 @@ test('question cache rebuild only uses meaningful Chinese meanings for type 3', 
     );
 });
 
+test('question cache rebuild enriches type-one contextual meanings before option meanings', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+    const contextMeaningIndex = rebuildSource.indexOf('enrichContextualCorrectMeanings');
+    const optionMeaningIndex = rebuildSource.indexOf('enrichQuestionOptionMeanings');
+    const cacheWriteIndex = rebuildSource.indexOf('appendReadyCacheRows');
+
+    assert.ok(contextMeaningIndex >= 0, 'cache rebuild should enrich type-one contextual meanings');
+    assert.ok(optionMeaningIndex > contextMeaningIndex, 'option meanings should use contextual correct meanings');
+    assert.ok(cacheWriteIndex > contextMeaningIndex, 'cache rows should store contextual correct meanings');
+});
+
 test('question cache rebuild writes ready rows incrementally before the full rebuild finishes', () => {
     const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
     const end = feishuSource.indexOf('async function validateWords');

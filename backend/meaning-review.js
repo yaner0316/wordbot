@@ -32,8 +32,26 @@ function isMeaningAnswerCorrect(answer, expectedMeaning) {
     });
 }
 
+function getPermutations(arr) {
+    if (arr.length <= 1) return [arr];
+    return arr.flatMap((item, i) =>
+        getPermutations([...arr.slice(0, i), ...arr.slice(i + 1)])
+            .map(perm => [item, ...perm])
+    );
+}
+
+// All submitted texts must match all expected meanings in any order.
+function isMultiMeaningCorrect(submittedTexts, expectedMeanings) {
+    if (!Array.isArray(submittedTexts) || !Array.isArray(expectedMeanings)) return false;
+    if (submittedTexts.length !== expectedMeanings.length) return false;
+    return getPermutations(expectedMeanings).some(perm =>
+        perm.every((expected, i) => isMeaningAnswerCorrect(submittedTexts[i], expected))
+    );
+}
+
 module.exports = {
     isMeaningAnswerCorrect,
+    isMultiMeaningCorrect,
     normalizeMeaningText,
     splitMeaningParts,
 };

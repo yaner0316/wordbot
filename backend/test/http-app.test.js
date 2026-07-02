@@ -26,57 +26,55 @@ test('auth endpoints call the server-side account service', async () => {
         const registerResponse = await fetch(baseUrl + '/api/auth/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: 'Draggy', phone: '15863061969', password: 'secret1' }),
+            body: JSON.stringify({ username: 'Draggy', password: 'secret1' }),
         });
         const loginResponse = await fetch(baseUrl + '/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ identifier: '15863061969', password: 'secret1' }),
+            body: JSON.stringify({ identifier: 'Draggy', password: 'secret1' }),
         });
 
         assert.equal(registerResponse.status, 200);
         assert.equal(loginResponse.status, 200);
         assert.deepEqual(calls, [
-            ['register', { username: 'Draggy', phone: '15863061969', password: 'secret1' }],
-            ['login', { username: '15863061969', password: 'secret1' }],
+            ['register', { username: 'Draggy', password: 'secret1' }],
+            ['login', { username: 'Draggy', password: 'secret1' }],
         ]);
     });
 });
 
-test('auth otp endpoints support phone login and parent console verification', async () => {
+test('parent auth endpoint verifies the parent account in child context', async () => {
     const calls = [];
     const app = createApp({
         submitAnswers: async () => ({}),
-        requestAuthOtp: async input => { calls.push(['requestOtp', input]); return { sent: true, devOtp: '123456' }; },
-        loginWithOtp: async input => { calls.push(['otpLogin', input]); return { user: 'Draggy' }; },
-        verifyParentOtp: async input => { calls.push(['parentOtp', input]); return { ok: true, user: input.user }; },
+        verifyParentLogin: async input => { calls.push(['parentLogin', input]); return { ok: true, user: input.user, parentUsername: input.parentUsername }; },
     });
 
     await withServer(app, async baseUrl => {
-        const requestResponse = await fetch(baseUrl + '/api/auth/requestOtp', {
+        const parentResponse = await fetch(baseUrl + '/api/auth/parent/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: '15863061969', purpose: 'login' }),
-        });
-        const loginResponse = await fetch(baseUrl + '/api/auth/otpLogin', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone: '15863061969', otp: '123456' }),
-        });
-        const parentResponse = await fetch(baseUrl + '/api/auth/parentOtp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user: 'Draggy', phone: '15863061969', otp: '123456' }),
+            body: JSON.stringify({ user: 'Draggy', parentUsername: 'xiaoyan', password: '111111' }),
         });
 
-        assert.equal(requestResponse.status, 200);
-        assert.equal(loginResponse.status, 200);
         assert.equal(parentResponse.status, 200);
         assert.deepEqual(calls, [
-            ['requestOtp', { phone: '15863061969', purpose: 'login' }],
-            ['otpLogin', { phone: '15863061969', otp: '123456' }],
-            ['parentOtp', { user: 'Draggy', phone: '15863061969', otp: '123456' }],
+            ['parentLogin', { user: 'Draggy', parentUsername: 'xiaoyan', password: '111111' }],
         ]);
+    });
+});
+
+test('otp auth endpoints are no longer exposed', async () => {
+    const app = createApp({ submitAnswers: async () => ({}) });
+    await withServer(app, async baseUrl => {
+        for (const path of ['/api/auth/requestOtp', '/api/auth/otpLogin', '/api/auth/parentOtp']) {
+            const response = await fetch(baseUrl + path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: '15863061969', otp: '123456' }),
+            });
+            assert.equal(response.status, 404);
+        }
     });
 });
 

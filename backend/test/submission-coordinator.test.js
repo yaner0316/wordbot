@@ -128,6 +128,41 @@ test('coordinator serializes concurrent submissions for the same quiz', async ()
     assert.equal(secondResult.alreadySubmitted, true);
 });
 
+
+test('coordinator waits for quiz records that are briefly invisible', async () => {
+    let loads = 0;
+    let settled = false;
+    const records = [{
+        fields: {
+            user: 'student',
+            test_id: 'quiz-1',
+            word: 'apple',
+            correct_answer: 'A',
+        },
+    }];
+    const coordinator = createSubmissionCoordinator({
+        loadRecords: async () => {
+            loads++;
+            return loads === 1 ? [] : records;
+        },
+        recordLoadRetryDelaysMs: [0],
+        isSubmitted: () => false,
+        rebuildResult: () => {
+            throw new Error('should not rebuild');
+        },
+        settle: async () => {
+            settled = true;
+            return { correct: 1, total: 1 };
+        },
+    });
+
+    const result = await coordinator.submit('student', 'quiz-1', [{ option: 0, confidence: 'sure' }]);
+
+    assert.equal(loads, 2);
+    assert.equal(settled, true);
+    assert.deepEqual(result, { correct: 1, total: 1 });
+});
+
 test('coordinator rejects a quiz that belongs to another user', async () => {
     const coordinator = createSubmissionCoordinator({
         loadRecords: async () => [{

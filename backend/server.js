@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
+const { registerUser, loginUser, verifyParentLogin, setParentCredentials, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -41,14 +41,16 @@ const sameUser = (left, right) => {
 };
 
 const parseOptions = (v) => {
-    const raw = getFieldVal(v);
+    if (!v) return [];
+    if (Array.isArray(v)) return v.map(getFieldVal).filter(Boolean);
+    const raw = typeof v === 'string' ? v.trim() : getFieldVal(v).trim();
     if (!raw) return [];
     try {
         const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-        return raw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
-    }
+        if (Array.isArray(parsed)) return parsed.map(getFieldVal).filter(Boolean);
+        if (typeof parsed === 'string') return parseOptions(parsed);
+    } catch (e) {}
+    return raw.split(/\n|,/).map(s => s.trim()).filter(Boolean);
 };
 
 
@@ -95,9 +97,8 @@ const app = createApp({
     submitAnswers,
     registerUser,
     loginUser,
-    requestAuthOtp,
-    loginWithOtp,
-    verifyParentOtp,
+    verifyParentLogin,
+    setParentCredentials,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,

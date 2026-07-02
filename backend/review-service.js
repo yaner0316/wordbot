@@ -1,5 +1,5 @@
 const { getAssessmentMode } = require('./assessment-mode');
-const { isMeaningAnswerCorrect } = require('./meaning-review');
+const { isMeaningAnswerCorrect, isMultiMeaningCorrect } = require('./meaning-review');
 const { buildReviewRecordFields } = require('./review-record');
 const {
     REVIEW_STATUS,
@@ -29,6 +29,29 @@ function buildMeaningRecallQuestion({ reviewId, source, info }) {
         record_id: source.recordId,
         testId: reviewId,
     };
+}
+
+// Merge same-word type-4 questions into a single multi-def question.
+// Writes one DB row per logical question (multi-def becomes one row with JSON array answer).
+function mergeMultiDefQuestions(questions) {
+    const wordIndex = new Map(); // lowercase word -> position in result
+    const result = [];
+    for (const q of questions) {
+        if (q.type !== 4) {
+            result.push({ ...q });
+            continue;
+        }
+        const key = String(q.word || '').toLowerCase();
+        if (wordIndex.has(key)) {
+            const existing = result[wordIndex.get(key)];
+            existing.correctMeanings = existing.correctMeanings || [existing.correctMeaning || ''];
+            existing.correctMeanings.push(q.correctMeaning || '');
+        } else {
+            wordIndex.set(key, result.length);
+            result.push({ ...q });
+        }
+    }
+    return result;
 }
 
 function createReviewService({
@@ -127,6 +150,22 @@ function createReviewService({
                     const info = await loadWordInfo(recordId);
                     context = contextFromWordInfo(info, type);
                 }
+                let correctMeaning = '';
+                let correctMeanings = null;
+                if (type === 4) {
+                    const raw = fieldValue(record.fields?.correct_answer);
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (Array.isArray(parsed) && parsed.length > 1) {
+                            correctMeanings = parsed;
+                            correctMeaning = parsed[0];
+                        } else {
+                            correctMeaning = raw;
+                        }
+                    } catch {
+                        correctMeaning = raw;
+                    }
+                }
                 return {
                     recordId,
                     type,
@@ -135,6 +174,8 @@ function createReviewService({
                     options: parseOptions(record.fields?.options),
                     answer: type === 4 ? undefined : fieldValue(record.fields?.correct_answer),
                     answerMode: type === 4 ? 'cn_meaning' : undefined,
+                    correctMeaning,
+                    correctMeanings,
                 };
             })),
         };
@@ -207,8 +248,11 @@ function createReviewService({
             questions.push({ ...question, sourceQuestionId: source.sourceQuestionId });
         }
 
+        // Merge same-word type-4 questions into one multi-def question
+        const mergedQuestions = mergeMultiDefQuestions(questions);
+
         const baseTime = Date.now();
-        const rows = questions.map((question, index) => ({
+        const rows = mergedQuestions.map((question, index) => ({
             user: userId,
             test_id: reviewId,
             record_id: question.record_id,
@@ -216,7 +260,9 @@ function createReviewService({
             question_type: question.type,
             context: question.context,
             correct_answer: question.type === 4
-                ? question.correctMeaning
+                ? (question.correctMeanings
+                    ? JSON.stringify(question.correctMeanings)
+                    : question.correctMeaning)
                 : question.answer,
             options: JSON.stringify(question.options),
             test_time: baseTime + index,
@@ -236,7 +282,7 @@ function createReviewService({
             round,
             mode,
             status: REVIEW_STATUS.ACTIVE,
-            questions: questions.map(question => ({
+            questions: mergedQuestions.map(question => ({
                 recordId: question.record_id,
                 type: question.type,
                 word: question.word,
@@ -244,6 +290,8 @@ function createReviewService({
                 options: question.options,
                 answer: question.type === 4 ? undefined : question.answer,
                 answerMode: question.type === 4 ? 'cn_meaning' : question.answerMode,
+                correctMeaning: question.correctMeaning || '',
+                correctMeanings: question.correctMeanings || null,
             })),
         };
     }
@@ -288,9 +336,25 @@ function createReviewService({
             for (let index = 0; index < sortedRecords.length; index++) {
                 const record = sortedRecords[index];
                 const answer = answers[index] || {};
-                const submitted = String(answer.text ?? '').trim();
-                const expected = fieldValue(record.fields?.correct_answer);
-                const correct = isMeaningAnswerCorrect(submitted, expected);
+                const expectedRaw = fieldValue(record.fields?.correct_answer);
+
+                // Detect multi-def: correct_answer is a JSON array
+                let expectedMeanings = null;
+                try {
+                    const parsed = JSON.parse(expectedRaw);
+                    if (Array.isArray(parsed) && parsed.length > 1) expectedMeanings = parsed;
+                } catch { /* single-def */ }
+
+                let submitted, correct, yourTexts;
+                if (expectedMeanings) {
+                    yourTexts = (answer.texts || []).map(t => String(t ?? '').trim());
+                    correct = isMultiMeaningCorrect(yourTexts, expectedMeanings);
+                    submitted = yourTexts.join(' / ');
+                } else {
+                    submitted = String(answer.text ?? '').trim();
+                    correct = isMeaningAnswerCorrect(submitted, expectedRaw);
+                }
+
                 const recordId = fieldValue(record.fields?.record_id);
                 await updateReviewRecord(record.record_id, {
                     your_answer: submitted,
@@ -301,7 +365,9 @@ function createReviewService({
                     word: fieldValue(record.fields?.word),
                     recordId,
                     your: submitted,
-                    answer: expected,
+                    yourTexts: yourTexts || null,
+                    answer: expectedRaw,
+                    expectedMeanings: expectedMeanings || null,
                     correct,
                     confidence: answer.confidence || '',
                 });

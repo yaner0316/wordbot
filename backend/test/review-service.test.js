@@ -112,6 +112,7 @@ test('creates Chinese meaning recall questions for wrong answers', async () => {
     assert.equal(round.questions[0].word, 'beta');
     assert.deepEqual(round.questions[0].options, []);
     assert.equal(round.questions[0].answer, undefined);
+    assert.equal(round.questions[0].correctMeaning, 'definition clue');
     assert.equal(added[0][0].question_type, 4);
     assert.equal(added[0][0].correct_answer, 'definition clue');
     assert.equal(added[0][0].options, '[]');
@@ -192,6 +193,7 @@ test('returns the existing active round for an idempotent retry', async () => {
 
     assert.equal(second.reviewId, first.reviewId);
     assert.equal(second.questions[0].context, 'definition clue');
+    assert.equal(second.questions[0].correctMeaning, 'definition clue');
     assert.equal(added.length, 1);
 });
 

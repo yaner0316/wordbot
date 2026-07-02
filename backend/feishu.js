@@ -1,5 +1,6 @@
 const https = require('https');
 const { getFormKey, inflectWord } = require('./word-inflector');
+const { selectContextualDistractors } = require('./generate-distractors');
 const { createAuthService } = require('./auth-service');
 const { createTableCache } = require('./table-cache');
 const crypto = require('crypto');
@@ -28,6 +29,7 @@ const {
     normalizeQuizArticleContexts,
 } = require('./article-context');
 const { enrichQuestionOptionMeanings } = require('./option-meanings');
+const { enrichContextualCorrectMeanings } = require('./context-meaning');
 const { createQuizBuilder } = require('./quiz-builder');
 const { hasAiMetaResponse, hasMeaningfulChineseMeaning } = require('./question-quality');
 const {
@@ -296,8 +298,10 @@ const ACCOUNT_FIELDS = [
     { field_name: 'auth_password_hash', type: 1 },
     { field_name: 'auth_password_salt', type: 1 },
     { field_name: 'auth_created_at', type: 5 },
-    { field_name: 'phone', type: 1 },
-    { field_name: 'phone_verified_at', type: 5 },
+    { field_name: 'parent_username', type: 1 },
+    { field_name: 'parent_password_hash', type: 1 },
+    { field_name: 'parent_password_salt', type: 1 },
+    { field_name: 'parent_created_at', type: 5 },
 ];
 const LEARNING_SETTINGS_FIELDS = [
     { field_name: 'Learning_Level', type: 1 },
@@ -372,21 +376,11 @@ async function findAccountRecord(userId) {
     if (targeted) return targeted;
     return findCanonicalUserRecord(await getRecords(STATS_TABLE), userId);
 }
-
-async function findAccountByPhone(phone) {
-    const records = await searchRecords(
-        STATS_TABLE,
-        { conjunction: 'and', conditions: [{ field_name: 'phone', operator: 'is', value: [phone] }] },
-        null,
-        800
-    );
-    return records.find(record => getFieldValue(record.fields?.phone).replace(/\D/g, '') === phone) || null;
-}
+
 
 const authService = createAuthService({
     listAccountRecords: () => getRecords(STATS_TABLE),
-    findAccountRecord,
-    findAccountByPhone,
+    findAccountRecord,
     listWordUsers: getAllUsers,
     addAccountRecord: fields => addRecord(STATS_TABLE, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
     updateAccountRecord: (recordId, fields) => updateRecord(STATS_TABLE, recordId, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
@@ -402,16 +396,16 @@ async function loginUser(input) {
     return authService.login(input);
 }
 
-async function requestAuthOtp(input) {
-    return authService.requestOtp(input);
+async function verifyParentLogin(input) {
+    return authService.verifyParentLogin(input);
 }
 
-async function loginWithOtp(input) {
-    return authService.loginWithOtp(input);
+async function setParentCredentials(input) {
+    return authService.setParentCredentials(input);
 }
 
-async function verifyParentOtp(input) {
-    return authService.verifyParentOtp(input);
+async function initializeParentCredentials(input) {
+    return authService.initializeParentCredentials(input);
 }
 async function getQuestionCacheRecords() {
     if (!QUESTION_CACHE_TABLE) return [];
@@ -493,7 +487,7 @@ async function getDistractorPool(records = null) {
         const w = getFieldValue(r.fields.Word).toLowerCase();
         if (w) {
             const cn = getFieldValue(r.fields.CN_Meaning).trim();
-            const dists = getFieldValue(r.fields.Distractors).split(',').map(s => s.trim()).filter(s => s);
+            const dists = getFieldValue(r.fields.Distractors).split(',').map(s => s.trim()).filter(s => s && !isReservedTestWord(s));
             const context = getFieldValue(r.fields.Context);
             
             pool[r.record_id] = {
@@ -525,6 +519,7 @@ async function getPendingWords(userId, records = null) {
     records = records || await getRecords(WORD_TABLE);
     return records
         .filter(r => userMatches(r.fields.user, userId) && !isMasteredStatus(r.fields.Status))
+        .sort((a, b) => (a.created_time || 0) - (b.created_time || 0))
         .map(r => ({
             record_id: r.record_id,
             word: getFieldValue(r.fields.Word),
@@ -1675,19 +1670,49 @@ async function rebuildQuestionCacheForUser(userId) {
             ? (info.meaning?.trim() ? 2 : primaryType)
             : (isContextUsableForWord(info.word, info.context) ? 1 : primaryType);
         const baseInfo = { ...info, fallbackDistractors: fallbackWords };
+        let primaryForcedDistractors = null;
+        if (primaryType === 1 && MINIMAX_API_KEY && info.context) {
+            const candidates = [...new Set(
+                [...(info.distractors || []), ...fallbackWords]
+                    .map(d => String(d || '').trim().toLowerCase())
+                    .filter(d => d && d !== info.word.toLowerCase())
+            )];
+            primaryForcedDistractors = await selectContextualDistractors({
+                word: info.word,
+                context: info.context,
+                candidates,
+                callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
+            }).catch(() => null);
+        }
         const primaryQuestion = buildQuizQuestion(
             rec.record_id,
             baseInfo,
             primaryType,
             'cache-primary',
-            letters
+            letters,
+            primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
         );
+        let reviewForcedDistractors = null;
+        if (reviewType === 1 && MINIMAX_API_KEY && info.context) {
+            const candidates = [...new Set(
+                [...(info.distractors || []), ...fallbackWords]
+                    .map(d => String(d || '').trim().toLowerCase())
+                    .filter(d => d && d !== info.word.toLowerCase())
+            )];
+            reviewForcedDistractors = await selectContextualDistractors({
+                word: info.word,
+                context: info.context,
+                candidates,
+                callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
+            }).catch(() => null);
+        }
         const reviewQuestion = buildQuizQuestion(
             rec.record_id,
             baseInfo,
             reviewType,
             'cache-review',
-            letters
+            letters,
+            reviewForcedDistractors ? { forcedDistractors: reviewForcedDistractors } : {}
         );
         if (!primaryQuestion || !reviewQuestion) continue;
         let cacheQuestions = [primaryQuestion, reviewQuestion];
@@ -1708,6 +1733,9 @@ async function rebuildQuestionCacheForUser(userId) {
         }
         if (cacheQuestions.length !== 2) continue;
         normalizeQuizArticleContexts(cacheQuestions);
+        await enrichContextualCorrectMeanings(cacheQuestions, {
+            generateContextMeaning,
+        });
         await enrichQuestionOptionMeanings({
             questions: cacheQuestions,
             records: wordRecords,
@@ -1919,6 +1947,20 @@ Return JSON only: {"example": "sentence"}`;
         }
     } catch (e) { }
     return null;
+}
+
+async function generateContextMeaning(word, context) {
+    if (!MINIMAX_API_KEY) return '';
+    const sentence = String(context || '').replace(/_{3,}/g, word);
+    const prompt = [
+        '给定英文单词和它在句子中的具体用法，返回最贴切的中文释义。',
+        '只输出一行中文释义，不要解释，不超过10个字。',
+        '如果是短语义或具体语境义，优先返回语境义。',
+        '单词：' + word,
+        '句子：' + sentence,
+    ].join('\n');
+    const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 8000);
+    return toSimp(result || '').trim();
 }
 
 async function translateToCN(text) {
@@ -2456,4 +2498,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, requestAuthOtp, loginWithOtp, verifyParentOtp, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
