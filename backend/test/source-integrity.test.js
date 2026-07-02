@@ -334,8 +334,35 @@ test('question cache rebuild generates natural fill-in contexts before downgradi
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(feishuSource.includes('async function generateNaturalFillInContext'));
-    assert.ok(rebuildSource.includes('preferred === 1 && !isContextUsableForWord'));
+    assert.ok(rebuildSource.includes('preferred === 1 && (!isContextUsableForWord'));
+    assert.ok(rebuildSource.includes('|| isElementaryCacheLevel(level)'));
     assert.ok(rebuildSource.includes('await generateNaturalFillInContext'));
     assert.ok(rebuildSource.includes('contextEnhancedInfo'));
     assert.ok(rebuildSource.includes('isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context)'));
+});
+
+
+test('question cache rebuild prioritizes Chinese meaning when generating elementary fill-in contexts', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(
+        rebuildSource.includes('contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning'),
+        'natural fill-in generation should use CN_Meaning before broad English Meaning to keep the intended sense'
+    );
+});
+
+test('question cache rebuild retries elementary fill-in contexts rejected by quality gates', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(feishuSource.includes('getQuestionQualityIssues'));
+    assert.ok(feishuSource.includes('function retryElementaryFillInContext'));
+    assert.ok(feishuSource.includes('sense_mismatch'));
+    assert.ok(feishuSource.includes('not_elementary_context'));
+    assert.ok(rebuildSource.includes('retryElementaryFillInContext(primaryQuestion)'));
 });

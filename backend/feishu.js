@@ -31,7 +31,7 @@ const {
 const { enrichQuestionOptionMeanings } = require('./option-meanings');
 const { enrichContextualCorrectMeanings } = require('./context-meaning');
 const { createQuizBuilder } = require('./quiz-builder');
-const { hasAiMetaResponse, hasMeaningfulChineseMeaning } = require('./question-quality');
+const { getQuestionQualityIssues, hasAiMetaResponse, hasMeaningfulChineseMeaning } = require('./question-quality');
 const {
     createQuizTimingLogger,
     shouldAllowLiveQuizFallback,
@@ -1734,6 +1734,18 @@ async function getQuestionCacheDiagnostics(userId) {
     return { configured: true, results };
 }
 
+const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
+
+function isElementaryCacheLevel(level) {
+    return String(level || '').trim() === ELEMENTARY_LEVEL;
+}
+
+function retryElementaryFillInContext(question) {
+    if (!question || Number(question.type) !== 1 || !isElementaryCacheLevel(question.level)) return false;
+    const issues = getQuestionQualityIssues(question);
+    return issues.some(issue => issue.startsWith('sense_mismatch') || issue === 'not_elementary_context');
+}
+
 function addRejectReason(summary, reason) {
     if (!reason) return;
     summary[reason] = (summary[reason] || 0) + 1;
@@ -1794,10 +1806,10 @@ async function rebuildQuestionCacheForUser(userId) {
         if (!info) continue;
         const contextEnhancedInfo = { ...info };
         const preferred = PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
-        if (preferred === 1 && !isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) && MINIMAX_API_KEY) {
+        if (preferred === 1 && (!isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) || isElementaryCacheLevel(level)) && MINIMAX_API_KEY) {
             const generatedContext = await generateNaturalFillInContext(
                 contextEnhancedInfo.word,
-                contextEnhancedInfo.meaning || contextEnhancedInfo.CN_Meaning
+                contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning
             );
             if (generatedContext) {
                 contextEnhancedInfo.context = generatedContext;
@@ -1814,7 +1826,7 @@ async function rebuildQuestionCacheForUser(userId) {
         const reviewType = primaryType === 1
             ? (contextEnhancedInfo.meaning?.trim() ? 2 : primaryType)
             : (isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? 1 : primaryType);
-        const baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
+        let baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
         let primaryForcedDistractors = null;
         if (primaryType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
             const candidates = [...new Set(
@@ -1829,7 +1841,7 @@ async function rebuildQuestionCacheForUser(userId) {
                 callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
             }).catch(() => null);
         }
-        const primaryQuestion = buildQuizQuestion(
+        let primaryQuestion = buildQuizQuestion(
             rec.record_id,
             baseInfo,
             primaryType,
@@ -1837,6 +1849,40 @@ async function rebuildQuestionCacheForUser(userId) {
             letters,
             primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
         );
+        if (primaryQuestion) primaryQuestion.level = level;
+        if (retryElementaryFillInContext(primaryQuestion) && MINIMAX_API_KEY) {
+            const generatedContext = await generateNaturalFillInContext(
+                contextEnhancedInfo.word,
+                contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning
+            );
+            if (generatedContext) {
+                contextEnhancedInfo.context = generatedContext;
+                contextEnhancedInfo.Context_CN = '';
+                baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
+                if (primaryType === 1) {
+                    const retryCandidates = [...new Set(
+                        [...(contextEnhancedInfo.distractors || []), ...fallbackWords]
+                            .map(d => String(d || '').trim().toLowerCase())
+                            .filter(d => d && d !== contextEnhancedInfo.word.toLowerCase())
+                    )];
+                    primaryForcedDistractors = await selectContextualDistractors({
+                        word: contextEnhancedInfo.word,
+                        context: contextEnhancedInfo.context,
+                        candidates: retryCandidates,
+                        callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
+                    }).catch(() => null);
+                    primaryQuestion = buildQuizQuestion(
+                        rec.record_id,
+                        baseInfo,
+                        primaryType,
+                        'cache-primary',
+                        letters,
+                        primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
+                    );
+                    if (primaryQuestion) primaryQuestion.level = level;
+                }
+            }
+        }
         let reviewForcedDistractors = null;
         if (reviewType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
             const candidates = [...new Set(
@@ -1851,7 +1897,7 @@ async function rebuildQuestionCacheForUser(userId) {
                 callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
             }).catch(() => null);
         }
-        const reviewQuestion = buildQuizQuestion(
+        let reviewQuestion = buildQuizQuestion(
             rec.record_id,
             baseInfo,
             reviewType,
@@ -1859,6 +1905,7 @@ async function rebuildQuestionCacheForUser(userId) {
             letters,
             reviewForcedDistractors ? { forcedDistractors: reviewForcedDistractors } : {}
         );
+        if (reviewQuestion) reviewQuestion.level = level;
         if (!primaryQuestion || !reviewQuestion) {
             if (!primaryQuestion) addRejectReason(rejectionSummary, 'missing_primary_question');
             if (!reviewQuestion) addRejectReason(rejectionSummary, 'missing_review_question');
