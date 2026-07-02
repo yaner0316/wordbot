@@ -151,6 +151,7 @@ function hasDictionaryStyleDefinition(text) {
         'an act of',
         'characterized by',
         'a person who',
+        'one who',
         'a thing that',
         'the quality of',
         'relating to',
@@ -167,6 +168,13 @@ function hasDictionaryStyleDefinition(text) {
         'var.',
         'having a head',
         'less than a year',
+        'outer garment',
+        'covers the body',
+        'waist downwards',
+        'each leg separately',
+        'such as a part',
+        'road or track',
+        'not crooked or bent',
     ];
     return patterns.some(pattern => value.includes(pattern));
 }
@@ -187,6 +195,8 @@ function hasElementaryContextRisk(text) {
         'ballparks',
         'young ewes',
         'shepherd',
+        'execute',
+        'padded mat',
     ];
     return riskyPatterns.some(pattern => value.includes(pattern));
 }
@@ -247,11 +257,11 @@ function getQuestionQualityIssues(question) {
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
     }
     if (isElementaryLevel(question.level)) {
+        if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) issues.push('bad_distractor_shape');
         if (type === 1) {
             const mismatch = hasSenseMismatchRisk(question);
             if (mismatch) issues.push(mismatch);
             if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
-            if (hasBadDistractorShape(question)) issues.push('bad_distractor_shape');
         }
         if (type === 2 && hasDictionaryStyleDefinition(question.context)) {
             issues.push('dictionary_definition');

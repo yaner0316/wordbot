@@ -230,3 +230,61 @@ test('elementary quality rejects sampled bad cache rows from Draggy', () => {
         assert.ok(issues.includes(q.expected), q.word + ' issues=' + issues.join(','));
     }
 });
+
+
+test('elementary quality rejects second sampled bad cache rows from Draggy', () => {
+    const cases = [
+        {
+            type: 2,
+            word: 'pants',
+            context: '(Manchester) An outer garment that covers the body from the waist downwards, covering each leg separately, usually as far as the ankles',
+            correctMeaning: String.fromCharCode(0x88e4, 0x5b50),
+            options: ['A. pants', 'B. aware', 'C. fairy', 'D. pepper'],
+            answer: 'A',
+            expected: 'dictionary_definition',
+        },
+        {
+            type: 2,
+            word: 'eraser',
+            context: 'One who erases.',
+            correctMeaning: String.fromCharCode(0x6a61, 0x76ae, 0x64e6),
+            options: ['A. expect for', 'B. eraser', 'C. dyed', 'D. china'],
+            answer: 'B',
+            expected: 'dictionary_definition',
+        },
+        {
+            type: 2,
+            word: 'straight',
+            context: 'Something that is not crooked or bent such as a part of a road or track.',
+            correctMeaning: String.fromCharCode(0x76f4, 0x7684),
+            options: ['A. mercy', 'B. cupboard', 'C. straight', 'D. basement'],
+            answer: 'C',
+            expected: 'dictionary_definition',
+        },
+        {
+            type: 1,
+            word: 'roll',
+            context: 'During practice, the coach asked the child to execute a forward _____ across the padded mat.',
+            correctMeaning: String.fromCharCode(0x524d, 0x6eda, 0x7ffb),
+            options: ['A. stir', 'B. inherit', 'C. roll', 'D. handsome'],
+            answer: 'C',
+            expected: 'not_elementary_context',
+        },
+        {
+            type: 3,
+            word: 'braided',
+            context: String.fromCharCode(0x7f16, 0x7ec7, 0x7684),
+            correctMeaning: String.fromCharCode(0x7f16, 0x7ec7, 0x7684),
+            options: ['A. seize', 'B. carry out', 'C. braided', 'D. vocabulary'],
+            answer: 'C',
+            expected: 'bad_distractor_shape',
+        },
+    ];
+
+    for (const q of cases) {
+        const question = { level: ELEMENTARY, ...q };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, q.word);
+        assert.ok(issues.includes(q.expected), q.word + ' issues=' + issues.join(','));
+    }
+});
