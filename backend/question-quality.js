@@ -114,6 +114,8 @@ const CN = {
     chest: String.fromCharCode(0x80f8, 0x90e8),
     cheek: String.fromCharCode(0x8138, 0x988a),
     mud: String.fromCharCode(0x6ce5),
+    pepper: String.fromCharCode(0x80e1, 0x6912),
+    lamb: String.fromCharCode(0x7f8a, 0x7f94),
 };
 
 function isElementaryLevel(level) {
@@ -146,6 +148,7 @@ function hasDictionaryStyleDefinition(text) {
     if (!value) return false;
     const patterns = [
         'the act of',
+        'an act of',
         'characterized by',
         'a person who',
         'a thing that',
@@ -156,6 +159,14 @@ function hasDictionaryStyleDefinition(text) {
         'worn by',
         'or any two surfaces',
         'before or after exercise',
+        'an edible plant',
+        'an adult female',
+        'of the species',
+        'especially',
+        'brassica',
+        'var.',
+        'having a head',
+        'less than a year',
     ];
     return patterns.some(pattern => value.includes(pattern));
 }
@@ -171,6 +182,11 @@ function hasElementaryContextRisk(text) {
         'brass lock',
         'museum',
         'ancient',
+        'nominal fee',
+        'barley',
+        'ballparks',
+        'young ewes',
+        'shepherd',
     ];
     return riskyPatterns.some(pattern => value.includes(pattern));
 }
@@ -187,6 +203,12 @@ function hasSenseMismatchRisk(question) {
     }
     if (word === 'mud' && meaning.includes(CN.mud) && /(campaign|both parties|politic|issues got lost)/.test(context)) {
         return 'sense_mismatch_mud';
+    }
+    if (word === 'pepper' && meaning.includes(CN.pepper) && /(pepper games|ballparks|no _____ games)/.test(context)) {
+        return 'sense_mismatch_pepper';
+    }
+    if (word === 'lamb' && meaning.includes(CN.lamb) && /(lambing|young ewes|shepherd was up all night)/.test(context + ' ' + getCorrectOptionWord(question))) {
+        return 'sense_mismatch_lamb';
     }
     return '';
 }
@@ -217,8 +239,11 @@ function getQuestionQualityIssues(question) {
     }
     if (type === 1) {
         const word = getCorrectOptionWord(question);
-        const context = String(question.context || '').replace(/_{3,}/g, word);
-        if (hasInvalidFillInGrammar({ word, context })) issues.push('invalid_fill_in_grammar');
+        const baseWord = String(question.word || '').trim().toLowerCase();
+        const rawContext = String(question.context || '');
+        const context = rawContext.replace(/_{3,}/g, word);
+        const baseContext = rawContext.replace(/_{3,}/g, baseWord);
+        if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
     }
     if (isElementaryLevel(question.level)) {

@@ -172,3 +172,61 @@ test('elementary quality checks keep a simple direct fill-in question', () => {
     assert.deepEqual(getQuestionQualityIssues(question), []);
     assert.equal(isQuestionQualityAcceptable(question), true);
 });
+
+
+test('elementary quality rejects sampled bad cache rows from Draggy', () => {
+    const cases = [
+        {
+            type: 1,
+            word: 'corn',
+            context: 'He paid her the nominal fee of two _____ of barley.',
+            correctMeaning: String.fromCharCode(0x7389, 0x7c73),
+            options: ['A. corns', 'B. pumps', 'C. slices', 'D. geographies'],
+            answer: 'A',
+            expected: 'invalid_fill_in_grammar',
+        },
+        {
+            type: 1,
+            word: 'pepper',
+            context: 'Some ballparks have signs saying No _____ games.',
+            correctMeaning: String.fromCharCode(0x80e1, 0x6912),
+            options: ['A. timetable', 'B. pepper', 'C. guide', 'D. luxurious'],
+            answer: 'B',
+            expected: 'sense_mismatch_pepper',
+        },
+        {
+            type: 1,
+            word: 'lamb',
+            context: 'The shepherd was up all night, _____ her young ewes.',
+            correctMeaning: String.fromCharCode(0x7f8a, 0x7f94),
+            options: ['A. lambing', 'B. examing', 'C. quizing', 'D. enduring'],
+            answer: 'A',
+            expected: 'sense_mismatch_lamb',
+        },
+        {
+            type: 2,
+            word: 'cabbage',
+            context: 'An edible plant (Brassica oleracea var. capitata) having a head of green leaves.',
+            correctMeaning: String.fromCharCode(0x5377, 0x5fc3, 0x83dc),
+            options: ['A. debt', 'B. various', 'C. hotel', 'D. cabbage'],
+            answer: 'D',
+            expected: 'dictionary_definition',
+        },
+        {
+            type: 2,
+            word: 'cow',
+            context: '(properly) An adult female of the species Bos taurus, especially one that has calved.',
+            correctMeaning: String.fromCharCode(0x6bcd, 0x725b),
+            options: ['A. authentic', 'B. text', 'C. action', 'D. cow'],
+            answer: 'D',
+            expected: 'dictionary_definition',
+        },
+    ];
+
+    for (const q of cases) {
+        const question = { level: ELEMENTARY, ...q };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, q.word);
+        assert.ok(issues.includes(q.expected), q.word + ' issues=' + issues.join(','));
+    }
+});
