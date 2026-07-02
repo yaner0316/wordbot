@@ -1890,7 +1890,19 @@ async function rebuildQuestionCacheForUser(userId) {
                 }
             }
         }
-        let reviewForcedDistractors = null;
+        if (!primaryQuestion && availableTypes.length > 1) {
+            for (const alternateType of availableTypes.filter(type => type !== primaryType)) {
+                primaryQuestion = buildQuizQuestion(
+                    rec.record_id,
+                    baseInfo,
+                    alternateType,
+                    'cache-primary',
+                    letters
+                );
+                if (primaryQuestion) primaryQuestion.level = level;
+                if (primaryQuestion) break;
+            }
+        }        let reviewForcedDistractors = null;
         if (reviewType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
             const candidates = [...new Set(
                 [...(contextEnhancedInfo.distractors || []), ...fallbackWords]

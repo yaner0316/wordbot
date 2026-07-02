@@ -378,3 +378,14 @@ test('question cache append writes each ready row independently', () => {
     assert.ok(appendSource.includes('rows.push(row)'));
     assert.ok(!appendSource.includes('primaryIssues.length === 0 && reviewIssues.length === 0'));
 });
+
+test('question cache rebuild retries alternate primary types when preferred type cannot be built', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(rebuildSource.includes('for (const alternateType of availableTypes.filter'));
+    assert.ok(rebuildSource.includes('primaryQuestion = buildQuizQuestion'));
+    assert.ok(rebuildSource.includes('if (primaryQuestion) primaryQuestion.level = level'));
+});
