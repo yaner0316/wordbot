@@ -147,6 +147,45 @@ function hasSubmittedAnswer(record) {
     return record?.fields?.is_correct !== undefined && record?.fields?.is_correct !== null;
 }
 
+function summarizeWordProgress(wordRecords, submittedRecords) {
+    const groups = new Map();
+    for (const record of wordRecords || []) {
+        const word = getFieldValue(record.fields?.Word).trim().toLowerCase();
+        if (!word) continue;
+        if (!groups.has(word)) groups.set(word, []);
+        groups.get(word).push(record);
+    }
+
+    const counts = {
+        mastered: 0,
+        consolidating: 0,
+        recognized: 0,
+        unseen: 0,
+    };
+    const progress = {};
+
+    for (const [word, records] of groups.entries()) {
+        const recordIds = records.map(record => record.record_id).filter(Boolean);
+        const evaluation = evaluateWordMastery(recordIds, submittedRecords || [], isCorrectField);
+        const stage = evaluation.stage || 'unseen';
+        counts[stage] = (counts[stage] || 0) + 1;
+        progress[word] = evaluation;
+    }
+
+    const totalWords = groups.size;
+    return {
+        totalWords,
+        totalMeanings: (wordRecords || []).length,
+        masteredWords: counts.mastered,
+        consolidatingWords: counts.consolidating,
+        recognizedWords: counts.recognized,
+        unseenWords: counts.unseen,
+        pendingWords: totalWords - counts.mastered,
+        masteryStageCounts: counts,
+        masteryProgress: progress,
+    };
+}
+
 const TRAD_TO_SIMP = {};
 
 function toSimp(text) {
@@ -376,11 +415,13 @@ async function findAccountRecord(userId) {
     if (targeted) return targeted;
     return findCanonicalUserRecord(await getRecords(STATS_TABLE), userId);
 }
-
+
+
 
 const authService = createAuthService({
     listAccountRecords: () => getRecords(STATS_TABLE),
-    findAccountRecord,
+    findAccountRecord,
+
     listWordUsers: getAllUsers,
     addAccountRecord: fields => addRecord(STATS_TABLE, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
     updateAccountRecord: (recordId, fields) => updateRecord(STATS_TABLE, recordId, fields, AUTH_ACCOUNT_WRITE_TIMEOUT_MS),
@@ -406,6 +447,10 @@ async function setParentCredentials(input) {
 
 async function initializeParentCredentials(input) {
     return authService.initializeParentCredentials(input);
+}
+
+async function resetChildPassword(input) {
+    return authService.resetChildPassword(input);
 }
 async function getQuestionCacheRecords() {
     if (!QUESTION_CACHE_TABLE) return [];
@@ -482,14 +527,14 @@ async function getDistractorPool(records = null) {
     const pool = {};
     const wordIndex = {};
     let stats = { total: 0, hasCN: 0, hasDist3: 0, canType3: 0 };
-    
+
     for (const r of records) {
         const w = getFieldValue(r.fields.Word).toLowerCase();
         if (w) {
             const cn = getFieldValue(r.fields.CN_Meaning).trim();
             const dists = getFieldValue(r.fields.Distractors).split(',').map(s => s.trim()).filter(s => s && !isReservedTestWord(s));
             const context = getFieldValue(r.fields.Context);
-            
+
             pool[r.record_id] = {
                 word: getFieldValue(r.fields.Word),
                 pos: getFieldValue(r.fields.POS),
@@ -504,7 +549,7 @@ async function getDistractorPool(records = null) {
 
             if (!wordIndex[w]) wordIndex[w] = [];
             wordIndex[w].push(r.record_id);
-            
+
             stats.total++;
             if (cn) stats.hasCN++;
             if (dists.length >= 3) stats.hasDist3++;
@@ -635,10 +680,10 @@ function generateQuestion(word, info, distractors, type, allWords) {
     const opts = [...distractors];
     opts.splice(idx, 0, word);
     const letters = ['A', 'B', 'C', 'D'];
-    
+
     let context = info.context || '';
     context = context.replace(new RegExp(word, 'gi'), '___');
-    
+
     if (type === 1) {
         return {
             type: 1,
@@ -873,7 +918,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         }
     }
 
-    const typeSlots = secureRandom([...Array(6).fill(1), ...Array(2).fill(2), ...Array(2).fill(3)], 10);
+    const typeSlots = secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10);
     const fallbackTypeSlots = [1, 2, 3];
     const remaining = valid.filter(r => !usedRecordIds.has(r.record_id));
     function candidatesForSlot(slot) {
@@ -1298,7 +1343,7 @@ async function rewriteReviewQuestion({ info, type }) {
     if (type === 3 && info.CN_Meaning) {
         return {
             ...info,
-            CN_Meaning: `${info.CN_Meaning} (review wording)`,  
+            CN_Meaning: `${info.CN_Meaning} (review wording)`,
         };
     }
     const prompt = `Rewrite this vocabulary review prompt with different wording.
@@ -1436,8 +1481,6 @@ async function getReviewSummary(input) {
 
 async function getStats(userId) {
     const wordRecords = (await getRecords(WORD_TABLE)).filter(r => userMatches(r.fields.user, userId));
-    const total = wordRecords.length;
-    const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
 
     // Stats are based on submitted real assessment records only.
     const allTestRecords = await getRecords(TEST_TABLE);
@@ -1446,6 +1489,7 @@ async function getStats(userId) {
         ASSESSMENT_MODE.REAL
     );
     const submittedRecords = testRecords.filter(hasSubmittedAnswer);
+    const progressSummary = summarizeWordProgress(wordRecords, submittedRecords);
     const quizRecords = submittedRecords.filter(record =>
         getAssessmentKind(getFieldValue(record.fields.test_id)) === ASSESSMENT_KIND.QUIZ
     );
@@ -1460,9 +1504,14 @@ async function getStats(userId) {
 
     return {
         user: userId,
-        totalWords: total,
-        masteredWords: mastered,
-        pendingWords: total - mastered,
+        totalWords: progressSummary.totalWords,
+        totalMeanings: progressSummary.totalMeanings,
+        masteredWords: progressSummary.masteredWords,
+        recognizedWords: progressSummary.recognizedWords,
+        consolidatingWords: progressSummary.consolidatingWords,
+        unseenWords: progressSummary.unseenWords,
+        pendingWords: progressSummary.pendingWords,
+        masteryStageCounts: progressSummary.masteryStageCounts,
         totalTests: submittedTestIds.size,
         totalQuestions,
         correctCount,
@@ -1470,7 +1519,6 @@ async function getStats(userId) {
         lastTestTime: lastTestTime || null
     };
 }
-
 async function addWord(targetUser, wordData) {
     const { Word, Meaning, POS, Context } = wordData;
     if (!Word || !Meaning) {
@@ -1491,7 +1539,7 @@ async function addWord(targetUser, wordData) {
     if (POS) fields.POS = POS;
     if (Context) fields.Context = toSimp(Context);
     if (contextCN) fields.Context_CN = toSimp(contextCN);
-    
+
     await addRecord(WORD_TABLE, fields);
     return { success: true, word: Word };
 }
@@ -1766,16 +1814,16 @@ async function validateWords(words) {
     const errors = [];
     const multiMeanings = [];
     const distPool = await getDistractorPool();
-    
+
     for (const word of words) {
         const lowerWord = word.toLowerCase();
         if (!/^[a-z]+$/.test(lowerWord)) {
             errors.push(word);
             continue;
         }
-        
+
         let meanings = [];
-        
+
         const exists = distPool[lowerWord];
         if (exists && exists.meaning) {
             meanings = exists.meaning.split(',').map(m => m.trim()).filter(m => m);
@@ -1787,12 +1835,12 @@ async function validateWords(words) {
                 meanings = [def.meaning];
             }
         }
-        
+
         if (meanings.length > 1) {
             multiMeanings.push({ word, meanings });
         }
     }
-    
+
     return { errors, multiMeanings };
 }
 
@@ -2021,13 +2069,13 @@ async function fetchWordDefinition(word) {
         const wordLower = word.toLowerCase();
         const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${wordLower}`;
         const data = await requesthttp(url);
-        
+
         if (data && data[0]) {
             const entry = data[0];
             const meanings = [];
             let pos = 'n.';
             let example = '';
-            
+
             for (const meaning of entry.meanings || []) {
                 if (meaning.partOfSpeech) pos = meaning.partOfSpeech;
                 for (const def of meaning.definitions || []) {
@@ -2037,9 +2085,9 @@ async function fetchWordDefinition(word) {
                     }
                 }
             }
-            
+
             const meaningStr = meanings.slice(0, 3).join('; ');
-            
+
             return {
                 meaning: toSimp(meaningStr || word),
                 pos: toSimp(pos),
@@ -2048,13 +2096,13 @@ async function fetchWordDefinition(word) {
             };
         }
     } catch (e) { }
-    
+
     try {
         const wordLower = word.toLowerCase();
         const encoded = encodeURIComponent(wordLower);
         const url = `https://api.mymemory.translated.net/get?q=${encoded}&langpair=en|zht`;
         const data = await requesthttp(url);
-        
+
         if (data && data.responseStatus === 200) {
             const translation = data.responseData?.translatedText || '';
             return {
@@ -2064,7 +2112,7 @@ async function fetchWordDefinition(word) {
             };
         }
     } catch (e) { }
-    
+
     return {
         meaning: toSimp(word),
         pos: toSimp('n.'),
@@ -2168,7 +2216,7 @@ async function addWords(targetUser, words) {
             errors.push(`${item.word}: ${e.message}`);
         }
     }
-    
+
     if (count > 0) {
         rebuildQuestionCacheForUser(targetUser).catch(() => {});
     }
@@ -2176,7 +2224,7 @@ async function addWords(targetUser, words) {
     if (errors.length > 0) {
         return { count, errors, error: `闂侇喓鍔岄崹搴ㄥ础閺囷紕妲ゆ繛锝堫嚙婵偞寰勬潏顐バ? ${errors.join('; ')}` };
     }
-    
+
     return { count, success: true };
 }
 
@@ -2498,4 +2546,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };

@@ -165,6 +165,12 @@ test('assessment record lookup uses quoted Feishu filter fields', () => {
     assert.ok(lookupSource.includes("field_name: 'test_time'"));
 });
 
+test('live quiz generation prefers seven fill-in questions per ten-question quiz', () => {
+    assert.ok(
+        feishuSource.includes('const typeSlots = secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10)'),
+        'live quiz generation should prefer 7 fill-in, 2 English definition, and 1 translation question'
+    );
+});
 test('live quiz generation tries fallback question types to fill ten questions', () => {
     assert.ok(
         feishuSource.includes('const fallbackTypeSlots = [1, 2, 3]'),

@@ -31,7 +31,7 @@ test('validateAnswers rejects option indexes outside A-D', () => {
 test('validateAnswers requires a confidence choice for every answer', () => {
     assert.throws(
         () => validateAnswers([{ option: 0, confidence: null }], 1),
-        /请选择“确定认识”或“猜的\/不确定”/
+        /ANSWER_CONFIDENCE_REQUIRED/
     );
 });
 

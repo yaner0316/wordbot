@@ -64,6 +64,28 @@ test('parent auth endpoint verifies the parent account in child context', async 
     });
 });
 
+
+test('parent reset child password endpoint calls the server-side account service', async () => {
+    const calls = [];
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        resetChildPassword: async input => { calls.push(['resetChildPassword', input]); return { ok: true, user: input.user }; },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/auth/parent/reset-child-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'Draggy', parentUsername: 'xiaoyan', parentPassword: '111111', newPassword: 'newpass' }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, [
+            ['resetChildPassword', { user: 'Draggy', parentUsername: 'xiaoyan', parentPassword: '111111', newPassword: 'newpass' }],
+        ]);
+    });
+});
+
 test('otp auth endpoints are no longer exposed', async () => {
     const app = createApp({ submitAnswers: async () => ({}) });
     await withServer(app, async baseUrl => {

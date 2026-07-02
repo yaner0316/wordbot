@@ -7,7 +7,7 @@ const ANSWER_CONFIDENCE = Object.freeze({
 
 function normalizeConfidence(confidence) {
     if (!Object.values(ANSWER_CONFIDENCE).includes(confidence)) {
-        throw new Error('请选择“确定认识”或“猜的/不确定”');
+        throw new Error('ANSWER_CONFIDENCE_REQUIRED');
     }
     return confidence;
 }
@@ -17,7 +17,7 @@ function normalizeSubmittedAnswer(answer) {
         return { option: answer, confidence: ANSWER_CONFIDENCE.SURE };
     }
     if (!answer || typeof answer !== 'object') {
-        throw new Error('答案格式无效');
+        throw new Error('ANSWER_FORMAT_INVALID');
     }
     return {
         option: answer.option,
@@ -69,10 +69,16 @@ function evaluateMeaningMastery(records, isCorrectValue) {
         if (!isCorrectValue(record.fields?.is_correct)) lastWrongIndex = index;
     });
 
-    const evidence = attempts.slice(lastWrongIndex + 1).filter(record => {
+    const correctAttempts = attempts.slice(lastWrongIndex + 1).filter(record =>
+        isCorrectValue(record.fields?.is_correct)
+    );
+    const evidence = correctAttempts.filter(record => {
         const stored = parseStoredAnswer(fieldValue(record.fields?.your_answer));
-        return isCorrectValue(record.fields?.is_correct)
-            && stored.confidence === ANSWER_CONFIDENCE.SURE;
+        return stored.confidence === ANSWER_CONFIDENCE.SURE;
+    });
+    const uncertainCorrect = correctAttempts.filter(record => {
+        const stored = parseStoredAnswer(fieldValue(record.fields?.your_answer));
+        return stored.confidence === ANSWER_CONFIDENCE.GUESS;
     });
     const distinctDays = new Set(
         evidence.map(record => learningDay(record.fields?.test_time))
@@ -81,12 +87,32 @@ function evaluateMeaningMastery(records, isCorrectValue) {
         evidence.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)
     ).size;
 
+    const mastered = (evidence.length >= 2 && distinctDays >= 2) || uncertainCorrect.length >= 3;
+    const correctAfterLastWrongCount = correctAttempts.length;
+    const stage = mastered
+        ? 'mastered'
+        : correctAfterLastWrongCount >= 2
+            ? 'consolidating'
+            : correctAfterLastWrongCount >= 1
+                ? 'recognized'
+                : 'unseen';
+
     return {
-        mastered: evidence.length >= 2 && distinctDays >= 2 && distinctTypes >= 2,
+        mastered,
+        stage,
         evidenceCount: evidence.length,
+        uncertainCorrectCount: uncertainCorrect.length,
+        correctAfterLastWrongCount,
         distinctDays,
         distinctTypes,
     };
+}
+
+function strongestStage(stages) {
+    if (stages.includes('mastered')) return 'mastered';
+    if (stages.includes('consolidating')) return 'consolidating';
+    if (stages.includes('recognized')) return 'recognized';
+    return 'unseen';
 }
 
 function evaluateWordMastery(recordIds, records, isCorrectValue) {
@@ -97,9 +123,14 @@ function evaluateWordMastery(recordIds, records, isCorrectValue) {
             isCorrectValue
         );
     }
+    const mastered = recordIds.length > 0
+        && recordIds.every(recordId => meanings[recordId].mastered);
+    const stage = mastered
+        ? 'mastered'
+        : strongestStage(Object.values(meanings).map(meaning => meaning.stage));
     return {
-        mastered: recordIds.length > 0
-            && recordIds.every(recordId => meanings[recordId].mastered),
+        mastered,
+        stage,
         meanings,
     };
 }

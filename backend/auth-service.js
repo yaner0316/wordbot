@@ -211,6 +211,23 @@ function createAuthService({
         return { ok: true, user: accountUser(account), parentUsername: parent.parentUsername };
     }
 
+
+    async function resetChildPassword({
+        user,
+        parentUsername,
+        parentPassword,
+        newPassword,
+    } = {}) {
+        const student = normalizeUsername(user);
+        validateUsername(student);
+        if (!newPassword || String(newPassword).length < 4) throw new Error('password must be at least 4 characters');
+        await verifyParentLogin({ user: student, parentUsername, password: parentPassword });
+        const account = await lookupAccountByUsername(student);
+        if (!account) throw new Error(GENERIC_PARENT_LOGIN_ERROR);
+        await writeAccountFields(account, createPasswordFields(newPassword, randomBytes, 'auth_password', 'auth_created_at'));
+        return { ok: true, user: accountUser(account) };
+    }
+
     async function initializeParentCredentials({ user, parentUsername, parentPassword } = {}) {
         const student = normalizeUsername(user);
         validateUsername(student);
@@ -225,7 +242,7 @@ function createAuthService({
         return { ok: true, user: accountUser(account), parentUsername: parent.parentUsername };
     }
 
-    return { login, register, verifyParentLogin, setParentCredentials, initializeParentCredentials };
+    return { login, register, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword };
 }
 
 module.exports = {

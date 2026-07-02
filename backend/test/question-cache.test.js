@@ -141,6 +141,37 @@ test('selects only structurally valid ready cached questions', () => {
     assert.deepEqual(selected.map(item => item.word), ['valid']);
 });
 
+test('selects cached quiz questions with fill-in heavy type mix', () => {
+    const rows = [];
+    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const cnApple = String.fromCharCode(0x82f9, 0x679c);
+    for (let i = 1; i <= 8; i++) {
+        rows.push(question({ word_record_id: `rec-t1-${i}`, word: 'apple', level: middleLevel, question_type: 1 }));
+    }
+    for (let i = 1; i <= 4; i++) {
+        rows.push(question({ word_record_id: `rec-t2-${i}`, word: 'apple', level: middleLevel, question_type: 2, question_text: `definition clue ${i}` }));
+    }
+    for (let i = 1; i <= 2; i++) {
+        rows.push(question({ word_record_id: `rec-t3-${i}`, word: 'apple', level: middleLevel, question_type: 3, question_text: cnApple }));
+    }
+
+    const selected = selectReadyCachedQuestions({
+        rows,
+        userId: 'qiuqiu',
+        level: middleLevel,
+        roundType: 'primary',
+        limit: 10,
+    });
+    const counts = selected.reduce((acc, item) => {
+        acc[item.type] = (acc[item.type] || 0) + 1;
+        return acc;
+    }, {});
+
+    assert.equal(selected.length, 10);
+    assert.equal(counts[1], 7);
+    assert.equal(counts[2], 2);
+    assert.equal(counts[3], 1);
+});
 test('cache status summary reports ready counts by level and round type', () => {
     const summary = summarizeCacheStatus([
         question({ round_type: 'primary' }),

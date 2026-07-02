@@ -76,6 +76,33 @@ test('parent login is scoped to the current child account so parent usernames ca
     );
 });
 
+
+test('parent can reset the child password after parent authentication', async () => {
+    const { service } = fixture();
+    await service.register({ username: 'yusi', password: 'oldpass' });
+    await service.setParentCredentials({ user: 'yusi', childPassword: 'oldpass', parentUsername: 'xiaoyan', parentPassword: 'parent1' });
+
+    assert.deepEqual(
+        await service.resetChildPassword({ user: 'YUSI', parentUsername: 'Xiaoyan', parentPassword: 'parent1', newPassword: 'newpass' }),
+        { ok: true, user: 'yusi' }
+    );
+    await assert.rejects(service.login({ username: 'yusi', password: 'oldpass' }), /username\/password error/);
+    assert.deepEqual(await service.login({ username: 'yusi', password: 'newpass' }), { user: 'yusi' });
+});
+
+test('parent reset rejects wrong parent credentials without changing child password', async () => {
+    const { service } = fixture();
+    await service.register({ username: 'qiuqiu', password: 'oldpass' });
+    await service.setParentCredentials({ user: 'qiuqiu', childPassword: 'oldpass', parentUsername: 'xiaoyan', parentPassword: 'parent1' });
+
+    await assert.rejects(
+        service.resetChildPassword({ user: 'qiuqiu', parentUsername: 'xiaoyan', parentPassword: 'wrongpass', newPassword: 'newpass' }),
+        /parent username\/password error/
+    );
+    assert.deepEqual(await service.login({ username: 'qiuqiu', password: 'oldpass' }), { user: 'qiuqiu' });
+    await assert.rejects(service.login({ username: 'qiuqiu', password: 'newpass' }), /username\/password error/);
+});
+
 test('changing an existing parent account requires child password and current parent password', async () => {
     const { service } = fixture();
     await service.register({ username: 'Draggy', password: 'kidpass1' });

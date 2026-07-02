@@ -103,7 +103,7 @@ function isCacheQuestionReady(row) {
 }
 
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
-    const QUOTA = { 1: 6, 2: 3, 3: 1 };
+    const QUOTA = { 1: 7, 2: 2, 3: 1 };
     const targetUserKey = userKey(userId);
     const eligible = (rows || [])
         .map(normalizeCacheRow)

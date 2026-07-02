@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, verifyParentLogin, setParentCredentials, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
+const { registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -55,6 +55,17 @@ const parseOptions = (v) => {
 
 
 const questionCacheRebuildJobs = new Map();
+const DEFAULT_ACTIVE_REBUILD_USERS = ['Draggy', 'qiuqiu', 'test_user', 'yusi'];
+
+function getActiveRebuildUsers(allUsers) {
+    const configured = String(process.env.WORDBOT_ACTIVE_USERS || '')
+        .split(',')
+        .map(user => user.trim())
+        .filter(Boolean);
+    const allowed = new Set((configured.length ? configured : DEFAULT_ACTIVE_REBUILD_USERS).map(normalizeUserKey));
+    return allUsers.filter(user => allowed.has(normalizeUserKey(user)));
+}
+
 
 function getCacheReadyCountForLevel(status, level) {
     return Number(status?.byLevel?.[level]?.ready || 0);
@@ -99,6 +110,7 @@ const app = createApp({
     loginUser,
     verifyParentLogin,
     setParentCredentials,
+    resetChildPassword,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,
@@ -293,7 +305,7 @@ app.post('/api/admin/questionCache/rebuild', async (req, res) => {
 app.post('/api/admin/questionCache/rebuildAll', async (req, res) => {
     try {
         const { flush } = req.body;
-        const users = await getAllUsers();
+        const users = getActiveRebuildUsers(await getAllUsers());
         const results = [];
         for (const userId of users) {
             let flushed = null;

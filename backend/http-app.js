@@ -57,6 +57,7 @@ function createApp({
     loginUser,
     verifyParentLogin,
     setParentCredentials,
+    resetChildPassword,
     createReviewRound,
     getActiveReviewRound,
     submitReviewRound,
@@ -110,6 +111,17 @@ function createApp({
             try {
                 const { user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword } = req.body;
                 res.json(await setParentCredentials({ user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword }));
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof resetChildPassword === 'function') {
+        app.post('/api/auth/parent/reset-child-password', async (req, res) => {
+            try {
+                const { user, parentUsername, parentPassword, newPassword } = req.body;
+                res.json(await resetChildPassword({ user, parentUsername, parentPassword, newPassword }));
             } catch (error) {
                 res.status(400).json({ error: error.message });
             }

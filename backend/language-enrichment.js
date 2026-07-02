@@ -1,5 +1,5 @@
 const LEVEL_DESCRIPTIONS = {
-    '小学': 'elementary school level (use very simple daily words, 6-8 year old vocabulary)',
+    '小学': 'elementary school level (explain like talking to a 6-8 year old child: use only the simplest everyday words, maximum one short sentence, no technical terms, no anatomy or scientific vocabulary, no complex grammar — if the original is formal or technical, completely replace it with a child-friendly explanation)',
     '中学': 'middle school level (common vocabulary, straightforward sentences, 12-15 year old)',
     '高中': 'high school level (moderately complex vocabulary and sentence structures)',
     CET4_6_TOEFL: 'college/TOEFL level (academic vocabulary, complex sentence structures)',
@@ -59,7 +59,7 @@ function createContextDifficultyAdapter({ callAI, timeoutMs = 12000 }) {
 
 Rewrite ALL ${adaptable.length} questions at ${description}.
 - For Type1: rewrite the context sentence (keep _____ blank and word meaning the same, but use level-appropriate vocabulary)
-- For Type2: rewrite the definition/explanation with level-appropriate vocabulary
+- For Type2: rewrite the definition/explanation with level-appropriate vocabulary. At elementary level, completely replace technical or formal definitions with the simplest possible child-friendly explanation (e.g. for "smile": "The happy look on your face when you feel good" not an anatomy description)
 - Write natural standalone quiz text only. Do not add meta commentary such as "which clearly illustrates how the word is used".
 - Avoid repeating the same sentence frame across questions.
 
