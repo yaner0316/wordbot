@@ -560,11 +560,35 @@ async function getDistractorPool(records = null) {
     return { pool, wordIndex };
 }
 
-async function getPendingWords(userId, records = null) {
+async function getPendingWords(userId, records = null, submittedRecords = null) {
     records = records || await getRecords(WORD_TABLE);
-    return records
-        .filter(r => userMatches(r.fields.user, userId) && !isMasteredStatus(r.fields.Status))
-        .sort((a, b) => (a.created_time || 0) - (b.created_time || 0))
+    const userRecords = records
+        .filter(r => userMatches(r.fields.user, userId))
+        .sort((a, b) => (a.created_time || 0) - (b.created_time || 0));
+    const realSubmittedRecords = submittedRecords || filterAssessmentRecords(
+        (await getUserAssessmentRecords(userId)).filter(hasSubmittedAnswer),
+        ASSESSMENT_MODE.REAL
+    );
+    const recordsByWord = new Map();
+    for (const record of userRecords) {
+        const word = getFieldValue(record.fields.Word).trim().toLowerCase();
+        if (!word) continue;
+        if (!recordsByWord.has(word)) recordsByWord.set(word, []);
+        recordsByWord.get(word).push(record);
+    }
+    const masteryByRecordId = new Map();
+    for (const group of recordsByWord.values()) {
+        const recordIds = group.map(record => record.record_id).filter(Boolean);
+        const evaluation = evaluateWordMastery(recordIds, realSubmittedRecords, isCorrectField);
+        for (const recordId of recordIds) {
+            masteryByRecordId.set(recordId, evaluation.meanings?.[recordId]);
+        }
+    }
+    return userRecords
+        .filter(r => {
+            const meaningProgress = masteryByRecordId.get(r.record_id);
+            return !meaningProgress?.mastered;
+        })
         .map(r => ({
             record_id: r.record_id,
             word: getFieldValue(r.fields.Word),
@@ -578,7 +602,6 @@ async function getPendingWords(userId, records = null) {
             level: getFieldValue(r.fields.Level)
         }));
 }
-
 async function getUserAssessmentRecords(userId, timeout = 12000) {
     return searchRecords(
         TEST_TABLE,
@@ -813,7 +836,8 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     }
     markTiming('word-records');
     const { pool } = await getDistractorPool(wordRecords);
-    const pendingBase = await getPendingWords(userId, wordRecords);
+    const submittedRecords = filterAssessmentRecords((await getUserAssessmentRecords(userId)).filter(hasSubmittedAnswer), ASSESSMENT_MODE.REAL);
+    const pendingBase = await getPendingWords(userId, wordRecords, submittedRecords);
     const userAssessmentRecords = await getUserAssessmentRecords(userId).catch(e => {
         console.log(`user assessment records failed: ${e.message}`);
         return [];
@@ -1694,7 +1718,8 @@ async function rebuildQuestionCacheForUser(userId) {
     const level = settings.learningLevel;
     const wordRecords = await getRecords(WORD_TABLE);
     const { pool } = await getDistractorPool(wordRecords);
-    const pending = await getPendingWords(userId, wordRecords);
+    const submittedRecords = filterAssessmentRecords((await getUserAssessmentRecords(userId)).filter(hasSubmittedAnswer), ASSESSMENT_MODE.REAL);
+    const pending = await getPendingWords(userId, wordRecords, submittedRecords);
     const fallbackWords = pending
         .map(record => String(record.word || '').trim().toLowerCase())
         .filter(word => word && !isReservedTestWord(word));

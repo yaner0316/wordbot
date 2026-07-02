@@ -295,3 +295,21 @@ test('question cache usage marking runs after response is prepared', () => {
     assert.ok(!cacheHitSource.includes('await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))'));
     assert.ok(cacheHitSource.includes('cacheUsageWriteScheduled'));
 });
+test('question cache rebuild selects pending meanings from mastery evidence instead of legacy Status', () => {
+    const pendingStart = feishuSource.indexOf('async function getPendingWords');
+    const assessmentStart = feishuSource.indexOf('async function getUserAssessmentRecords');
+    const rebuildStart = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const validateStart = feishuSource.indexOf('async function validateWords');
+    assert.ok(pendingStart >= 0 && assessmentStart > pendingStart, 'getPendingWords should exist before assessment helpers');
+    assert.ok(rebuildStart >= 0 && validateStart > rebuildStart, 'rebuildQuestionCacheForUser should exist');
+
+    const pendingSource = feishuSource.slice(pendingStart, assessmentStart);
+    const rebuildSource = feishuSource.slice(rebuildStart, validateStart);
+
+    assert.ok(pendingSource.includes('submittedRecords'), 'getPendingWords should receive submitted assessment records');
+    assert.ok(pendingSource.includes('evaluateWordMastery'), 'pending meanings should be based on mastery evidence');
+    assert.ok(pendingSource.includes('!meaningProgress?.mastered'), 'only unmastered meaning records should enter rebuild');
+    assert.ok(!pendingSource.includes('!isMasteredStatus(r.fields.Status)'), 'legacy Status must not control cache rebuild eligibility');
+    assert.ok(rebuildSource.includes('getUserAssessmentRecords(userId)'), 'rebuild should load user assessment evidence');
+    assert.ok(rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords)'), 'rebuild should pass evidence into pending selection');
+});
