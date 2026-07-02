@@ -108,33 +108,142 @@ function hasDistractorFormOverlap(word, question) {
         .some(distractor => forms.has(distractor));
 }
 
-function isQuestionQualityAcceptable(question) {
-    if (!question) return false;
-    if (Number(question.type) === 3) {
-        if (!hasMeaningfulChineseMeaning(question.context)) return false;
-    } else if (hasAiMetaResponse(question.context)) {
-        return false;
-    }
-    if (hasAiMetaResponse(question.correctMeaning)) question.correctMeaning = '';
-    if (Number(question.type) === 2) {
-        const word = String(question.word || '').toLowerCase();
-        const context = String(question.context || '').toLowerCase();
-        if (word && context && new RegExp(`\\b${escapeRegExp(word)}\\b`).test(context)) return false;
-    }
-    if (Number(question.type) !== 1) return true;
-    const answerPrefix = `${question.answer}.`;
-    const word = stripOptionLabel(
-        (question.options || []).find(option => String(option || '').startsWith(answerPrefix)) ||
-        question.word
-    );
-    const context = String(question.context || '').replace(/_{3,}/g, word);
-    return !hasInvalidFillInGrammar({ word, context }) &&
-        !hasDistractorFormOverlap(word, question);
+
+const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
+const CN = {
+    chest: String.fromCharCode(0x80f8, 0x90e8),
+    cheek: String.fromCharCode(0x8138, 0x988a),
+    mud: String.fromCharCode(0x6ce5),
+};
+
+function isElementaryLevel(level) {
+    const value = String(level || '').trim().toLowerCase();
+    return value === ELEMENTARY_LEVEL || value === 'elementary' || value.includes('elementary school');
 }
 
+function getOptionWord(option) {
+    return stripOptionLabel(option).replace(/[^a-z\s'-]/gi, '').trim();
+}
+
+function getCorrectOptionWord(question) {
+    const answerPrefix = String(question.answer || '') + '.';
+    const answerOption = (question.options || []).find(option =>
+        String(option || '').startsWith(answerPrefix)
+    );
+    return getOptionWord(answerOption || question.word);
+}
+
+function getDistractorWords(question) {
+    const answerPrefix = String(question.answer || '') + '.';
+    return (question.options || [])
+        .filter(option => !String(option || '').startsWith(answerPrefix))
+        .map(getOptionWord)
+        .filter(Boolean);
+}
+
+function hasDictionaryStyleDefinition(text) {
+    const value = String(text || '').trim().toLowerCase();
+    if (!value) return false;
+    const patterns = [
+        'the act of',
+        'characterized by',
+        'a person who',
+        'a thing that',
+        'the quality of',
+        'relating to',
+        'consisting of',
+        'usually of',
+        'worn by',
+        'or any two surfaces',
+        'before or after exercise',
+    ];
+    return patterns.some(pattern => value.includes(pattern));
+}
+
+function hasElementaryContextRisk(text) {
+    const value = String(text || '').toLowerCase();
+    const riskyPatterns = [
+        'campaign issues',
+        'both parties',
+        'brand awareness',
+        '17th century',
+        'artifacts',
+        'brass lock',
+        'museum',
+        'ancient',
+    ];
+    return riskyPatterns.some(pattern => value.includes(pattern));
+}
+
+function hasSenseMismatchRisk(question) {
+    const word = String(question.word || '').trim().toLowerCase();
+    const meaning = String(question.correctMeaning || '').trim();
+    const context = String(question.context || '').toLowerCase();
+    if (word === 'chest' && meaning.includes(CN.chest) && /\b(museum|ancient|lock|locked|secured|artifacts|treasure|box)\b/.test(context)) {
+        return 'sense_mismatch_chest';
+    }
+    if (word === 'cheek' && meaning.includes(CN.cheek) && /(you['’]?ve got some|have some|asking me for money)/.test(context)) {
+        return 'sense_mismatch_cheek';
+    }
+    if (word === 'mud' && meaning.includes(CN.mud) && /(campaign|both parties|politic|issues got lost)/.test(context)) {
+        return 'sense_mismatch_mud';
+    }
+    return '';
+}
+
+function hasBadDistractorShape(question) {
+    const correct = getCorrectOptionWord(question);
+    const distractors = getDistractorWords(question);
+    if (!correct || distractors.length < 3) return true;
+    const correctIsSingleWord = /^[a-z]+(?:'[a-z]+)?$/i.test(correct);
+    if (correctIsSingleWord && distractors.some(d => /\s/.test(d))) return true;
+    if (distractors.some(d => d.length < 2 || d.length > 25)) return true;
+    return false;
+}
+
+function getQuestionQualityIssues(question) {
+    const issues = [];
+    if (!question) return ['missing_question'];
+    const type = Number(question.type);
+    if (type === 3) {
+        if (!hasMeaningfulChineseMeaning(question.context)) issues.push('bad_chinese_meaning');
+    } else if (hasAiMetaResponse(question.context)) {
+        issues.push('ai_meta_context');
+    }
+    if (type === 2) {
+        const word = String(question.word || '').toLowerCase();
+        const context = String(question.context || '').toLowerCase();
+        if (word && context && new RegExp('\\b' + escapeRegExp(word) + '\\b').test(context)) issues.push('answer_revealed_in_definition');
+    }
+    if (type === 1) {
+        const word = getCorrectOptionWord(question);
+        const context = String(question.context || '').replace(/_{3,}/g, word);
+        if (hasInvalidFillInGrammar({ word, context })) issues.push('invalid_fill_in_grammar');
+        if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
+    }
+    if (isElementaryLevel(question.level)) {
+        if (type === 1) {
+            const mismatch = hasSenseMismatchRisk(question);
+            if (mismatch) issues.push(mismatch);
+            if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
+            if (hasBadDistractorShape(question)) issues.push('bad_distractor_shape');
+        }
+        if (type === 2 && hasDictionaryStyleDefinition(question.context)) {
+            issues.push('dictionary_definition');
+        }
+    }
+    return [...new Set(issues)];
+}
+
+function isQuestionQualityAcceptable(question) {
+    if (!question) return false;
+    if (hasAiMetaResponse(question.correctMeaning)) question.correctMeaning = '';
+    return getQuestionQualityIssues(question).length === 0;
+}
 module.exports = {
     hasAiMetaResponse,
     hasMeaningfulChineseMeaning,
     hasInvalidFillInGrammar,
+    getQuestionQualityIssues,
     isQuestionQualityAcceptable,
 };

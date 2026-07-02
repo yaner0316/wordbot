@@ -44,6 +44,7 @@ const {
 } = require('./user-learning-settings');
 const {
     buildCacheRowsForRecord,
+    getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
@@ -1733,7 +1734,12 @@ async function getQuestionCacheDiagnostics(userId) {
     return { configured: true, results };
 }
 
-function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQuestion, sourceVersion }) {
+function addRejectReason(summary, reason) {
+    if (!reason) return;
+    summary[reason] = (summary[reason] || 0) + 1;
+}
+
+function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQuestion, sourceVersion, rejectionSummary = null }) {
     const candidateRows = buildCacheRowsForRecord({
         userId,
         level,
@@ -1743,9 +1749,15 @@ function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQues
         now: Date.now(),
     });
     const [primaryRow, reviewRow] = candidateRows;
-    if (isCacheQuestionReady(primaryRow) && isCacheQuestionReady(reviewRow)) {
+    const primaryIssues = getCacheQuestionReadinessIssues(primaryRow);
+    const reviewIssues = getCacheQuestionReadinessIssues(reviewRow);
+    if (primaryIssues.length === 0 && reviewIssues.length === 0) {
         rows.push(...candidateRows);
         return true;
+    }
+    if (rejectionSummary) {
+        for (const issue of primaryIssues) addRejectReason(rejectionSummary, issue);
+        for (const issue of reviewIssues) addRejectReason(rejectionSummary, issue);
     }
     return false;
 }
@@ -1774,6 +1786,7 @@ async function rebuildQuestionCacheForUser(userId) {
     const letters = ['A', 'B', 'C', 'D'];
     const bufferedRows = [];
     const writtenRows = [];
+    const rejectionSummary = {};
     const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,1,2,2,3];
     let wordIndex = 0;
     for (const rec of pending) {
@@ -1846,7 +1859,11 @@ async function rebuildQuestionCacheForUser(userId) {
             letters,
             reviewForcedDistractors ? { forcedDistractors: reviewForcedDistractors } : {}
         );
-        if (!primaryQuestion || !reviewQuestion) continue;
+        if (!primaryQuestion || !reviewQuestion) {
+            if (!primaryQuestion) addRejectReason(rejectionSummary, 'missing_primary_question');
+            if (!reviewQuestion) addRejectReason(rejectionSummary, 'missing_review_question');
+            continue;
+        }
         let cacheQuestions = [primaryQuestion, reviewQuestion];
         if (level && MINIMAX_API_KEY) {
             await adaptContextsByLevel(cacheQuestions, level);
@@ -1863,7 +1880,10 @@ async function rebuildQuestionCacheForUser(userId) {
                 letters
             )).filter(Boolean);
         }
-        if (cacheQuestions.length !== 2) continue;
+        if (cacheQuestions.length !== 2) {
+            addRejectReason(rejectionSummary, 'ai_audit_rejected');
+            continue;
+        }
         normalizeQuizArticleContexts(cacheQuestions);
         await enrichContextualCorrectMeanings(cacheQuestions, {
             generateContextMeaning,
@@ -1880,6 +1900,7 @@ async function rebuildQuestionCacheForUser(userId) {
             primaryQuestion: cacheQuestions[0],
             reviewQuestion: cacheQuestions[1],
             sourceVersion: 'phase-2',
+            rejectionSummary,
         });
         if (bufferedRows.length >= QUESTION_CACHE_REBUILD_FLUSH_SIZE) {
             await flushQuestionCacheRows(bufferedRows, writtenRows);
@@ -1891,6 +1912,7 @@ async function rebuildQuestionCacheForUser(userId) {
         level,
         count: writtenRows.length,
         status: summarizeCacheStatus(writtenRows),
+        rejections: rejectionSummary,
     };
 }
 

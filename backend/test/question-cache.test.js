@@ -4,10 +4,14 @@ const assert = require('node:assert/strict');
 const {
     QUESTION_CACHE_STATUS,
     buildCacheRowsForRecord,
+    getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
 } = require('../question-cache');
+
+const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+const CN_CHEST = String.fromCharCode(0x80f8, 0x90e8);
 
 function question(overrides) {
     return {
@@ -234,4 +238,37 @@ test('rejects cached questions whose option_meanings contain the failure placeho
     assert.equal(isCacheQuestionReady(question({
         option_meanings: JSON.stringify(['苹果', '梨', '椅子', '书']),
     })), true);
+});
+
+
+test('rejects cached elementary fill-in rows with sense-mismatched contexts', () => {
+    assert.equal(isCacheQuestionReady(question({
+        level: ELEMENTARY,
+        word_record_id: 'rec-chest',
+        word: 'chest',
+        question_type: 1,
+        question_text: "The museum's ancient _____ was secured with a brass lock, holding artifacts from the 17th century.",
+        options: JSON.stringify(['A. study', 'B. chest', 'C. fare', 'D. compute']),
+        option_meanings: JSON.stringify(['study', CN_CHEST, 'fare', 'compute']),
+        answer: 'B',
+        correct_meaning: CN_CHEST,
+    })), false);
+});
+
+
+test('reports readiness reject reasons for cached elementary quality failures', () => {
+    const issues = getCacheQuestionReadinessIssues(question({
+        level: ELEMENTARY,
+        word_record_id: 'rec-chest',
+        word: 'chest',
+        question_type: 1,
+        question_text: "The museum's ancient _____ was secured with a brass lock, holding artifacts from the 17th century.",
+        options: JSON.stringify(['A. study', 'B. chest', 'C. fare', 'D. compute']),
+        option_meanings: JSON.stringify(['study', CN_CHEST, 'fare', 'compute']),
+        answer: 'B',
+        correct_meaning: CN_CHEST,
+    }));
+
+    assert.ok(issues.includes('sense_mismatch_chest'));
+    assert.ok(issues.includes('not_elementary_context'));
 });

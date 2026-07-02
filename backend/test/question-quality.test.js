@@ -3,11 +3,19 @@ const { test } = require('node:test');
 const {
     hasAiMetaResponse,
     hasMeaningfulChineseMeaning,
+    getQuestionQualityIssues,
     isQuestionQualityAcceptable,
 } = require('../question-quality');
 
 const META = "The text you've shared looks like garbled text. Could you let me know what you would like me to do?";
 const META_CN = '您好，您提供的内容无法理解，请告诉我您的具体需求';
+const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+const CN_CHEST = String.fromCharCode(0x80f8, 0x90e8);
+const CN_CHEEK = String.fromCharCode(0x8138, 0x988a);
+const CN_MUD = String.fromCharCode(0x6ce5);
+const CN_CRAYONS = String.fromCharCode(0x8721, 0x7b14);
+const CN_CLAP = String.fromCharCode(0x9f13, 0x638c);
+const CN_SWEATER = String.fromCharCode(0x6bdb, 0x8863);
 
 test('hasAiMetaResponse detects English meta-response', () => {
     assert.equal(hasAiMetaResponse(META), true);
@@ -74,4 +82,93 @@ test('isQuestionQualityAcceptable: type 3 with English-only context is rejected'
 test('isQuestionQualityAcceptable: type 3 with clean CN_Meaning is accepted', () => {
     const q = { type: 3, context: '固执的', correctMeaning: '固执的', options: ['A. stubborn', 'B. happy', 'C. calm', 'D. sad'], answer: 'A', word: 'stubborn' };
     assert.equal(isQuestionQualityAcceptable(q), true);
+});
+
+
+test('elementary fill-in rejects contexts that use a different sense than the Chinese meaning', () => {
+    const cases = [
+        {
+            word: 'chest',
+            context: "The museum's ancient _____ was secured with a brass lock, holding artifacts from the 17th century.",
+            correctMeaning: CN_CHEST,
+            options: ['A. study', 'B. chest', 'C. fare', 'D. compute'],
+            answer: 'B',
+        },
+        {
+            word: 'cheek',
+            context: "You've got some _____, asking me for money!",
+            correctMeaning: CN_CHEEK,
+            options: ['A. cheek', 'B. chin', 'C. crayons', 'D. straight'],
+            answer: 'A',
+        },
+        {
+            word: 'mud',
+            context: 'The campaign issues got lost in all the _____ from both parties.',
+            correctMeaning: CN_MUD,
+            options: ['A. ordinary', 'B. artificial', 'C. mud', 'D. gracious'],
+            answer: 'C',
+        },
+    ];
+
+    for (const q of cases) {
+        const question = { type: 1, level: ELEMENTARY, ...q };
+        assert.equal(isQuestionQualityAcceptable(question), false, q.word);
+        assert.ok(getQuestionQualityIssues(question).some(issue => issue.startsWith('sense_mismatch')));
+    }
+});
+
+test('elementary fill-in rejects weak distractor shape', () => {
+    const question = {
+        type: 1,
+        level: ELEMENTARY,
+        word: 'crayons',
+        context: 'The child pressed the bright _____ onto the paper, drawing a smiling sun with wavy edges.',
+        correctMeaning: CN_CRAYONS,
+        options: ['A. crayons', 'B. regular', 'C. atmosphere', 'D. put off'],
+        answer: 'A',
+    };
+
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(getQuestionQualityIssues(question).includes('bad_distractor_shape'));
+});
+
+test('elementary definition questions reject dictionary-style definitions', () => {
+    const clap = {
+        type: 2,
+        level: ELEMENTARY,
+        word: 'clap',
+        context: 'The act of striking the palms of the hands, or any two surfaces, together.',
+        correctMeaning: CN_CLAP,
+        options: ['A. afraid', 'B. altitude', 'C. average', 'D. clap'],
+        answer: 'D',
+    };
+    const sweater = {
+        type: 2,
+        level: ELEMENTARY,
+        word: 'sweater',
+        context: 'A knitted jacket or jersey, usually of thick wool, worn by athletes before or after exercise.',
+        correctMeaning: CN_SWEATER,
+        options: ['A. winter', 'B. event', 'C. sweater', 'D. grace'],
+        answer: 'C',
+    };
+
+    assert.equal(isQuestionQualityAcceptable(clap), false);
+    assert.ok(getQuestionQualityIssues(clap).includes('dictionary_definition'));
+    assert.equal(isQuestionQualityAcceptable(sweater), false);
+    assert.ok(getQuestionQualityIssues(sweater).includes('dictionary_definition'));
+});
+
+test('elementary quality checks keep a simple direct fill-in question', () => {
+    const question = {
+        type: 1,
+        level: ELEMENTARY,
+        word: 'apple',
+        context: 'I ate a red _____.',
+        correctMeaning: String.fromCharCode(0x82f9, 0x679c),
+        options: ['A. apple', 'B. pear', 'C. banana', 'D. orange'],
+        answer: 'A',
+    };
+
+    assert.deepEqual(getQuestionQualityIssues(question), []);
+    assert.equal(isQuestionQualityAcceptable(question), true);
 });
