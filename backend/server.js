@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
+const { registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -328,6 +328,16 @@ app.get('/api/admin/questionCache/rebuildAll/status', async (req, res) => {
         error: job.error || undefined,
     }));
     res.json({ jobs: entries });
+});
+
+app.get('/api/admin/questionCache/diagnostics', async (req, res) => {
+    try {
+        const { userId } = req.query;
+        const data = await getQuestionCacheDiagnostics(userId || null);
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.post('/api/admin/addWord', async (req, res) => {

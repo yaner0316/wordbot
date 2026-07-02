@@ -45,6 +45,7 @@ const {
 const {
     buildCacheRowsForRecord,
     isCacheQuestionReady,
+    normalizeCacheRow,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
 } = require('./question-cache');
@@ -669,6 +670,8 @@ function isContextUsableForWord(word, ctx) {
     if (tokens.length < 7) return false;
     if (/^it\s+(works|worked|functions?)\s+like\s+a\s+charm\.?$/i.test(text)) return false;
     if (/^the word ".+" is used in context\.$/i.test(ctx.trim())) return false;
+    // Reject definition-list contexts like "the _____ of a flask, muscle, violin, sail, or ship"
+    if (/\b_+\s+of\b[^.]*,[^.]*,/i.test(text)) return false;
     const forms = getWordForms(word).map(escapeRegExp).join('|');
     if (!new RegExp(`\\b(${forms})\\b`, 'i').test(text)) return false;
     const lower = text.toLowerCase();
@@ -1685,6 +1688,51 @@ async function getQuestionCacheStatus(userId) {
     };
 }
 
+async function getQuestionCacheDiagnostics(userId) {
+    if (!QUESTION_CACHE_TABLE) return { configured: false };
+    const QUOTA = { 1: 7, 2: 2, 3: 1 };
+    const allRows = await getQuestionCacheRecords();
+    const rows = userId
+        ? allRows.filter(record => userMatches(record.fields?.user, userId))
+        : allRows;
+
+    const groups = {};
+    for (const raw of rows) {
+        const n = normalizeCacheRow(raw);
+        const key = `${String(n.user || '').trim().toLowerCase()}::${n.level}::${n.roundType}`;
+        if (!groups[key]) {
+            groups[key] = { userId: n.user, level: n.level, roundType: n.roundType, byType: {} };
+        }
+        if (isCacheQuestionReady(n)) {
+            groups[key].byType[n.type] = (groups[key].byType[n.type] || 0) + 1;
+        }
+    }
+
+    const results = Object.values(groups).map(g => {
+        const t1 = g.byType[1] || 0;
+        const t2 = g.byType[2] || 0;
+        const t3 = g.byType[3] || 0;
+        const quotaFillable = Math.min(t1, QUOTA[1]) + Math.min(t2, QUOTA[2]) + Math.min(t3, QUOTA[3]);
+        return {
+            userId: g.userId,
+            level: g.level,
+            roundType: g.roundType,
+            type1Ready: t1,
+            type2Ready: t2,
+            type3Ready: t3,
+            totalReady: t1 + t2 + t3,
+            quotaCanBeMet: t1 >= QUOTA[1] && t2 >= QUOTA[2] && t3 >= QUOTA[3],
+            willUseFallback: quotaFillable < 10,
+        };
+    }).sort((a, b) =>
+        String(a.userId).localeCompare(String(b.userId)) ||
+        a.level.localeCompare(b.level) ||
+        a.roundType.localeCompare(b.roundType)
+    );
+
+    return { configured: true, results };
+}
+
 function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQuestion, sourceVersion }) {
     const candidateRows = buildCacheRowsForRecord({
         userId,
@@ -1726,33 +1774,44 @@ async function rebuildQuestionCacheForUser(userId) {
     const letters = ['A', 'B', 'C', 'D'];
     const bufferedRows = [];
     const writtenRows = [];
-    const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];
+    const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,1,2,2,3];
     let wordIndex = 0;
     for (const rec of pending) {
         const info = pool[rec.record_id];
         if (!info) continue;
-        const availableTypes = [
-            ...(isContextUsableForWord(info.word, info.context) ? [1] : []),
-            ...(info.meaning?.trim() ? [2] : []),
-            ...(hasMeaningfulChineseMeaning(info.CN_Meaning) ? [3] : []),
-        ];
+        const contextEnhancedInfo = { ...info };
         const preferred = PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
+        if (preferred === 1 && !isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) && MINIMAX_API_KEY) {
+            const generatedContext = await generateNaturalFillInContext(
+                contextEnhancedInfo.word,
+                contextEnhancedInfo.meaning || contextEnhancedInfo.CN_Meaning
+            );
+            if (generatedContext) {
+                contextEnhancedInfo.context = generatedContext;
+                contextEnhancedInfo.Context_CN = '';
+            }
+        }
+        const availableTypes = [
+            ...(isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? [1] : []),
+            ...(contextEnhancedInfo.meaning?.trim() ? [2] : []),
+            ...(hasMeaningfulChineseMeaning(contextEnhancedInfo.CN_Meaning) ? [3] : []),
+        ];
         const primaryType = availableTypes.includes(preferred) ? preferred : (availableTypes[0] || 1);
         wordIndex++;
         const reviewType = primaryType === 1
-            ? (info.meaning?.trim() ? 2 : primaryType)
-            : (isContextUsableForWord(info.word, info.context) ? 1 : primaryType);
-        const baseInfo = { ...info, fallbackDistractors: fallbackWords };
+            ? (contextEnhancedInfo.meaning?.trim() ? 2 : primaryType)
+            : (isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? 1 : primaryType);
+        const baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
         let primaryForcedDistractors = null;
-        if (primaryType === 1 && MINIMAX_API_KEY && info.context) {
+        if (primaryType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
             const candidates = [...new Set(
-                [...(info.distractors || []), ...fallbackWords]
+                [...(contextEnhancedInfo.distractors || []), ...fallbackWords]
                     .map(d => String(d || '').trim().toLowerCase())
-                    .filter(d => d && d !== info.word.toLowerCase())
+                    .filter(d => d && d !== contextEnhancedInfo.word.toLowerCase())
             )];
             primaryForcedDistractors = await selectContextualDistractors({
-                word: info.word,
-                context: info.context,
+                word: contextEnhancedInfo.word,
+                context: contextEnhancedInfo.context,
                 candidates,
                 callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
             }).catch(() => null);
@@ -1766,15 +1825,15 @@ async function rebuildQuestionCacheForUser(userId) {
             primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
         );
         let reviewForcedDistractors = null;
-        if (reviewType === 1 && MINIMAX_API_KEY && info.context) {
+        if (reviewType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
             const candidates = [...new Set(
-                [...(info.distractors || []), ...fallbackWords]
+                [...(contextEnhancedInfo.distractors || []), ...fallbackWords]
                     .map(d => String(d || '').trim().toLowerCase())
-                    .filter(d => d && d !== info.word.toLowerCase())
+                    .filter(d => d && d !== contextEnhancedInfo.word.toLowerCase())
             )];
             reviewForcedDistractors = await selectContextualDistractors({
-                word: info.word,
-                context: info.context,
+                word: contextEnhancedInfo.word,
+                context: contextEnhancedInfo.context,
                 candidates,
                 callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
             }).catch(() => null);
@@ -2020,6 +2079,36 @@ Return JSON only: {"example": "sentence"}`;
         }
     } catch (e) { }
     return null;
+}
+
+async function generateNaturalFillInContext(word, meaning) {
+    if (!MINIMAX_API_KEY) return '';
+    const target = String(word || '').trim().toLowerCase();
+    if (!target) return '';
+    const prompt = `Create one natural English sentence for a child-friendly vocabulary fill-in-the-blank question.
+Target word: "${target}"
+Meaning hint: "${meaning || ''}"
+Rules:
+1. Include the target word exactly once, as a normal word in the sentence.
+2. The sentence must be natural, concrete, and easy to understand.
+3. Do not write a dictionary definition, word list, anatomy/science explanation, or phrase like "the word is used in context".
+4. Add enough context clues so the target word makes sense.
+5. Use 8 to 16 words.
+Return JSON only: {"context":"sentence"}`;
+    try {
+        const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 8000);
+        const match = String(result || '').match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        if (!match) return '';
+        const context = match[1]
+            .replace(/\\"/g, '"')
+            .replace(/\\n/g, ' ')
+            .trim();
+        const escaped = escapeRegExp(target);
+        const occurrences = (context.toLowerCase().match(new RegExp(`\\b${escaped}\\b`, 'g')) || []).length;
+        if (occurrences !== 1) return '';
+        return isContextUsableForWord(target, context) ? context : '';
+    } catch (e) { }
+    return '';
 }
 
 async function generateContextMeaning(word, context) {
@@ -2571,4 +2660,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };

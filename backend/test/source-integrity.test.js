@@ -204,7 +204,7 @@ test('question cache rebuild only uses meaningful Chinese meanings for type 3', 
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(
-        rebuildSource.includes('hasMeaningfulChineseMeaning(info.CN_Meaning)'),
+        rebuildSource.includes('hasMeaningfulChineseMeaning('),
         'cache rebuild should not treat AI meta-responses or English text as usable Chinese meanings'
     );
     assert.ok(
@@ -312,4 +312,30 @@ test('question cache rebuild selects pending meanings from mastery evidence inst
     assert.ok(!pendingSource.includes('!isMasteredStatus(r.fields.Status)'), 'legacy Status must not control cache rebuild eligibility');
     assert.ok(rebuildSource.includes('getUserAssessmentRecords(userId)'), 'rebuild should load user assessment evidence');
     assert.ok(rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords)'), 'rebuild should pass evidence into pending selection');
+});
+
+test('question cache rebuild primary quota favors at least seven fill-in questions', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(
+        rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,1,2,2,3];'),
+        'primary cache rebuild should align with the 7/2/1 selection quota instead of rebuilding 6/3/1'
+    );
+    assert.ok(!rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];'));
+});
+
+test('question cache rebuild generates natural fill-in contexts before downgrading to definition questions', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+
+    assert.ok(feishuSource.includes('async function generateNaturalFillInContext'));
+    assert.ok(rebuildSource.includes('preferred === 1 && !isContextUsableForWord'));
+    assert.ok(rebuildSource.includes('await generateNaturalFillInContext'));
+    assert.ok(rebuildSource.includes('contextEnhancedInfo'));
+    assert.ok(rebuildSource.includes('isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context)'));
 });
