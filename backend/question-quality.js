@@ -255,12 +255,14 @@ function getQuestionQualityIssues(question) {
         const baseContext = rawContext.replace(/_{3,}/g, baseWord);
         if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
+        const mismatch = hasSenseMismatchRisk(question);
+        if (mismatch) issues.push(mismatch);
+    }
+    if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) {
+        issues.push('bad_distractor_shape');
     }
     if (isElementaryLevel(question.level)) {
-        if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) issues.push('bad_distractor_shape');
         if (type === 1) {
-            const mismatch = hasSenseMismatchRisk(question);
-            if (mismatch) issues.push(mismatch);
             if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
         }
         if (type === 2 && hasDictionaryStyleDefinition(question.context)) {

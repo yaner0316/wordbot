@@ -10,6 +10,9 @@ const {
 const META = "The text you've shared looks like garbled text. Could you let me know what you would like me to do?";
 const META_CN = '您好，您提供的内容无法理解，请告诉我您的具体需求';
 const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+const JUNIOR_HIGH = String.fromCharCode(0x521d, 0x4e2d);
+const SENIOR_HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
+const UNIVERSITY = String.fromCharCode(0x5927, 0x5b66);
 const CN_CHEST = String.fromCharCode(0x80f8, 0x90e8);
 const CN_CHEEK = String.fromCharCode(0x8138, 0x988a);
 const CN_MUD = String.fromCharCode(0x6ce5);
@@ -286,5 +289,39 @@ test('elementary quality rejects second sampled bad cache rows from Draggy', () 
         const issues = getQuestionQualityIssues(question);
         assert.equal(isQuestionQualityAcceptable(question), false, q.word);
         assert.ok(issues.includes(q.expected), q.word + ' issues=' + issues.join(','));
+    }
+});
+
+test('semantic sense mismatch is rejected across learning levels', () => {
+    for (const level of [ELEMENTARY, JUNIOR_HIGH, SENIOR_HIGH, UNIVERSITY]) {
+        const question = {
+            type: 1,
+            level,
+            word: 'chest',
+            context: "The museum's ancient _____ was secured with a brass lock, holding artifacts from the 17th century.",
+            correctMeaning: CN_CHEST,
+            options: ['A. study', 'B. chest', 'C. fare', 'D. compute'],
+            answer: 'B',
+        };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, level);
+        assert.ok(issues.includes('sense_mismatch_chest'), level + ' issues=' + issues.join(','));
+    }
+});
+
+test('bad distractor shape is rejected across learning levels', () => {
+    for (const level of [ELEMENTARY, JUNIOR_HIGH, SENIOR_HIGH, UNIVERSITY]) {
+        const question = {
+            type: 1,
+            level,
+            word: 'crayons',
+            context: 'The child pressed the bright _____ onto the paper, drawing a smiling sun with wavy edges.',
+            correctMeaning: CN_CRAYONS,
+            options: ['A. crayons', 'B. regular', 'C. atmosphere', 'D. put off'],
+            answer: 'A',
+        };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, level);
+        assert.ok(issues.includes('bad_distractor_shape'), level + ' issues=' + issues.join(','));
     }
 });

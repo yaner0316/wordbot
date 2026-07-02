@@ -869,7 +869,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
 
     const validBase = pending.filter(r => {
         const info = pool[r.record_id];
-        return info && (info.distractors || []).filter(d => d).length >= 3;
+        return info && !isReservedTestWord(r.word) && (info.distractors || []).filter(d => d).length >= 3;
     });
     const reviewClean = validBase.filter(r => !r.quality_flags);
     const valid = reviewClean.length >= 2 ? reviewClean : validBase;
@@ -1767,18 +1767,17 @@ function appendReadyCacheRows(rows, { userId, level, primaryQuestion, reviewQues
         sourceVersion,
         now: Date.now(),
     });
-    const [primaryRow, reviewRow] = candidateRows;
-    const primaryIssues = getCacheQuestionReadinessIssues(primaryRow);
-    const reviewIssues = getCacheQuestionReadinessIssues(reviewRow);
-    if (primaryIssues.length === 0 && reviewIssues.length === 0) {
-        rows.push(...candidateRows);
-        return true;
+    let appended = false;
+    for (const row of candidateRows) {
+        const issues = getCacheQuestionReadinessIssues(row);
+        if (issues.length === 0) {
+            rows.push(row);
+            appended = true;
+        } else if (rejectionSummary) {
+            for (const issue of issues) addRejectReason(rejectionSummary, issue);
+        }
     }
-    if (rejectionSummary) {
-        for (const issue of primaryIssues) addRejectReason(rejectionSummary, issue);
-        for (const issue of reviewIssues) addRejectReason(rejectionSummary, issue);
-    }
-    return false;
+    return appended;
 }
 
 async function rebuildQuestionCacheForUser(userId) {
@@ -1811,6 +1810,7 @@ async function rebuildQuestionCacheForUser(userId) {
     for (const rec of pending) {
         const info = pool[rec.record_id];
         if (!info) continue;
+        if (isReservedTestWord(rec.word)) continue;
         const contextEnhancedInfo = { ...info };
         const preferred = PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
         if (preferred === 1 && (!isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) || isElementaryCacheLevel(level)) && MINIMAX_API_KEY) {

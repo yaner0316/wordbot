@@ -366,3 +366,15 @@ test('question cache rebuild retries elementary fill-in contexts rejected by qua
     assert.ok(feishuSource.includes('not_elementary_context'));
     assert.ok(rebuildSource.includes('retryElementaryFillInContext(primaryQuestion)'));
 });
+
+
+test('question cache append writes each ready row independently', () => {
+    const start = feishuSource.indexOf('function appendReadyCacheRows');
+    const end = feishuSource.indexOf('async function rebuildQuestionCacheForUser', start);
+    assert.ok(start >= 0 && end > start);
+    const appendSource = feishuSource.slice(start, end);
+
+    assert.ok(appendSource.includes('for (const row of candidateRows)'));
+    assert.ok(appendSource.includes('rows.push(row)'));
+    assert.ok(!appendSource.includes('primaryIssues.length === 0 && reviewIssues.length === 0'));
+});

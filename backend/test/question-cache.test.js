@@ -11,6 +11,9 @@ const {
 } = require('../question-cache');
 
 const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+const JUNIOR_HIGH = String.fromCharCode(0x521d, 0x4e2d);
+const SENIOR_HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
+const UNIVERSITY = String.fromCharCode(0x5927, 0x5b66);
 const CN_CHEST = String.fromCharCode(0x80f8, 0x90e8);
 
 function question(overrides) {
@@ -271,4 +274,23 @@ test('reports readiness reject reasons for cached elementary quality failures', 
 
     assert.ok(issues.includes('sense_mismatch_chest'));
     assert.ok(issues.includes('not_elementary_context'));
+});
+
+test('rejects cached sense-mismatched fill-in rows across learning levels', () => {
+    for (const level of [ELEMENTARY, JUNIOR_HIGH, SENIOR_HIGH, UNIVERSITY]) {
+        const row = question({
+            level,
+            word_record_id: 'rec-chest-' + level,
+            word: 'chest',
+            question_type: 1,
+            question_text: "The museum's ancient _____ was secured with a brass lock, holding artifacts from the 17th century.",
+            options: JSON.stringify(['A. study', 'B. chest', 'C. fare', 'D. compute']),
+            option_meanings: JSON.stringify(['study', CN_CHEST, 'fare', 'compute']),
+            answer: 'B',
+            correct_meaning: CN_CHEST,
+        });
+        const issues = getCacheQuestionReadinessIssues(row);
+        assert.equal(isCacheQuestionReady(row), false, level);
+        assert.ok(issues.includes('sense_mismatch_chest'), level + ' issues=' + issues.join(','));
+    }
 });
