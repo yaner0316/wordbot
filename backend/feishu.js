@@ -1784,7 +1784,7 @@ async function rebuildQuestionCacheForUser(userId) {
     if (!QUESTION_CACHE_TABLE) {
         return { configured: false, skipped: true, count: 0 };
     }
-    const QUESTION_CACHE_REBUILD_FLUSH_SIZE = 10;
+    const QUESTION_CACHE_REBUILD_FLUSH_SIZE = 1;
     async function flushQuestionCacheRows(bufferedRows, writtenRows) {
         if (!bufferedRows.length) return;
         const batch = bufferedRows.splice(0, bufferedRows.length);

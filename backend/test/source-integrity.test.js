@@ -233,7 +233,7 @@ test('question cache rebuild writes ready rows incrementally before the full reb
     assert.ok(start >= 0 && end > start);
     const rebuildSource = feishuSource.slice(start, end);
 
-    assert.ok(rebuildSource.includes('QUESTION_CACHE_REBUILD_FLUSH_SIZE'));
+    assert.ok(rebuildSource.includes('const QUESTION_CACHE_REBUILD_FLUSH_SIZE = 1;'));
     assert.ok(rebuildSource.includes('flushQuestionCacheRows'));
     assert.ok(rebuildSource.includes('await flushQuestionCacheRows(bufferedRows, writtenRows);'));
     assert.ok(!rebuildSource.includes('await addQuestionCacheRecords(rows);'));
