@@ -1713,7 +1713,13 @@ async function getQuestionCacheDiagnostics(userId) {
         const t1 = g.byType[1] || 0;
         const t2 = g.byType[2] || 0;
         const t3 = g.byType[3] || 0;
-        const quotaFillable = Math.min(t1, QUOTA[1]) + Math.min(t2, QUOTA[2]) + Math.min(t3, QUOTA[3]);
+        const selectedReady = selectReadyCachedQuestions({
+            rows,
+            userId: g.userId,
+            level: g.level,
+            roundType: g.roundType,
+            limit: 10,
+        }).length;
         return {
             userId: g.userId,
             level: g.level,
@@ -1722,8 +1728,9 @@ async function getQuestionCacheDiagnostics(userId) {
             type2Ready: t2,
             type3Ready: t3,
             totalReady: t1 + t2 + t3,
+            selectedReady,
             quotaCanBeMet: t1 >= QUOTA[1] && t2 >= QUOTA[2] && t3 >= QUOTA[3],
-            willUseFallback: quotaFillable < 10,
+            willUseFallback: selectedReady < 10,
         };
     }).sort((a, b) =>
         String(a.userId).localeCompare(String(b.userId)) ||
