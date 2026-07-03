@@ -314,16 +314,17 @@ test('question cache rebuild selects pending meanings from mastery evidence inst
     assert.ok(rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords)'), 'rebuild should pass evidence into pending selection');
 });
 
-test('question cache rebuild primary quota favors at least seven fill-in questions', () => {
+test('question cache rebuild uses elementary fill-in-only quota and non-elementary 7/2/1 quota', () => {
     const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
     const end = feishuSource.indexOf('async function validateWords');
     assert.ok(start >= 0 && end > start);
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(
-        rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,1,2,2,3];'),
-        'primary cache rebuild should align with the 7/2/1 selection quota instead of rebuilding 6/3/1'
+        rebuildSource.includes('isElementaryCacheLevel(level) ? [1,1,1,1,1,1,1,1,1,1] : [1,1,1,1,1,1,1,2,2,3]'),
+        'primary cache rebuild should use all fill-in for elementary and 7/2/1 for other levels'
     );
+    assert.ok(rebuildSource.includes('isElementaryCacheLevel(level) ? { 1: 10, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 }'));
     assert.ok(!rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];'));
 });
 
@@ -341,6 +342,24 @@ test('question cache rebuild generates natural fill-in contexts before downgradi
     assert.ok(rebuildSource.includes('isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context)'));
 });
 
+
+
+test('natural fill-in generation passes explicit level guidance for elementary prompts', () => {
+    const start = feishuSource.indexOf('async function generateNaturalFillInContext');
+    const end = feishuSource.indexOf('async function generateContextMeaning');
+    assert.ok(start >= 0 && end > start);
+    const generatorSource = feishuSource.slice(start, end);
+
+    assert.ok(generatorSource.includes('level ='));
+    assert.ok(generatorSource.includes('Daily life, school, family, park, playground'));
+    assert.ok(generatorSource.includes('No politics, history, academic topics, adult work, idioms'));
+    assert.ok(generatorSource.includes('6 to 8 year old child'));
+
+    const rebuildStart = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const rebuildEnd = feishuSource.indexOf('async function validateWords');
+    const rebuildSource = feishuSource.slice(rebuildStart, rebuildEnd);
+    assert.ok(rebuildSource.includes('level') && rebuildSource.includes('await generateNaturalFillInContext'));
+});
 
 test('question cache rebuild prioritizes Chinese meaning when generating elementary fill-in contexts', () => {
     const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
@@ -388,4 +407,31 @@ test('question cache rebuild retries alternate primary types when preferred type
     assert.ok(rebuildSource.includes('for (const alternateType of availableTypes.filter'));
     assert.ok(rebuildSource.includes('primaryQuestion = buildQuizQuestion'));
     assert.ok(rebuildSource.includes('if (primaryQuestion) primaryQuestion.level = level'));
+});
+test('quiz submit returns the score before post-submit learning updates', () => {
+    const settleStart = feishuSource.indexOf('async function settleAnswers');
+    const loadStart = feishuSource.indexOf('async function loadQuizRecords', settleStart);
+    assert.ok(settleStart >= 0 && loadStart > settleStart, 'settleAnswers should exist before loadQuizRecords');
+    const settleSource = feishuSource.slice(settleStart, loadStart);
+
+    const resultBuild = settleSource.indexOf('const submitResult = buildSubmitResult');
+    const backgroundSchedule = settleSource.indexOf('schedulePostSubmitLearningUpdate');
+    const returnResult = settleSource.indexOf('return submitResult');
+    const wordTableRead = settleSource.indexOf('getRecords(WORD_TABLE)');
+
+    assert.ok(resultBuild >= 0, 'settleAnswers should build the response before background work');
+    assert.ok(backgroundSchedule > resultBuild, 'post-submit learning update should be scheduled after score is known');
+    assert.ok(returnResult > backgroundSchedule, 'settleAnswers should return the prebuilt score result');
+    assert.ok(wordTableRead === -1 || returnResult < wordTableRead, 'word table reads must not block the submit response');
+    assert.ok(!settleSource.includes('await schedulePostSubmitLearningUpdate'), 'background learning update must not be awaited');
+});
+test('post-submit learning update does not write derived stats table fields', () => {
+    const updateStart = feishuSource.indexOf('async function applyPostSubmitLearningUpdate');
+    const settleStart = feishuSource.indexOf('async function settleAnswers', updateStart);
+    assert.ok(updateStart >= 0 && settleStart > updateStart, 'applyPostSubmitLearningUpdate should exist before settleAnswers');
+    const updateSource = feishuSource.slice(updateStart, settleStart);
+
+    assert.doesNotMatch(updateSource, /mastered_words|pending_words|total_words|total_tests|correct_count/);
+    assert.doesNotMatch(updateSource, /updateRecord\(STATS_TABLE/);
+    assert.doesNotMatch(updateSource, /addRecord\(STATS_TABLE/);
 });

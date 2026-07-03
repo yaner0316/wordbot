@@ -41,12 +41,18 @@ Return JSON only, no explanation: {"distractors": ["word1", "word2", "word3"]}`;
     const targetLower = word.toLowerCase();
     const picked = tokens
         .slice(0, 3)
-        .map(t => t.replace(/"/g, '').trim().toLowerCase())
-        .filter(t => t && t !== targetLower && t.length >= 2 && t.length <= 25);
+        .map(t => t.replace(/"/g, '').trim().toLowerCase());
+    const clean = picked.filter(t =>
+        t &&
+        t !== targetLower &&
+        t.length >= 2 &&
+        t.length <= 25 &&
+        /^[a-z]+(?:'[a-z]+)?$/i.test(t)
+    );
 
-    if (picked.length !== 3) return null;
+    if (clean.length !== 3 || new Set(clean).size !== 3) return null;
 
-    return picked;
+    return clean;
 }
 
 module.exports = { selectContextualDistractors };

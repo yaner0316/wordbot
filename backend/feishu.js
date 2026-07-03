@@ -1,6 +1,7 @@
 const https = require('https');
 const { getFormKey, inflectWord } = require('./word-inflector');
 const { selectContextualDistractors } = require('./generate-distractors');
+const { generateElementaryTemplateContext, generateElementaryDefinition, generateElementaryDistractors } = require('./elementary-context');
 const { createAuthService } = require('./auth-service');
 const { createTableCache } = require('./table-cache');
 const crypto = require('crypto');
@@ -1150,6 +1151,88 @@ Return JSON: {"distractors": ["option1", "option2", "option3"]}`;
     }
 }
 
+function buildSubmitResult({ testId, mode, results, correct, masteredWords = [], masteryProgress, rewardSummary, stats }) {
+    const total = results.length;
+    const result = {
+        alreadySubmitted: false,
+        mode,
+        results,
+        correct,
+        total,
+        accuracy: total > 0 ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
+        masteredWords,
+        gameReward: calculateGameReward({
+            testId,
+            mode,
+            correct,
+            total,
+        }),
+    };
+    if (masteryProgress) result.masteryProgress = masteryProgress;
+    if (rewardSummary) result.rewardSummary = rewardSummary;
+    if (stats) result.stats = stats;
+    return result;
+}
+
+function schedulePostSubmitLearningUpdate(input) {
+    Promise.resolve()
+        .then(() => applyPostSubmitLearningUpdate(input))
+        .catch(error => {
+            console.log(`post-submit learning update failed testId=${input.testId}: ${error.message}`);
+        });
+}
+
+async function applyPostSubmitLearningUpdate({ userId, testId, wordMap, correct }) {
+    if (!shouldAffectLearningState(testId)) return;
+
+    const allWordRecords = await getRecords(WORD_TABLE);
+    const wordRecords = allWordRecords.filter(r => userMatches(r.fields.user, userId));
+    const rewardBeforeWordRecords = wordRecords.map(record => ({
+        record_id: record.record_id,
+        fields: { ...record.fields },
+    }));
+    const allTestRecords = await getRecords(TEST_TABLE);
+    const userRealTests = filterAssessmentRecords(
+        allTestRecords.filter(r => userMatches(r.fields.user, userId) && hasSubmittedAnswer(r)),
+        ASSESSMENT_MODE.REAL
+    );
+
+    for (const [word, currentStats] of Object.entries(wordMap)) {
+        const meanings = wordRecords.filter(
+            record => getFieldValue(record.fields.Word).toLowerCase() === word
+        );
+        const recordIds = meanings.map(record => record.record_id);
+        const evaluation = evaluateWordMastery(recordIds, userRealTests, isCorrectField);
+
+        if (evaluation.mastered) {
+            for (const meaning of meanings) {
+                await updateRecord(WORD_TABLE, meaning.record_id, {
+                    Status: STATUS_MASTERED,
+                    remember_time: Date.now(),
+                });
+                meaning.fields.Status = STATUS_MASTERED;
+            }
+        } else if (currentStats.wrongRecordIds.length > 0) {
+            for (const meaning of meanings) {
+                const wasWrong = currentStats.wrongRecordIds.includes(meaning.record_id);
+                const updateFields = { Status: STATUS_PENDING };
+                if (wasWrong) {
+                    updateFields.Error_Count = Number(meaning.fields?.Error_Count || 0) + 1;
+                }
+                await updateRecord(WORD_TABLE, meaning.record_id, updateFields);
+                meaning.fields.Status = STATUS_PENDING;
+            }
+        }
+    }
+
+    createSubmitRewardSummary({
+        userId,
+        beforeRecords: rewardBeforeWordRecords,
+        afterRecords: wordRecords,
+    });
+    console.log(`post-submit learning update completed user=${userId}, testId=${testId}`);
+}
+
 async function settleAnswers(testRecords, answers, userId, testId) {
     console.log(`settleAnswers: user=${userId}, testId=${testId}, records=${testRecords.length}`);
     const sortedRecords = [...testRecords].sort(
@@ -1205,117 +1288,11 @@ async function settleAnswers(testRecords, answers, userId, testId) {
     }
 
     const mode = getAssessmentMode(testId);
-    if (!shouldAffectLearningState(testId)) {
-        const currentStats = await getStats(userId);
-        return {
-            alreadySubmitted: false,
-            mode,
-            results,
-            correct,
-            total: results.length,
-            accuracy: `${((correct / results.length) * 100).toFixed(1)}%`,
-            masteredWords: [],
-            stats: {
-                total: currentStats.totalWords,
-                mastered: currentStats.masteredWords,
-                pending: currentStats.pendingWords,
-            },
-        };
-    }
-
-    const allWordRecords = await getRecords(WORD_TABLE);
-    const wordRecords = allWordRecords.filter(r => userMatches(r.fields.user, userId));
-    const rewardBeforeWordRecords = wordRecords.map(record => ({
-        record_id: record.record_id,
-        fields: { ...record.fields },
-    }));
-    const allTestRecords = await getRecords(TEST_TABLE);
-    const userRealTests = filterAssessmentRecords(
-        allTestRecords.filter(r => userMatches(r.fields.user, userId) && hasSubmittedAnswer(r)),
-        ASSESSMENT_MODE.REAL
-    );
-    const masteredWords = [];
-    const masteryProgress = {};
-
-    for (const [word, currentStats] of Object.entries(wordMap)) {
-        const meanings = wordRecords.filter(
-            record => getFieldValue(record.fields.Word).toLowerCase() === word
-        );
-        const recordIds = meanings.map(record => record.record_id);
-        const evaluation = evaluateWordMastery(recordIds, userRealTests, isCorrectField);
-        masteryProgress[word] = evaluation;
-
-        if (evaluation.mastered) {
-            masteredWords.push(word);
-            for (const meaning of meanings) {
-                await updateRecord(WORD_TABLE, meaning.record_id, {
-                    Status: STATUS_MASTERED,
-                    remember_time: Date.now(),
-                });
-                meaning.fields.Status = STATUS_MASTERED;
-            }
-        } else if (currentStats.wrongRecordIds.length > 0) {
-            for (const meaning of meanings) {
-                const wasWrong = currentStats.wrongRecordIds.includes(meaning.record_id);
-                const updateFields = { Status: STATUS_PENDING };
-                if (wasWrong) {
-                    updateFields.Error_Count = Number(meaning.fields?.Error_Count || 0) + 1;
-                }
-                await updateRecord(WORD_TABLE, meaning.record_id, updateFields);
-                meaning.fields.Status = STATUS_PENDING;
-            }
-        }
-    }
-
-    const total = wordRecords.length;
-    const mastered = wordRecords.filter(r => isMasteredStatus(r.fields.Status)).length;
-
-    if (getAssessmentKind(testId) === ASSESSMENT_KIND.QUIZ) {
-        const statsRecords = await getRecords(STATS_TABLE);
-        const userRecord = statsRecords.find(r => userMatches(r.fields.user, userId));
-        const statsFields = {
-            user: userId,
-            total_words: total,
-            mastered_words: mastered,
-            pending_words: total - mastered,
-            total_tests: Number((userRecord?.fields?.total_tests || 0)) + 1,
-            correct_count: Number((userRecord?.fields?.correct_count || 0)) + correct,
-            last_test_time: Date.now()
-        };
-
-        if (userRecord) {
-            await updateRecord(STATS_TABLE, userRecord.record_id, statsFields);
-        } else {
-            await addRecord(STATS_TABLE, statsFields);
-        }
-    }
-
+    const submitResult = buildSubmitResult({ testId, mode, results, correct, masteredWords: [] });
+    schedulePostSubmitLearningUpdate({ userId, testId, wordMap, correct });
     console.log('submitAnswers results:', JSON.stringify(results).substring(0, 500));
-    const rewardSummary = createSubmitRewardSummary({
-        userId,
-        beforeRecords: rewardBeforeWordRecords,
-        afterRecords: wordRecords,
-    });
-    return {
-        alreadySubmitted: false,
-        mode,
-        results,
-        correct,
-        total: results.length,
-        accuracy: `${((correct / results.length) * 100).toFixed(1)}%`,
-        masteredWords,
-        masteryProgress,
-        gameReward: calculateGameReward({
-            testId,
-            mode,
-            correct,
-            total: results.length,
-        }),
-        rewardSummary,
-        stats: { total, mastered, pending: total - mastered }
-    };
+    return submitResult;
 }
-
 async function loadQuizRecords(testId) {
     await quizRecordWrites.waitFor(testId);
     const filter = {
@@ -1805,37 +1782,59 @@ async function rebuildQuestionCacheForUser(userId) {
     const bufferedRows = [];
     const writtenRows = [];
     const rejectionSummary = {};
-    const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,1,2,2,3];
+    const PRIMARY_TYPE_QUOTA = isElementaryCacheLevel(level) ? [1,1,1,1,1,1,1,1,1,1] : [1,1,1,1,1,1,1,2,2,3];
+    const PRIMARY_TYPE_TARGETS = isElementaryCacheLevel(level) ? { 1: 10, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 };
+    const primaryReadyCounts = { 1: 0, 2: 0, 3: 0 };
     let wordIndex = 0;
     for (const rec of pending) {
         const info = pool[rec.record_id];
         if (!info) continue;
         if (isReservedTestWord(rec.word)) continue;
         const contextEnhancedInfo = { ...info };
-        const preferred = PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
-        if (preferred === 1 && (!isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) || isElementaryCacheLevel(level)) && MINIMAX_API_KEY) {
-            const generatedContext = await generateNaturalFillInContext(
-                contextEnhancedInfo.word,
-                contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning
-            );
+        let usedElementaryTemplateContext = false;
+        const preferred = [1, 2, 3].find(type => primaryReadyCounts[type] < PRIMARY_TYPE_TARGETS[type]) || PRIMARY_TYPE_QUOTA[wordIndex % PRIMARY_TYPE_QUOTA.length];
+        if (preferred === 1 && (!isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) || isElementaryCacheLevel(level))) {
+            const templateContext = isElementaryCacheLevel(level)
+                ? generateElementaryTemplateContext(contextEnhancedInfo.word, contextEnhancedInfo.meaning)
+                : '';
+            const generatedContext = templateContext || (MINIMAX_API_KEY
+                ? await generateNaturalFillInContext(
+                    contextEnhancedInfo.word,
+                    contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning,
+                    level
+                )
+                : '');
             if (generatedContext) {
+                usedElementaryTemplateContext = Boolean(templateContext);
                 contextEnhancedInfo.context = generatedContext;
                 contextEnhancedInfo.Context_CN = '';
             }
+        }
+        if (isElementaryCacheLevel(level)) {
+            const elementaryDefinition = generateElementaryDefinition(
+                contextEnhancedInfo.word,
+                contextEnhancedInfo.meaning || contextEnhancedInfo.CN_Meaning
+            );
+            if (elementaryDefinition) contextEnhancedInfo.meaning = elementaryDefinition;
         }
         const availableTypes = [
             ...(isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? [1] : []),
             ...(contextEnhancedInfo.meaning?.trim() ? [2] : []),
             ...(hasMeaningfulChineseMeaning(contextEnhancedInfo.CN_Meaning) ? [3] : []),
         ];
-        const primaryType = availableTypes.includes(preferred) ? preferred : (availableTypes[0] || 1);
+        const mustPreferFillIn = preferred === 1 && primaryReadyCounts[1] < PRIMARY_TYPE_TARGETS[1];
+        const primaryType = availableTypes.includes(preferred) ? preferred : (mustPreferFillIn ? 1 : (availableTypes[0] || 1));
         wordIndex++;
         const reviewType = primaryType === 1
             ? (contextEnhancedInfo.meaning?.trim() ? 2 : primaryType)
             : (isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? 1 : primaryType);
         let baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
         let primaryForcedDistractors = null;
-        if (primaryType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context) {
+        if (primaryType === 1 && isElementaryCacheLevel(level)) {
+            const elementaryDistractors = generateElementaryDistractors(contextEnhancedInfo.word);
+            if (elementaryDistractors.length === 3) primaryForcedDistractors = elementaryDistractors;
+        }
+        if (!primaryForcedDistractors && primaryType === 1 && MINIMAX_API_KEY && contextEnhancedInfo.context && !usedElementaryTemplateContext) {
             const candidates = [...new Set(
                 [...(contextEnhancedInfo.distractors || []), ...fallbackWords]
                     .map(d => String(d || '').trim().toLowerCase())
@@ -1857,27 +1856,46 @@ async function rebuildQuestionCacheForUser(userId) {
             primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
         );
         if (primaryQuestion) primaryQuestion.level = level;
-        if (retryElementaryFillInContext(primaryQuestion) && MINIMAX_API_KEY) {
-            const generatedContext = await generateNaturalFillInContext(
-                contextEnhancedInfo.word,
-                contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning
+        if (!primaryQuestion && primaryType === 1 && primaryForcedDistractors) {
+            primaryQuestion = buildQuizQuestion(
+                rec.record_id,
+                baseInfo,
+                primaryType,
+                'cache-primary',
+                letters
             );
+            if (primaryQuestion) primaryQuestion.level = level;
+        }
+        if (retryElementaryFillInContext(primaryQuestion) && (MINIMAX_API_KEY || isElementaryCacheLevel(level))) {
+            const retryTemplateContext = generateElementaryTemplateContext(contextEnhancedInfo.word, contextEnhancedInfo.meaning);
+            const generatedContext = retryTemplateContext || (MINIMAX_API_KEY
+                ? await generateNaturalFillInContext(
+                    contextEnhancedInfo.word,
+                    contextEnhancedInfo.CN_Meaning || contextEnhancedInfo.meaning,
+                    level
+                )
+                : '');
             if (generatedContext) {
+                usedElementaryTemplateContext = Boolean(retryTemplateContext);
                 contextEnhancedInfo.context = generatedContext;
                 contextEnhancedInfo.Context_CN = '';
                 baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
                 if (primaryType === 1) {
+                    if (isElementaryCacheLevel(level)) {
+                        const elementaryDistractors = generateElementaryDistractors(contextEnhancedInfo.word);
+                        if (elementaryDistractors.length === 3) primaryForcedDistractors = elementaryDistractors;
+                    }
                     const retryCandidates = [...new Set(
                         [...(contextEnhancedInfo.distractors || []), ...fallbackWords]
                             .map(d => String(d || '').trim().toLowerCase())
                             .filter(d => d && d !== contextEnhancedInfo.word.toLowerCase())
                     )];
-                    primaryForcedDistractors = await selectContextualDistractors({
+                    primaryForcedDistractors = primaryForcedDistractors || (usedElementaryTemplateContext ? null : await selectContextualDistractors({
                         word: contextEnhancedInfo.word,
                         context: contextEnhancedInfo.context,
                         candidates: retryCandidates,
                         callLLM: p => callMiniMaxAPI(p, 'MiniMax-M2.7', 10000),
-                    }).catch(() => null);
+                    }).catch(() => null));
                     primaryQuestion = buildQuizQuestion(
                         rec.record_id,
                         baseInfo,
@@ -1887,10 +1905,21 @@ async function rebuildQuestionCacheForUser(userId) {
                         primaryForcedDistractors ? { forcedDistractors: primaryForcedDistractors } : {}
                     );
                     if (primaryQuestion) primaryQuestion.level = level;
+                    if (!primaryQuestion && primaryForcedDistractors) {
+                        primaryQuestion = buildQuizQuestion(
+                            rec.record_id,
+                            baseInfo,
+                            primaryType,
+                            'cache-primary',
+                            letters
+                        );
+                        if (primaryQuestion) primaryQuestion.level = level;
+                    }
                 }
             }
         }
-        if (!primaryQuestion && availableTypes.length > 1) {
+        const shouldHoldForFillInQuota = preferred === 1 && primaryReadyCounts[1] < PRIMARY_TYPE_TARGETS[1];
+        if (!primaryQuestion && !shouldHoldForFillInQuota && availableTypes.length > 1) {
             for (const alternateType of availableTypes.filter(type => type !== primaryType)) {
                 primaryQuestion = buildQuizQuestion(
                     rec.record_id,
@@ -1925,12 +1954,13 @@ async function rebuildQuestionCacheForUser(userId) {
             reviewForcedDistractors ? { forcedDistractors: reviewForcedDistractors } : {}
         );
         if (reviewQuestion) reviewQuestion.level = level;
-        if (!primaryQuestion || !reviewQuestion) {
-            if (!primaryQuestion) addRejectReason(rejectionSummary, 'missing_primary_question');
+        if (!primaryQuestion) {
+            addRejectReason(rejectionSummary, 'missing_primary_question');
             if (!reviewQuestion) addRejectReason(rejectionSummary, 'missing_review_question');
             continue;
         }
-        let cacheQuestions = [primaryQuestion, reviewQuestion];
+        if (!reviewQuestion) addRejectReason(rejectionSummary, 'missing_review_question');
+        let cacheQuestions = [primaryQuestion, reviewQuestion].filter(Boolean);
         if (level && MINIMAX_API_KEY) {
             await adaptContextsByLevel(cacheQuestions, level);
         }
@@ -1946,7 +1976,7 @@ async function rebuildQuestionCacheForUser(userId) {
                 letters
             )).filter(Boolean);
         }
-        if (cacheQuestions.length !== 2) {
+        if (!cacheQuestions.length) {
             addRejectReason(rejectionSummary, 'ai_audit_rejected');
             continue;
         }
@@ -1960,14 +1990,20 @@ async function rebuildQuestionCacheForUser(userId) {
             translateWords: translateWordsToCN,
             updateRecord: (recordId, fields) => updateRecord(WORD_TABLE, recordId, fields),
         });
+        const appendedStart = bufferedRows.length;
         appendReadyCacheRows(bufferedRows, {
             userId,
             level,
-            primaryQuestion: cacheQuestions[0],
-            reviewQuestion: cacheQuestions[1],
+            primaryQuestion: cacheQuestions.find(q => q.testId === 'cache-primary') || null,
+            reviewQuestion: cacheQuestions.find(q => q.testId === 'cache-review') || null,
             sourceVersion: 'phase-2',
             rejectionSummary,
         });
+        for (const row of bufferedRows.slice(appendedStart)) {
+            if (row.round_type === 'primary') {
+                primaryReadyCounts[row.question_type] = (primaryReadyCounts[row.question_type] || 0) + 1;
+            }
+        }
         if (bufferedRows.length >= QUESTION_CACHE_REBUILD_FLUSH_SIZE) {
             await flushQuestionCacheRows(bufferedRows, writtenRows);
         }
@@ -2169,13 +2205,24 @@ Return JSON only: {"example": "sentence"}`;
     return null;
 }
 
-async function generateNaturalFillInContext(word, meaning) {
+async function generateNaturalFillInContext(word, meaning, level = '') {
     if (!MINIMAX_API_KEY) return '';
     const target = String(word || '').trim().toLowerCase();
     if (!target) return '';
-    const prompt = `Create one natural English sentence for a child-friendly vocabulary fill-in-the-blank question.
+    const elementary = isElementaryCacheLevel(level);
+    const levelGuidance = elementary
+        ? [
+            'Level: elementary, for a 6 to 8 year old child.',
+            'Use Daily life, school, family, park, playground, food, clothes, pets, or simple home scenes.',
+            'Use concrete people such as I, she, he, the boy, the girl, mom, dad, or a child.',
+            'No politics, history, academic topics, adult work, idioms, science labs, anatomy, museums, campaigns, or abstract ideas.',
+            'Use very common words and one simple sentence.',
+        ].join('\n')
+        : 'Level: child-friendly general learner sentence.';
+    const prompt = `Create one natural English sentence for a vocabulary fill-in-the-blank question.
 Target word: "${target}"
 Meaning hint: "${meaning || ''}"
+${levelGuidance}
 Rules:
 1. Include the target word exactly once, as a normal word in the sentence.
 2. The sentence must be natural, concrete, and easy to understand.
@@ -2198,7 +2245,6 @@ Return JSON only: {"context":"sentence"}`;
     } catch (e) { }
     return '';
 }
-
 async function generateContextMeaning(word, context) {
     if (!MINIMAX_API_KEY) return '';
     const sentence = String(context || '').replace(/_{3,}/g, word);

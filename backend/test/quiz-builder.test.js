@@ -303,6 +303,37 @@ test('uses fallback distractors when local distractors were already used in this
     ]);
 });
 
+
+test('fill-in questions skip phrase distractors when enough clean single-word options remain', () => {
+    const buildQuizQuestion = createQuizBuilder({
+        choose: (items, count) => items.slice(0, count),
+        escapeRegExp: text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        getWordForms: word => [word],
+        isContextUsableForWord: (word, context) =>
+            new RegExp(`\\b${word}\\b`, 'i').test(context || ''),
+        normalizeArticleContext,
+        getFallbackDistractors: () => ['orange', 'grape', 'melon'],
+    });
+
+    const question = buildQuizQuestion(
+        'rec-phrase-filter',
+        {
+            word: 'apple',
+            meaning: 'fruit',
+            context: 'I ate an apple after lunch.',
+            distractors: ['agree to', 'pear', 'banana'],
+            CN_Meaning: String.fromCharCode(0x82f9, 0x679c),
+        },
+        1,
+        'test-phrase-filter',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.ok(question);
+    assert.equal(question.type, 1);
+    assert.ok(!question.options.some(option => option.includes('agree to')));
+});
+
 test('rejects definition questions that contain Chinese AI meta-response text', () => {
     const buildQuizQuestion = createBuilder();
 

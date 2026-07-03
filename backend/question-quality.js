@@ -148,6 +148,8 @@ function hasDictionaryStyleDefinition(text) {
     if (!value) return false;
     const patterns = [
         'the act of',
+        'the act or result',
+        'state of being',
         'an act of',
         'characterized by',
         'a person who',
@@ -157,12 +159,15 @@ function hasDictionaryStyleDefinition(text) {
         'relating to',
         'consisting of',
         'usually of',
+        'now usually',
         'worn by',
         'or any two surfaces',
         'before or after exercise',
         'an edible plant',
+        'a plant of the family',
         'an adult female',
         'of the species',
+        'of the family',
         'especially',
         'brassica',
         'var.',
@@ -175,6 +180,12 @@ function hasDictionaryStyleDefinition(text) {
         'such as a part',
         'road or track',
         'not crooked or bent',
+        'secure convex lid',
+        'convex',
+        'fine grained',
+        'sediment',
+        'piperaceae',
+        'a mixture of',
     ];
     return patterns.some(pattern => value.includes(pattern));
 }
@@ -195,12 +206,45 @@ function hasElementaryContextRisk(text) {
         'ballparks',
         'young ewes',
         'shepherd',
+        'mare',
+        'nuzzled',
+        'newborn',
+        'meadow',
+        'door swing',
+        'door _____',
+        'which way the door opens',
+        'of a flask',
+        'violin',
+        'sail, or ship',
+        'pressed the bright',
+        'wavy edges',
         'execute',
         'padded mat',
     ];
     return riskyPatterns.some(pattern => value.includes(pattern));
 }
 
+function hasAmbiguousElementaryContext(question) {
+    const word = String(question.word || '').trim().toLowerCase();
+    const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
+    const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
+    const optionSet = new Set(optionWords);
+    const hasAll = words => words.every(item => optionSet.has(item));
+
+    if (word === 'braided' && /wore _____ hair/.test(context) && hasAll(['straight', 'short', 'curly'])) {
+        return true;
+    }
+    if (word === 'curly' && /has _____ hair/.test(context) && hasAll(['long', 'short', 'straight'])) {
+        return true;
+    }
+    if (word === 'sweater' && /wore a warm _____/.test(context) && hasAll(['shirt', 'coat', 'jacket'])) {
+        return true;
+    }
+    if (word === 'pants' && /wore blue _____ to school/.test(context) && hasAll(['shirt', 'shoes', 'socks'])) {
+        return true;
+    }
+    return false;
+}
 function hasSenseMismatchRisk(question) {
     const word = String(question.word || '').trim().toLowerCase();
     const meaning = String(question.correctMeaning || '').trim();
@@ -264,6 +308,7 @@ function getQuestionQualityIssues(question) {
     if (isElementaryLevel(question.level)) {
         if (type === 1) {
             if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
+            if (hasAmbiguousElementaryContext(question)) issues.push('ambiguous_elementary_context');
         }
         if (type === 2 && hasDictionaryStyleDefinition(question.context)) {
             issues.push('dictionary_definition');

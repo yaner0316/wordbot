@@ -161,6 +161,78 @@ test('elementary definition questions reject dictionary-style definitions', () =
     assert.ok(getQuestionQualityIssues(sweater).includes('dictionary_definition'));
 });
 
+test('elementary definition questions reject screenshot hard dictionary definitions', () => {
+    const cases = [
+        {
+            word: 'chest',
+            context: 'A box, now usually a large strong box with a secure convex lid.',
+            correctMeaning: CN_CHEST,
+            options: ['A. chest', 'B. mud', 'C. pepper', 'D. foal'],
+            answer: 'A',
+        },
+        {
+            word: 'mud',
+            context: 'A mixture of water and soil or fine grained sediment.',
+            correctMeaning: CN_MUD,
+            options: ['A. chest', 'B. mud', 'C. pepper', 'D. foal'],
+            answer: 'B',
+        },
+        {
+            word: 'pepper',
+            context: 'A plant of the family Piperaceae.',
+            correctMeaning: String.fromCharCode(0x80e1, 0x6912),
+            options: ['A. chest', 'B. mud', 'C. pepper', 'D. foal'],
+            answer: 'C',
+        },
+    ];
+
+    for (const q of cases) {
+        const question = { type: 2, level: ELEMENTARY, ...q };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, q.word);
+        assert.ok(issues.includes('dictionary_definition'), q.word + ' issues=' + issues.join(','));
+    }
+});
+
+test('elementary quality rejects actual hard cached rows from Draggy preview', () => {
+    const cases = [
+        {
+            type: 1,
+            word: 'swing',
+            context: 'Door _____ tells you which way the door opens.',
+            correctMeaning: String.fromCharCode(0x79cb, 0x5343),
+            options: ['A. cub', 'B. swing', 'C. clap', 'D. chick'],
+            answer: 'B',
+            expected: 'not_elementary_context',
+        },
+        {
+            type: 1,
+            word: 'belly',
+            context: 'the _____ of a flask, muscle, violin, sail, or ship',
+            correctMeaning: String.fromCharCode(0x8179, 0x90e8),
+            options: ['A. eraser', 'B. belly', 'C. curly', 'D. straight'],
+            answer: 'B',
+            expected: 'not_elementary_context',
+        },
+        {
+            type: 2,
+            word: 'roll',
+            context: 'The act or result of rolling, or state of being rolled.',
+            correctMeaning: String.fromCharCode(0x5377),
+            options: ['A. inherit', 'B. stir', 'C. roll', 'D. handsome'],
+            answer: 'C',
+            expected: 'dictionary_definition',
+        },
+    ];
+
+    for (const q of cases) {
+        const question = { level: ELEMENTARY, ...q };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, q.word);
+        assert.ok(issues.includes(q.expected), q.word + ' issues=' + issues.join(','));
+    }
+});
+
 test('elementary quality checks keep a simple direct fill-in question', () => {
     const question = {
         type: 1,
@@ -323,5 +395,76 @@ test('bad distractor shape is rejected across learning levels', () => {
         const issues = getQuestionQualityIssues(question);
         assert.equal(isQuestionQualityAcceptable(question), false, level);
         assert.ok(issues.includes('bad_distractor_shape'), level + ' issues=' + issues.join(','));
+    }
+});
+
+test('elementary fill-in rejects hard animal nursery context even with clean options', () => {
+    const question = {
+        type: 1,
+        level: ELEMENTARY,
+        word: 'foal',
+        context: 'The mare nuzzled her newborn _____ in the soft meadow.',
+        correctMeaning: String.fromCharCode(0x5c0f, 0x9a6c, 0x9a79),
+        options: ['A. calf', 'B. puppy', 'C. kitten', 'D. foal'],
+        answer: 'D',
+    };
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('not_elementary_context'), 'issues=' + issues.join(','));
+});
+
+test('elementary fill-in rejects screenshot sample with phrase distractor', () => {
+    const question = {
+        type: 1,
+        level: ELEMENTARY,
+        word: 'foal',
+        context: 'The mare nuzzled her newborn _____ in the soft meadow.',
+        correctMeaning: String.fromCharCode(0x5c0f, 0x9a6c, 0x9a79),
+        options: ['A. photographer', 'B. agree to', 'C. swing', 'D. foal'],
+        answer: 'D',
+    };
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('bad_distractor_shape'), 'issues=' + issues.join(','));
+    assert.ok(issues.includes('not_elementary_context'), 'issues=' + issues.join(','));
+});
+test('elementary fill-in rejects ambiguous same-category clothing and hair contexts', () => {
+    const cases = [
+        {
+            word: 'braided',
+            context: 'The girl wore _____ hair at school today.',
+            options: ['A. straight', 'B. short', 'C. curly', 'D. braided'],
+            answer: 'D',
+        },
+        {
+            word: 'curly',
+            context: 'The girl has _____ hair after her bath.',
+            options: ['A. curly', 'B. long', 'C. short', 'D. straight'],
+            answer: 'A',
+        },
+        {
+            word: 'sweater',
+            context: 'I wore a warm _____ on a cold day.',
+            options: ['A. shirt', 'B. coat', 'C. sweater', 'D. jacket'],
+            answer: 'C',
+        },
+        {
+            word: 'pants',
+            context: 'Tom wore blue _____ to school this morning.',
+            options: ['A. pants', 'B. shirt', 'C. shoes', 'D. socks'],
+            answer: 'A',
+        },
+    ];
+
+    for (const sample of cases) {
+        const question = {
+            type: 1,
+            level: ELEMENTARY,
+            correctMeaning: '小学释义',
+            ...sample,
+        };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, sample.word);
+        assert.ok(issues.includes('ambiguous_elementary_context'), sample.word + ' issues=' + issues.join(','));
     }
 });

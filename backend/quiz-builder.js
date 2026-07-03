@@ -1,4 +1,4 @@
-﻿const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
+const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
 
 function createQuizBuilder({
     choose,
@@ -89,9 +89,15 @@ function createQuizBuilder({
         let articleNormalized = false;
         if (qType === 1 && isContextUsableForWord(key, info.context)) {
             if (hasInvalidFillInGrammar({ word: key, context: info.context })) return null;
-            usableDistractors = usableDistractors.filter(distractor =>
-                !distractor.includes(key) && !key.includes(distractor)
-            );
+            const isCleanFillInDistractor = distractor =>
+                /^[a-z]+(?:'[a-z]+)?$/i.test(distractor) &&
+                !distractor.includes(key) &&
+                !key.includes(distractor);
+            usableDistractors = usableDistractors.filter(isCleanFillInDistractor);
+            if (usableDistractors.length < 3 && forcedDistractors === null) {
+                const supplemental = fallbackDistractors.filter(isCleanFillInDistractor);
+                usableDistractors = [...new Set([...usableDistractors, ...supplemental])];
+            }
         }
         if (usableDistractors.length < 3) return null;
 

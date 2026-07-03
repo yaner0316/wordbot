@@ -51,10 +51,14 @@ function buildCacheRow({ userId, level, roundType, question, sourceVersion, now 
 }
 
 function buildCacheRowsForRecord({ userId, level, primaryQuestion, reviewQuestion, sourceVersion = 'v1', now = Date.now() }) {
-    return [
-        buildCacheRow({ userId, level, roundType: 'primary', question: primaryQuestion, sourceVersion, now }),
-        buildCacheRow({ userId, level, roundType: 'review', question: reviewQuestion, sourceVersion, now }),
-    ];
+    const rows = [];
+    if (primaryQuestion) {
+        rows.push(buildCacheRow({ userId, level, roundType: 'primary', question: primaryQuestion, sourceVersion, now }));
+    }
+    if (reviewQuestion) {
+        rows.push(buildCacheRow({ userId, level, roundType: 'review', question: reviewQuestion, sourceVersion, now }));
+    }
+    return rows;
 }
 
 function normalizeCacheRow(row) {
@@ -120,7 +124,10 @@ function isCacheQuestionReady(row) {
     return getCacheQuestionReadinessIssues(row).length === 0;
 }
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
-    const QUOTA = { 1: 7, 2: 2, 3: 1 };
+    const elementaryLevel = String.fromCharCode(0x5c0f, 0x5b66);
+    const isElementary = String(level || '').trim() === elementaryLevel;
+    const QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 };
+    const MAX_QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : { 1: 8, 2: 3, 3: 1 };
     const targetUserKey = userKey(userId);
     const eligible = (rows || [])
         .map(normalizeCacheRow)
@@ -131,18 +138,28 @@ function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary'
         .sort((a, b) => a.usedCount - b.usedCount || b.generatedAt - a.generatedAt || a.word.localeCompare(b.word));
     const counts = { 1: 0, 2: 0, 3: 0 };
     const selected = [];
+    const selectedKeys = new Set();
+    function selectRow(row) {
+        selected.push(row);
+        selectedKeys.add(row.recordId || row.wordRecordId || `${row.word}:${row.type}`);
+        counts[row.type] = (counts[row.type] || 0) + 1;
+    }
     for (const row of eligible) {
         if (selected.length >= limit) break;
         if ((counts[row.type] || 0) < (QUOTA[row.type] || 0)) {
-            selected.push(row);
-            counts[row.type] = (counts[row.type] || 0) + 1;
+            selectRow(row);
         }
     }
     if (selected.length < limit) {
-        const taken = new Set(selected.map(r => r.recordId));
-        for (const row of eligible) {
-            if (selected.length >= limit) break;
-            if (!taken.has(row.recordId)) selected.push(row);
+        for (const type of [1, 2, 3]) {
+            for (const row of eligible) {
+                if (selected.length >= limit) break;
+                const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
+                if (row.type !== type || selectedKeys.has(key)) continue;
+                if ((counts[row.type] || 0) < (MAX_QUOTA[row.type] || QUOTA[row.type] || 0)) {
+                    selectRow(row);
+                }
+            }
         }
     }
     return selected.map(row => ({ ...row.question, cacheRecordId: row.recordId }));

@@ -179,6 +179,65 @@ test('selects cached quiz questions with fill-in heavy type mix', () => {
     assert.equal(counts[2], 2);
     assert.equal(counts[3], 1);
 });
+
+test('caps cached quiz definition questions at three when fill-ins are short', () => {
+    const rows = [];
+    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const cnApple = String.fromCharCode(0x82f9, 0x679c);
+    for (let i = 1; i <= 3; i++) {
+        rows.push(question({ record_id: `row-t1-short-${i}`, word_record_id: `rec-t1-short-${i}`, word: `apple${i}`, level: middleLevel, question_type: 1 }));
+    }
+    for (let i = 1; i <= 12; i++) {
+        rows.push(question({ record_id: `row-t2-extra-${i}`, word_record_id: `rec-t2-extra-${i}`, word: `word${i}`, level: middleLevel, question_type: 2, question_text: `simple clue ${i}` }));
+    }
+    for (let i = 1; i <= 4; i++) {
+        rows.push(question({ record_id: `row-t3-extra-${i}`, word_record_id: `rec-t3-extra-${i}`, word: `cnword${i}`, level: middleLevel, question_type: 3, question_text: cnApple }));
+    }
+
+    const selected = selectReadyCachedQuestions({
+        rows,
+        userId: 'qiuqiu',
+        level: middleLevel,
+        roundType: 'primary',
+        limit: 10,
+    });
+    const counts = selected.reduce((acc, item) => {
+        acc[item.type] = (acc[item.type] || 0) + 1;
+        return acc;
+    }, {});
+
+    assert.equal(selected.length, 7);
+    assert.equal(counts[1], 3);
+    assert.equal(counts[2], 3);
+    assert.equal(counts[3], 1);
+});
+test('elementary cached quiz selects only fill-in questions', () => {
+    const rows = [];
+    const elementaryLevel = String.fromCharCode(0x5c0f, 0x5b66);
+    for (let i = 1; i <= 10; i++) {
+        rows.push(question({ record_id: `row-t1-flex-${i}`, word_record_id: `rec-t1-flex-${i}`, word: `fill${i}`, level: elementaryLevel, question_type: 1 }));
+    }
+    for (let i = 1; i <= 3; i++) {
+        rows.push(question({ record_id: `row-t2-flex-${i}`, word_record_id: `rec-t2-flex-${i}`, word: `def${i}`, level: elementaryLevel, question_type: 2, question_text: `simple clue ${i} for children` }));
+    }
+
+    const selected = selectReadyCachedQuestions({
+        rows,
+        userId: 'qiuqiu',
+        level: elementaryLevel,
+        roundType: 'primary',
+        limit: 10,
+    });
+    const counts = selected.reduce((acc, item) => {
+        acc[item.type] = (acc[item.type] || 0) + 1;
+        return acc;
+    }, {});
+
+    assert.equal(selected.length, 10);
+    assert.equal(counts[1], 10);
+    assert.equal(counts[2] || 0, 0);
+    assert.equal(counts[3] || 0, 0);
+});
 test('cache status summary reports ready counts by level and round type', () => {
     const summary = summarizeCacheStatus([
         question({ round_type: 'primary' }),
