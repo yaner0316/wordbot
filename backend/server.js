@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS } = require('./config');
-const { registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
+const { registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./feishu');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -355,11 +355,11 @@ app.post('/api/admin/addWord', async (req, res) => {
 
 app.post('/api/admin/validateWords', async (req, res) => {
     try {
-        const { words } = req.body;
+        const { targetUser, words } = req.body;
         if (!words || !Array.isArray(words)) {
             return res.status(400).json({ error: '缺少words参数' });
         }
-        const result = await validateWords(words);
+        const result = await validateWords(targetUser || null, words);
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -368,12 +368,17 @@ app.post('/api/admin/validateWords', async (req, res) => {
 
 app.post('/api/admin/addWords', async (req, res) => {
     try {
-        const { targetUser, words } = req.body;
+        const { targetUser, words, confirmNewMeanings = false, skipDuplicateWords = false } = req.body;
         if (!targetUser || !words || !Array.isArray(words) || words.length === 0) {
             return res.status(400).json({ error: '缺少参数' });
         }
-        const result = await addWords(targetUser, words);
-        res.json(result);
+        const result = await addWords(targetUser, words, {
+            confirmNewMeanings: Boolean(confirmNewMeanings),
+            skipDuplicateWords: Boolean(skipDuplicateWords),
+        });
+        const needsConfirmation = result?.code === 'DUPLICATE_WORD_CONFIRMATION_REQUIRED' ||
+            result?.code === 'NEW_MEANING_REQUIRES_MEANING';
+        res.status(needsConfirmation ? 409 : 200).json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -387,6 +392,19 @@ app.post('/api/admin/updateMulti', async (req, res) => {
         }
         await updateMultiDefinition(targetUser, words);
         res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/words', async (req, res) => {
+    try {
+        const userId = String(req.query.userId || '').trim();
+        if (!userId) return res.status(400).json({ error: '缺少userId参数' });
+        const page = Number(req.query.page || 1);
+        const pageSize = Number(req.query.pageSize || 20);
+        const result = await listUserWords(userId, { page, pageSize });
+        res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

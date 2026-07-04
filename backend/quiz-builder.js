@@ -148,6 +148,7 @@ function createQuizBuilder({
                 type: 2,
                 word: key,
                 context: meaning,
+                contextCN: info.Meaning_CN || info.Context_CN || '',
                 options,
                 answer: letters[correctIndex],
                 correctMeaning: info.CN_Meaning || '',

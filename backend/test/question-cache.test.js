@@ -6,6 +6,7 @@ const {
     buildCacheRowsForRecord,
     getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
+    normalizeCacheRow,
     selectReadyCachedQuestions,
     summarizeCacheStatus,
 } = require('../question-cache');
@@ -36,6 +37,28 @@ function question(overrides) {
     };
 }
 
+test('cache rows preserve translated question explanations', () => {
+    const rows = buildCacheRowsForRecord({
+        userId: 'yusi',
+        level: '高中',
+        sourceVersion: 'v1',
+        primaryQuestion: {
+            record_id: 'rec-cn',
+            word: 'noun',
+            type: 2,
+            context: 'A word that can refer to a person, animal, place, thing, or idea.',
+            contextCN: '可以指人、动物、地方、事物或想法的词。',
+            options: ['A. verb', 'B. noun', 'C. adjective', 'D. adverb'],
+            optionMeanings: ['动词', '名词', '形容词', '副词'],
+            answer: 'B',
+            correctMeaning: '名词',
+        },
+        now: 123,
+    });
+
+    assert.equal(rows[0].context_cn, '可以指人、动物、地方、事物或想法的词。');
+    assert.equal(normalizeCacheRow(rows[0]).question.contextCN, '可以指人、动物、地方、事物或想法的词。');
+});
 test('builds two cache rows for a meaning record', () => {
     const rows = buildCacheRowsForRecord({
         userId: 'qiuqiu',

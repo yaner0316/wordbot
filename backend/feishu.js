@@ -1444,6 +1444,16 @@ const reviewService = createReviewService({
                 }
             }
         }
+        // For context-fill source questions (type 1), override with the contextual meaning
+        // so review questions test the same sense the child actually encountered.
+        const sourceContext = String(input.source?.context || '').trim();
+        const wordStr = String(info.word || '').trim();
+        if (input.source?.type === 1 && sourceContext && sourceContext !== wordStr) {
+            const contextual = await generateContextMeaning(wordStr, sourceContext).catch(() => '');
+            if (contextual && !hasAiMetaResponse(contextual)) {
+                correctMeaning = contextual;
+            }
+        }
         return {
             type: 4,
             answerMode: 'cn_meaning',
@@ -1828,7 +1838,11 @@ async function rebuildQuestionCacheForUser(userId) {
         const reviewType = primaryType === 1
             ? (contextEnhancedInfo.meaning?.trim() ? 2 : primaryType)
             : (isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? 1 : primaryType);
-        let baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
+        const needsDefinitionTranslation = (primaryType === 2 || reviewType === 2) && contextEnhancedInfo.meaning?.trim();
+        if (needsDefinitionTranslation && !contextEnhancedInfo.Meaning_CN && MINIMAX_API_KEY) {
+            const definitionText = (contextEnhancedInfo.meaning || '').split(';')[0] || contextEnhancedInfo.meaning || '';
+            contextEnhancedInfo.Meaning_CN = await translateContextToCN(definitionText).catch(() => '');
+        }        let baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
         let primaryForcedDistractors = null;
         if (primaryType === 1 && isElementaryCacheLevel(level)) {
             const elementaryDistractors = generateElementaryDistractors(contextEnhancedInfo.word);
@@ -2018,15 +2032,73 @@ async function rebuildQuestionCacheForUser(userId) {
     };
 }
 
-async function validateWords(words) {
+function normalizeWordEntry(input) {
+    if (typeof input === 'string') {
+        const [wordPart, ...meaningParts] = input.split('|');
+        return {
+            word: String(wordPart || '').trim().toLowerCase(),
+            cnMeaning: meaningParts.join('|').trim(),
+            raw: input,
+        };
+    }
+    const word = String(input?.word || input?.Word || '').trim().toLowerCase();
+    const cnMeaning = String(
+        input?.cnMeaning || input?.CN_Meaning || input?.meaning || input?.Meaning || ''
+    ).trim();
+    return { word, cnMeaning, raw: input };
+}
+
+function normalizeWordEntries(words) {
+    return (words || []).map(normalizeWordEntry).filter(entry => entry.word);
+}
+
+function findDuplicateWordEntries(records, targetUser, entries) {
+    if (!targetUser) return [];
+    const requestedWords = new Set(entries.map(entry => entry.word).filter(Boolean));
+    if (!requestedWords.size) return [];
+    const existingByWord = new Map();
+    for (const record of records || []) {
+        if (!userMatches(record.fields?.user, targetUser)) continue;
+        const word = getFieldValue(record.fields?.Word).trim().toLowerCase();
+        if (!requestedWords.has(word)) continue;
+        if (!existingByWord.has(word)) existingByWord.set(word, []);
+        existingByWord.get(word).push({
+            recordId: record.record_id,
+            word: getFieldValue(record.fields?.Word),
+            meaning: getFieldValue(record.fields?.Meaning),
+            cnMeaning: getFieldValue(record.fields?.CN_Meaning),
+            context: getFieldValue(record.fields?.Context),
+        });
+    }
+    return [...existingByWord.entries()].map(([word, existing]) => ({
+        word,
+        existing,
+        entries: entries.filter(entry => entry.word === word),
+    }));
+}
+
+function duplicateConfirmationResult(duplicateWords) {
+    return {
+        success: false,
+        code: 'DUPLICATE_WORD_CONFIRMATION_REQUIRED',
+        error: 'Duplicate word confirmation required',
+        duplicateWords,
+    };
+}
+async function validateWords(targetUserOrWords, maybeWords) {
+    const targetUser = Array.isArray(targetUserOrWords) ? null : targetUserOrWords;
+    const words = Array.isArray(targetUserOrWords) ? targetUserOrWords : maybeWords;
+    const entries = normalizeWordEntries(words);
     const errors = [];
     const multiMeanings = [];
-    const distPool = await getDistractorPool();
+    const records = await getRecords(WORD_TABLE);
+    const { pool: distPool } = await getDistractorPool(records);
+    const duplicateWords = findDuplicateWordEntries(records, targetUser, entries);
 
-    for (const word of words) {
-        const lowerWord = word.toLowerCase();
+    for (const entry of entries) {
+        const lowerWord = entry.word;
         if (!/^[a-z]+$/.test(lowerWord)) {
-            errors.push(word);
+            errors.push(entry.raw || lowerWord);
             continue;
         }
 
@@ -2036,7 +2108,7 @@ async function validateWords(words) {
         if (exists && exists.meaning) {
             meanings = exists.meaning.split(',').map(m => m.trim()).filter(m => m);
         } else {
-            const def = await fetchWordDefinition(word);
+            const def = await fetchWordDefinition(lowerWord);
             if (def.meaning && def.meaning.includes(';')) {
                 meanings = def.meaning.split(';').map(m => m.trim()).filter(m => m);
             } else if (def.meaning) {
@@ -2045,11 +2117,11 @@ async function validateWords(words) {
         }
 
         if (meanings.length > 1) {
-            multiMeanings.push({ word, meanings });
+            multiMeanings.push({ word: lowerWord, meanings });
         }
     }
 
-    return { errors, multiMeanings };
+    return { errors, multiMeanings, duplicateWords };
 }
 
 function requesthttp(url, timeout = 8000) {
@@ -2221,13 +2293,14 @@ async function generateNaturalFillInContext(word, meaning, level = '') {
         : 'Level: child-friendly general learner sentence.';
     const prompt = `Create one natural English sentence for a vocabulary fill-in-the-blank question.
 Target word: "${target}"
-Meaning hint: "${meaning || ''}"
+Required meaning: "${meaning || ''}"
+Use the target word ONLY in the sense described by "Required meaning" above. Do NOT use other senses or meanings of the word.
 ${levelGuidance}
 Rules:
 1. Include the target word exactly once, as a normal word in the sentence.
 2. The sentence must be natural, concrete, and easy to understand.
 3. Do not write a dictionary definition, word list, anatomy/science explanation, or phrase like "the word is used in context".
-4. Add enough context clues so the target word makes sense.
+4. Add enough context clues so the target word makes sense in the required meaning.
 5. Use 8 to 16 words.
 Return JSON only: {"context":"sentence"}`;
     try {
@@ -2383,7 +2456,12 @@ function pickFallbackDistractors(word, allWords) {
     return fallback;
 }
 
-async function prepareWordFields(targetUser, word, fallbackWords) {
+async function prepareWordFields(targetUser, input, fallbackWords) {
+    const entry = normalizeWordEntry(input);
+    const word = entry.word;
+    if (!/^[a-z]+$/.test(word)) {
+        throw new Error(`Invalid English word: ${word || String(entry.raw || '')}`);
+    }
     const def = await fetchWordDefinition(word);
     let distractors = null;
     let example = isContextUsableForWord(word, def.context) ? def.context : '';
@@ -2412,7 +2490,7 @@ async function prepareWordFields(targetUser, word, fallbackWords) {
         }
     }
 
-    cnMeaning = await translateToCN(def.meaning);
+    cnMeaning = entry.cnMeaning || await translateToCN(def.meaning);
     if (!cnMeaning) {
         cnMeaning = '';
     }
@@ -2422,7 +2500,7 @@ async function prepareWordFields(targetUser, word, fallbackWords) {
         user: targetUser,
         Word: toSimp(word),
         Meaning: def.meaning,
-        CN_Meaning: cnMeaning || '',
+        CN_Meaning: toSimp(cnMeaning) || '',
         Distractors: Array.isArray(distractors) ? distractors.join(',') : '',
         Status: 'Pending',
         record_time: Date.now()
@@ -2431,22 +2509,57 @@ async function prepareWordFields(targetUser, word, fallbackWords) {
     if (example) wordFields.Context = example;
     if (contextCN) wordFields.Context_CN = contextCN;
 
-    return { wordFields, distractors, cnMeaning };
+    return { word, wordFields, distractors, cnMeaning };
 }
 
-async function addWords(targetUser, words) {
+async function addWords(targetUser, words, options = {}) {
     console.log('addWords request:', targetUser, words);
     let count = 0;
     const errors = [];
-    const { pool: distPool } = await getDistractorPool();
+    const entries = normalizeWordEntries(words);
+    const wordRecords = await getRecords(WORD_TABLE);
+    const duplicateWords = findDuplicateWordEntries(wordRecords, targetUser, entries);
+    const duplicateWordSet = new Set(duplicateWords.map(item => item.word));
+
+    if (duplicateWords.length && !options.skipDuplicateWords && !options.confirmNewMeanings) {
+        return duplicateConfirmationResult(duplicateWords);
+    }
+
+    if (options.confirmNewMeanings) {
+        const missingMeaning = entries.filter(entry =>
+            duplicateWordSet.has(entry.word) && !entry.cnMeaning
+        );
+        if (missingMeaning.length) {
+            return {
+                success: false,
+                code: 'NEW_MEANING_REQUIRES_MEANING',
+                error: 'New meaning entries must include a meaning, for example: promotion | 促销活动',
+                missingWords: [...new Set(missingMeaning.map(entry => entry.word))],
+            };
+        }
+    }
+
+    const entriesToAdd = options.skipDuplicateWords
+        ? entries.filter(entry => !duplicateWordSet.has(entry.word))
+        : entries;
+
+    if (!entriesToAdd.length) {
+        return {
+            count: 0,
+            success: true,
+            skippedDuplicateWords: [...duplicateWordSet],
+        };
+    }
+
+    const { pool: distPool } = await getDistractorPool(wordRecords);
     const fallbackWords = [...new Set(Object.values(distPool).map(r => r.word?.toLowerCase()).filter(Boolean))];
 
-    const prepared = await Promise.all(words.map(async word => {
+    const prepared = await Promise.all(entriesToAdd.map(async entry => {
         try {
-            return { word, ok: true, ...(await prepareWordFields(targetUser, word, fallbackWords)) };
+            return { word: entry.word, ok: true, ...(await prepareWordFields(targetUser, entry, fallbackWords)) };
         } catch (e) {
-            console.log(`闁告垵妫楅ˇ顒佸緞鏉堫偉袝 ${word}: ${e.message}`);
-            return { word, ok: false, error: `${word}: ${e.message}` };
+            console.log(`prepare word failed ${entry.word}: ${e.message}`);
+            return { word: entry.word, ok: false, error: `${entry.word}: ${e.message}` };
         }
     }));
 
@@ -2458,9 +2571,9 @@ async function addWords(targetUser, words) {
         try {
             await addRecord(WORD_TABLE, item.wordFields);
             count++;
-            console.log(`闁瑰瓨鍔曟慨娑㈠礃濞嗗繐寮? ${item.word}, 妤犵偛寮舵竟鍫㈡嫚? ${item.distractors.join(', ')}, 濞戞搩鍘介弸? ${item.cnMeaning?.substring(0, 15)}...`);
+            console.log(`added word ${item.word}, distractors=${(item.distractors || []).join(', ')}, cn=${item.cnMeaning?.substring(0, 15)}...`);
         } catch (e) {
-            console.log(`闁告劖鐟ラ崣鍡樺緞鏉堫偉袝 ${item.word}: ${e.message}`);
+            console.log(`add word failed ${item.word}: ${e.message}`);
             errors.push(`${item.word}: ${e.message}`);
         }
     }
@@ -2470,10 +2583,14 @@ async function addWords(targetUser, words) {
     }
 
     if (errors.length > 0) {
-        return { count, errors, error: `闂侇喓鍔岄崹搴ㄥ础閺囷紕妲ゆ繛锝堫嚙婵偞寰勬潏顐バ? ${errors.join('; ')}` };
+        return { count, errors, error: `Some words failed to add: ${errors.join('; ')}` };
     }
 
-    return { count, success: true };
+    return {
+        count,
+        success: true,
+        skippedDuplicateWords: options.skipDuplicateWords ? [...duplicateWordSet] : [],
+    };
 }
 
 async function updateMultiDefinition(targetUser, words) {
@@ -2520,6 +2637,21 @@ function mapWordRecord(record) {
         user: record.fields.user || '',
         record_id: record.record_id
     };
+}
+
+async function listUserWords(userId, options = {}) {
+    const pageSize = Math.max(1, Math.min(50, Number(options.pageSize) || 20));
+    const page = Math.max(1, Number(options.page) || 1);
+    const records = await getRecords(WORD_TABLE);
+    const userRecords = records
+        .filter(record => userMatches(record.fields?.user, userId))
+        .sort((a, b) => getFieldValue(a.fields?.Word).localeCompare(getFieldValue(b.fields?.Word)));
+    const total = userRecords.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * pageSize;
+    const words = userRecords.slice(start, start + pageSize).map(mapWordRecord);
+    return { words, page: safePage, pageSize, total, totalPages };
 }
 
 async function getWordByRecordId(recordId) {
@@ -2794,4 +2926,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };

@@ -245,6 +245,23 @@ function hasAmbiguousElementaryContext(question) {
     }
     return false;
 }
+const FOOD_CATEGORY_WORDS = new Set([
+    'lettuce', 'cucumber', 'celery', 'radish', 'carrot', 'tomato', 'cabbage',
+    'spinach', 'pepper', 'onion', 'corn', 'broccoli', 'brocolli', 'potato',
+    'bean', 'beans', 'pea', 'peas', 'apple', 'orange', 'banana', 'grape',
+]);
+
+function hasAmbiguousFillInContext(question) {
+    const type = Number(question?.type);
+    if (type !== 1) return false;
+    const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
+    const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
+    const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
+    if (foodOptionCount >= 3 && /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/.test(context)) {
+        return true;
+    }
+    return false;
+}
 function hasSenseMismatchRisk(question) {
     const word = String(question.word || '').trim().toLowerCase();
     const meaning = String(question.correctMeaning || '').trim();
@@ -299,6 +316,7 @@ function getQuestionQualityIssues(question) {
         const baseContext = rawContext.replace(/_{3,}/g, baseWord);
         if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
+        if (hasAmbiguousFillInContext(question)) issues.push('ambiguous_fill_in_context');
         const mismatch = hasSenseMismatchRisk(question);
         if (mismatch) issues.push(mismatch);
     }

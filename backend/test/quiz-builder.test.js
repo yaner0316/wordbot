@@ -141,6 +141,25 @@ test('rejects fill-in questions with numeric quantity and singular target mismat
     assert.equal(question, null);
 });
 
+test('definition questions carry translated stem explanations when available', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-def-cn',
+        {
+            word: 'noun',
+            meaning: 'A word that can refer to a person, animal, place, thing, or idea.',
+            Meaning_CN: '可以指人、动物、地方、事物或想法的词。',
+            distractors: ['verb', 'adjective', 'adverb'],
+            CN_Meaning: '名词',
+        },
+        2,
+        'test-def-cn',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.equal(question.contextCN, '可以指人、动物、地方、事物或想法的词。');
+});
 test('builds a definition question from the first semicolon-separated meaning', () => {
     const buildQuizQuestion = createBuilder();
 

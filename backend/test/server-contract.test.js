@@ -182,7 +182,7 @@ test('parent addWords endpoint preserves payload contract', async () => {
 
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { success: true, count: 2 });
-        assert.deepEqual(calls, [['student', ['apple', 'banana']]]);
+        assert.deepEqual(calls, [['student', ['apple', 'banana'], { confirmNewMeanings: false, skipDuplicateWords: false }]]);
     });
 });
 
@@ -516,5 +516,81 @@ test('quiz endpoint preserves cache-not-ready diagnostics on 503', async () => {
         assert.equal(body.diagnostics.readyCount, 3);
         assert.equal(body.diagnostics.requiredCount, 10);
         assert.equal(body.diagnostics.fallbackUsed, false);
+    });
+});
+test('validateWords endpoint forwards target user for duplicate-word checks', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        validateWords: async (...args) => {
+            calls.push(args);
+            return { errors: [], multiMeanings: [], duplicateWords: [] };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/validateWords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUser: 'student', words: [{ word: 'promotion', cnMeaning: '促销活动' }] }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, [['student', [{ word: 'promotion', cnMeaning: '促销活动' }]]]);
+    });
+});
+
+test('parent addWords endpoint returns 409 when duplicate confirmation is required', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWords: async () => ({
+            success: false,
+            code: 'DUPLICATE_WORD_CONFIRMATION_REQUIRED',
+            error: 'Duplicate word confirmation required',
+            duplicateWords: [{ word: 'promotion', existing: [{ recordId: 'rec-1', cnMeaning: '晋升' }] }],
+        }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUser: 'student', words: [{ word: 'promotion' }] }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 409);
+        assert.equal(body.code, 'DUPLICATE_WORD_CONFIRMATION_REQUIRED');
+        assert.equal(body.duplicateWords[0].word, 'promotion');
+    });
+});
+
+
+test('parent word library endpoint returns paginated words', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        listUserWords: async (...args) => {
+            calls.push(args);
+            return {
+                words: [
+                    { record_id: 'rec-1', word: 'swing', cnMeaning: '秋千', status: 'Pending' },
+                    { record_id: 'rec-2', word: 'climb', cnMeaning: '攀爬', status: 'Mastered' },
+                ],
+                page: 2,
+                pageSize: 20,
+                total: 31,
+                totalPages: 2,
+            };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/words?userId=Draggy&page=2&pageSize=20`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, [['Draggy', { page: 2, pageSize: 20 }]]);
+        assert.equal(body.total, 31);
+        assert.equal(body.totalPages, 2);
+        assert.equal(body.words.length, 2);
+        assert.equal(body.words[1].status, 'Mastered');
     });
 });

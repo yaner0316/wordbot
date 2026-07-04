@@ -428,6 +428,21 @@ test('elementary fill-in rejects screenshot sample with phrase distractor', () =
     assert.ok(issues.includes('bad_distractor_shape'), 'issues=' + issues.join(','));
     assert.ok(issues.includes('not_elementary_context'), 'issues=' + issues.join(','));
 });
+test('fill-in rejects ambiguous same-category food contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: '高中',
+        word: 'cucumber',
+        context: 'a(n) _____ salad is refreshing on a hot day.',
+        correctMeaning: '黄瓜',
+        options: ['A. lettuce', 'B. cucumber', 'C. celery', 'D. radish'],
+        answer: 'B',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
 test('elementary fill-in rejects ambiguous same-category clothing and hair contexts', () => {
     const cases = [
         {

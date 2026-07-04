@@ -78,11 +78,14 @@ function createReviewService({
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    async function loadAssessmentRecordsWithRetry(assessmentId) {
+    async function loadAssessmentRecordsWithRetry(
+        assessmentId,
+        isReady = records => records.length > 0
+    ) {
         let records = [];
         for (let attempt = 0; attempt < recordReadRetryAttempts; attempt++) {
             records = await loadAssessmentRecords(assessmentId);
-            if (records.length) return records;
+            if (records.length && isReady(records)) return records;
             if (recordReadRetryDelayMs > 0) await wait(recordReadRetryDelayMs);
         }
         return records;
@@ -194,7 +197,10 @@ function createReviewService({
         if (existing) return existing;
 
         const sourceAssessmentId = parentReviewId || sourceTestId;
-        const sourceRecords = await loadAssessmentRecordsWithRetry(sourceAssessmentId);
+        const sourceRecords = await loadAssessmentRecordsWithRetry(
+            sourceAssessmentId,
+            records => records.every(isSubmitted)
+        );
         if (!sourceRecords.length) throw new Error('Review source records not found');
         const owners = assessmentOwner(sourceRecords);
         if (owners.size !== 1 || !owners.has(userId)) {

@@ -12,9 +12,10 @@ const webApp = fs.readFileSync(
     'utf8'
 );
 
-const wordSeparatorPattern = /split\(\/\[\\n,，;；\\s\]\+\//;
+const rnWordSeparatorPattern = /split\(\/\[\\n,，;；\\s\]\+\//;
 
 test('word entry accepts newline, comma, and semicolon separators in RN and Web', () => {
-    assert.match(rnApp, wordSeparatorPattern);
-    assert.match(webApp, wordSeparatorPattern);
+    assert.match(rnApp, rnWordSeparatorPattern);
+    assert.match(webApp, /split\(\/\\n\+\//);
+    assert.match(webApp, /flatMap\(line => line\.includes\('\|'\) \? \[line\] : line\.split\(\/\[,，;；\\s\]\+\//);
 });
