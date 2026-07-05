@@ -918,6 +918,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             { excludedDistractors: [...usedDistractors] }
         );
         if (!question) return null;
+        if (isElementaryCacheLevel(effectiveLevel) && Number(question.type) !== 1) return null;
         for (const option of question.options || []) {
             const optionWord = String(option).replace(/^[A-D]\.\s*/, '').trim().toLowerCase();
             if (optionWord && optionWord !== question.word.toLowerCase()) {
@@ -933,7 +934,9 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         for (const rec of pickedRecs) {
             const info = pool[rec.record_id];
             const hasGoodCN = hasMeaningfulChineseMeaning(info.CN_Meaning);
-            const qType = hasGoodCN ? 3 : (isContextUsableForWord(info.word, info.context) ? 1 : 2);
+            const qType = isElementaryCacheLevel(effectiveLevel)
+                ? 1
+                : (hasGoodCN ? 3 : (isContextUsableForWord(info.word, info.context) ? 1 : 2));
             const q = buildFreshQuestion(rec.record_id, info, qType);
             if (q) multiQuestions.push(q);
         }
@@ -947,8 +950,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         }
     }
 
-    const typeSlots = secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10);
-    const fallbackTypeSlots = [1, 2, 3];
+    const typeSlots = isElementaryCacheLevel(effectiveLevel)
+        ? Array(10).fill(1)
+        : secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10);
+    const fallbackTypeSlots = isElementaryCacheLevel(effectiveLevel) ? [1] : [1, 2, 3];
     const remaining = valid.filter(r => !usedRecordIds.has(r.record_id));
     function candidatesForSlot(slot) {
         return remaining.filter(r => {

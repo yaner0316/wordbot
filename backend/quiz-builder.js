@@ -10,6 +10,22 @@ function createQuizBuilder({
     getFormKey = null,
     inflectWord = null,
 }) {
+    function capitalizeFirst(value) {
+        const text = String(value || '');
+        return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+    }
+
+    function isSentenceInitialBlank(context) {
+        return /^\s*_____/.test(String(context || '')) || /[.!?]\s*_____/m.test(String(context || ''));
+    }
+
+    function inflectOption(option, formKey) {
+        const value = String(option || '').trim().toLowerCase();
+        if ((formKey === 'past' || formKey === 'past_participle') && value.length > 4 && /(?:ed|ied)$/.test(value)) {
+            return value;
+        }
+        return inflectWord(option, formKey);
+    }
     function hasPluralListMismatch(word, context) {
         const key = String(word || '').toLowerCase();
         const text = String(context || '').toLowerCase();
@@ -125,13 +141,16 @@ function createQuizBuilder({
                 const formKey = getFormKey(key, matchedSurface);
                 if (formKey !== 'base') {
                     options = allOptions.map((option, index) =>
-                        `${letters[index]}. ${inflectWord(option, formKey)}`
+                        `${letters[index]}. ${inflectOption(option, formKey)}`
                     );
                 }
             }
             const normalized = normalizeArticleContext(context);
             context = normalized.text;
             articleNormalized = normalized.normalized;
+            if (isSentenceInitialBlank(context)) {
+                options = options.map(option => option.replace(/^([A-D]\.\s+)(.+)$/i, (_, prefix, text) => prefix + capitalizeFirst(text)));
+            }
             question = {
                 type: 1,
                 word: key,

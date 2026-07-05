@@ -251,6 +251,11 @@ const FOOD_CATEGORY_WORDS = new Set([
     'bean', 'beans', 'pea', 'peas', 'apple', 'orange', 'banana', 'grape',
 ]);
 
+const PUBLICATION_CATEGORY_WORDS = new Set([
+    'book', 'textbook', 'magazine', 'novel', 'biography', 'article',
+    'newspaper', 'journal', 'storybook', 'comic',
+]);
+
 function hasAmbiguousFillInContext(question) {
     const type = Number(question?.type);
     if (type !== 1) return false;
@@ -258,6 +263,14 @@ function hasAmbiguousFillInContext(question) {
     const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
     const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
     if (foodOptionCount >= 3 && /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/.test(context)) {
+        return true;
+    }
+
+    const publicationOptionCount = optionWords.filter(word => PUBLICATION_CATEGORY_WORDS.has(word)).length;
+    if (
+        publicationOptionCount >= 3 &&
+        /\b(?:this|that|the|a|an)\s+[a-z]+\s+_____\s+(?:explains|teaches|describes|introduces|covers|shows)\b/.test(context)
+    ) {
         return true;
     }
     return false;
@@ -294,6 +307,12 @@ function hasBadDistractorShape(question) {
     return false;
 }
 
+function hasBadOptionInflection(question) {
+    return (question.options || [])
+        .map(getOptionWord)
+        .some(word => /(?:eded|ieded)$/.test(word));
+}
+
 function getQuestionQualityIssues(question) {
     const issues = [];
     if (!question) return ['missing_question'];
@@ -323,13 +342,19 @@ function getQuestionQualityIssues(question) {
     if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) {
         issues.push('bad_distractor_shape');
     }
+    if ([1, 2, 3].includes(type) && hasBadOptionInflection(question)) {
+        issues.push('bad_option_inflection');
+    }
     if (isElementaryLevel(question.level)) {
         if (type === 1) {
             if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
             if (hasAmbiguousElementaryContext(question)) issues.push('ambiguous_elementary_context');
         }
-        if (type === 2 && hasDictionaryStyleDefinition(question.context)) {
-            issues.push('dictionary_definition');
+        if (type === 2) {
+            issues.push('elementary_definition_question');
+            if (hasDictionaryStyleDefinition(question.context)) {
+                issues.push('dictionary_definition');
+            }
         }
     }
     return [...new Set(issues)];

@@ -165,20 +165,32 @@ test('assessment record lookup uses quoted Feishu filter fields', () => {
     assert.ok(lookupSource.includes("field_name: 'test_time'"));
 });
 
-test('live quiz generation prefers seven fill-in questions per ten-question quiz', () => {
+test('live quiz generation uses fill-in-only slots for elementary level and mixed slots otherwise', () => {
     assert.ok(
-        feishuSource.includes('const typeSlots = secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10)'),
-        'live quiz generation should prefer 7 fill-in, 2 English definition, and 1 translation question'
+        feishuSource.includes('const typeSlots = isElementaryCacheLevel(effectiveLevel)'),
+        'live quiz generation should branch by learning level'
+    );
+    assert.ok(
+        feishuSource.includes('? Array(10).fill(1)'),
+        'elementary live fallback should use only fill-in questions'
+    );
+    assert.ok(
+        feishuSource.includes(': secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10)'),
+        'non-elementary live fallback should keep 7 fill-in, 2 English definition, and 1 translation question'
     );
 });
-test('live quiz generation tries fallback question types to fill ten questions', () => {
+test('live quiz generation tries level-appropriate fallback question types to fill ten questions', () => {
     assert.ok(
-        feishuSource.includes('const fallbackTypeSlots = [1, 2, 3]'),
-        'live quiz generation should retry alternate question types when the planned slot cannot build'
+        feishuSource.includes('const fallbackTypeSlots = isElementaryCacheLevel(effectiveLevel) ? [1] : [1, 2, 3]'),
+        'elementary fallback should not retry English definition or Chinese selection types'
     );
     assert.ok(
         feishuSource.includes('for (const slot of [...typeSlots, ...fallbackTypeSlots])'),
         'fallback slots should run after the preferred question mix'
+    );
+    assert.ok(
+        feishuSource.includes('Number(question.type) !== 1'),
+        'elementary live fallback should reject non-fill-in questions as a final guard'
     );
 });
 test('batch word translation keeps partial results and falls back only missing words', () => {

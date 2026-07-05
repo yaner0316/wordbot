@@ -103,6 +103,57 @@ test('inflects all fill-in options to match the context surface form', () => {
     assert.equal(question.answer, 'A');
 });
 
+test('does not add another ed to distractors that are already past-tense forms', () => {
+    const buildQuizQuestion = createInflectingBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-earned',
+        {
+            word: 'earn',
+            context: 'You earned the prize after helping outside today.',
+            distractors: ['inherited', 'requested', 'borrowed'],
+            CN_Meaning: String.fromCharCode(0x8d62, 0x5f97),
+        },
+        1,
+        'test-earned',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.ok(question);
+    assert.deepEqual(question.options, [
+        'A. earned',
+        'B. inherited',
+        'C. requested',
+        'D. borrowed',
+    ]);
+});
+
+test('capitalizes options when the fill-in is sentence-initial', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-though',
+        {
+            word: 'though',
+            context: 'Though it was difficult, she never gave up.',
+            distractors: ['until', 'unless', 'because'],
+            CN_Meaning: String.fromCharCode(0x867d, 0x7136),
+        },
+        1,
+        'test-though',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.ok(question);
+    assert.equal(question.context, '_____ it was difficult, she never gave up.');
+    assert.deepEqual(question.options, [
+        'A. Though',
+        'B. Until',
+        'C. Unless',
+        'D. Because',
+    ]);
+});
+
 test('rejects fill-in questions with obvious plural list and singular target mismatch', () => {
     const buildQuizQuestion = createBuilder();
 

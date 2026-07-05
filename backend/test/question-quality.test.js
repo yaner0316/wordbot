@@ -120,6 +120,22 @@ test('elementary fill-in rejects contexts that use a different sense than the Ch
     }
 });
 
+test('fill-in rejects malformed double-ed option words', () => {
+    const question = {
+        type: 1,
+        level: SENIOR_HIGH,
+        word: 'earn',
+        context: 'You can have the prize; you _____ it.',
+        correctMeaning: String.fromCharCode(0x8d62, 0x5f97),
+        options: ['A. inheriteded', 'B. earned', 'C. requesteded', 'D. borroweded'],
+        answer: 'B',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('bad_option_inflection'), 'issues=' + issues.join(','));
+});
+
 test('elementary fill-in rejects weak distractor shape', () => {
     const question = {
         type: 1,
@@ -133,6 +149,22 @@ test('elementary fill-in rejects weak distractor shape', () => {
 
     assert.equal(isQuestionQualityAcceptable(question), false);
     assert.ok(getQuestionQualityIssues(question).includes('bad_distractor_shape'));
+});
+
+test('elementary definition questions are always rejected', () => {
+    const question = {
+        type: 2,
+        level: ELEMENTARY,
+        word: 'hobby',
+        context: 'An activity or task with which one occupies oneself',
+        correctMeaning: String.fromCharCode(0x7231, 0x597d),
+        options: ['A. workplace', 'B. occupation', 'C. salary', 'D. hobby'],
+        answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('elementary_definition_question'), 'issues=' + issues.join(','));
 });
 
 test('elementary definition questions reject dictionary-style definitions', () => {
@@ -443,6 +475,22 @@ test('fill-in rejects ambiguous same-category food contexts across levels', () =
     assert.equal(isQuestionQualityAcceptable(question), false);
     assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
 });
+test('fill-in rejects ambiguous same-category publication contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: ELEMENTARY,
+        word: 'textbook',
+        context: 'This chemistry _____ explains concepts very clearly.',
+        correctMeaning: String.fromCharCode(0x6559, 0x79d1, 0x4e66),
+        options: ['A. novel', 'B. biography', 'C. textbook', 'D. magazine'],
+        answer: 'C',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
+
 test('elementary fill-in rejects ambiguous same-category clothing and hair contexts', () => {
     const cases = [
         {
