@@ -69,8 +69,8 @@ function createReviewService({
     isSubmitted,
     isCorrect,
     fieldValue,
-    recordReadRetryAttempts = 5,
-    recordReadRetryDelayMs = 250,
+    recordReadRetryAttempts = 12,
+    recordReadRetryDelayMs = 500,
 }) {
     const submittedResults = new Map();
 

@@ -243,6 +243,16 @@ function hasAmbiguousElementaryContext(question) {
     if (word === 'pants' && /wore blue _____ to school/.test(context) && hasAll(['shirt', 'shoes', 'socks'])) {
         return true;
     }
+    const playgroundActionCount = optionWords.filter(item => PLAYGROUND_ACTION_WORDS.has(item)).length;
+    if (playgroundActionCount >= 3 && /\b(?:kids|children)\s+_____\s+high\b/.test(context)) {
+        return true;
+    }
+
+    const seasoningCount = optionWords.filter(item => SEASONING_WORDS.has(item)).length;
+    if (seasoningCount >= 3 && /\bblack\s+_____\b.*\bsoup\b/.test(context)) {
+        return true;
+    }
+
     return false;
 }
 const FOOD_CATEGORY_WORDS = new Set([
@@ -256,13 +266,25 @@ const PUBLICATION_CATEGORY_WORDS = new Set([
     'newspaper', 'journal', 'storybook', 'comic',
 ]);
 
+const PLAYGROUND_ACTION_WORDS = new Set([
+    'swing', 'jump', 'climb', 'slide', 'run', 'walk',
+]);
+
+const SEASONING_WORDS = new Set([
+    'pepper', 'salt', 'sugar', 'butter',
+]);
+
 function hasAmbiguousFillInContext(question) {
     const type = Number(question?.type);
     if (type !== 1) return false;
     const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
     const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
     const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
-    if (foodOptionCount >= 3 && /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/.test(context)) {
+    const hasAmbiguousFoodContext = [
+        /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/,
+        /\bsandwich\s+with\s+_____\s+and\s+tomato\b/,
+    ].some(pattern => pattern.test(context));
+    if (foodOptionCount >= 3 && hasAmbiguousFoodContext) {
         return true;
     }
 

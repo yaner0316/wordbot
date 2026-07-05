@@ -531,3 +531,17 @@ test('elementary fill-in rejects ambiguous same-category clothing and hair conte
         assert.ok(issues.includes('ambiguous_elementary_context'), sample.word + ' issues=' + issues.join(','));
     }
 });
+
+test('elementary quality rejects screenshot ambiguous food and playground fill-ins', () => {
+    const cases = [
+        { word: 'pepper', context: 'Dad put black _____ on his hot soup.', options: ['A. pepper', 'B. sugar', 'C. butter', 'D. salt'], answer: 'A', expected: 'ambiguous_elementary_context' },
+        { word: 'swing', context: 'Kids _____ high at the sunny park after school.', options: ['A. jump', 'B. swing', 'C. climb', 'D. slide'], answer: 'B', expected: 'ambiguous_elementary_context' },
+        { word: 'lettuce', context: 'I want a ham sandwich with _____ and tomato.', options: ['A. lettuce', 'B. potato', 'C. carrot', 'D. corn'], answer: 'A', expected: 'ambiguous_fill_in_context' },
+    ];
+    for (const sample of cases) {
+        const question = { type: 1, level: ELEMENTARY, correctMeaning: '小学释义', ...sample };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, sample.word);
+        assert.ok(issues.includes(sample.expected), sample.word + ' issues=' + issues.join(','));
+    }
+});

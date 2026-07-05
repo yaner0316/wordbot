@@ -336,3 +336,37 @@ test('waits for previous review submission fields before creating the next revie
     assert.equal(second.round, 2);
     assert.deepEqual(second.questions.map(q => q.recordId), ['word-2']);
 });
+
+test('default retry window waits long enough for slow Feishu review submission visibility', async () => {
+    const { service, assessments } = createFixture();
+    const first = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+    const staleRows = assessments.get(first.reviewId).map(item => ({ ...item, fields: { ...item.fields } }));
+    await service.submitRound({ userId: 'student', reviewId: first.reviewId, answers: [{ text: 'still wrong' }] });
+    const submittedRows = assessments.get(first.reviewId).map(item => ({ ...item, fields: { ...item.fields, your_answer: 'still wrong', is_correct: 'wrong', review_status: 'active' } }));
+    let reads = 0;
+    const eventualService = createReviewService({
+        createId: () => 'r-slow-next',
+        loadAssessmentRecords: async assessmentId => {
+            if (assessmentId === first.reviewId && reads++ < 6) return staleRows;
+            if (assessmentId === first.reviewId) return submittedRows;
+            return assessments.get(assessmentId) || [];
+        },
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordRecords: async () => [],
+        loadWordInfo: async recordId => ({ word: recordId === 'word-2' ? 'beta' : 'alpha', CN_Meaning: 'definition clue' }),
+        buildReviewQuestion: async ({ source, info, reviewId }) => ({ type: 4, answerMode: 'cn_meaning', word: info.word, context: '', options: [], correctMeaning: info.CN_Meaning, answer: undefined, record_id: source.recordId, testId: reviewId }),
+        addReviewRecords: async rows => assessments.set(rows[0].test_id, rows.map((fields, index) => record(`review-slow-next-row-${index}`, fields))),
+        updateReviewRecord: async () => {},
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+        recordReadRetryDelayMs: 0,
+    });
+    const second = await eventualService.createRound({ userId: 'student', sourceTestId: 'real-q1', parentReviewId: first.reviewId });
+    assert.equal(reads, 7);
+    assert.equal(second.round, 2);
+    assert.deepEqual(second.questions.map(q => q.recordId), ['word-2']);
+});

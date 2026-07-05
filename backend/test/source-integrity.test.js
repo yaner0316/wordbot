@@ -447,3 +447,13 @@ test('post-submit learning update does not write derived stats table fields', ()
     assert.doesNotMatch(updateSource, /updateRecord\(STATS_TABLE/);
     assert.doesNotMatch(updateSource, /addRecord\(STATS_TABLE/);
 });
+
+test('generated fill-in contexts are translated before cached rows are built', () => {
+    const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const end = feishuSource.indexOf('async function validateWords');
+    assert.ok(start >= 0 && end > start);
+    const rebuildSource = feishuSource.slice(start, end);
+    assert.ok(rebuildSource.includes('ensureGeneratedContextCN'));
+    assert.ok(rebuildSource.includes('contextEnhancedInfo.Context_CN = await ensureGeneratedContextCN'));
+    assert.ok(rebuildSource.includes('baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords }'));
+});

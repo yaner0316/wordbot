@@ -1742,7 +1742,20 @@ function isElementaryCacheLevel(level) {
 function retryElementaryFillInContext(question) {
     if (!question || Number(question.type) !== 1 || !isElementaryCacheLevel(question.level)) return false;
     const issues = getQuestionQualityIssues(question);
-    return issues.some(issue => issue.startsWith('sense_mismatch') || issue === 'not_elementary_context');
+    return issues.some(issue =>
+        issue.startsWith('sense_mismatch') ||
+        issue === 'not_elementary_context' ||
+        issue === 'ambiguous_elementary_context' ||
+        issue === 'ambiguous_fill_in_context'
+    );
+}
+
+async function ensureGeneratedContextCN(context, fallbackContextCN = '') {
+    const existing = String(fallbackContextCN || '').trim();
+    if (existing) return existing;
+    const text = String(context || '').trim();
+    if (!text || !MINIMAX_API_KEY) return '';
+    return translateContextToCN(text).catch(() => '');
 }
 
 function addRejectReason(summary, reason) {
@@ -1822,7 +1835,7 @@ async function rebuildQuestionCacheForUser(userId) {
             if (generatedContext) {
                 usedElementaryTemplateContext = Boolean(templateContext);
                 contextEnhancedInfo.context = generatedContext;
-                contextEnhancedInfo.Context_CN = '';
+                contextEnhancedInfo.Context_CN = await ensureGeneratedContextCN(generatedContext, contextEnhancedInfo.Context_CN);
             }
         }
         if (isElementaryCacheLevel(level)) {
@@ -1897,7 +1910,7 @@ async function rebuildQuestionCacheForUser(userId) {
             if (generatedContext) {
                 usedElementaryTemplateContext = Boolean(retryTemplateContext);
                 contextEnhancedInfo.context = generatedContext;
-                contextEnhancedInfo.Context_CN = '';
+                contextEnhancedInfo.Context_CN = await ensureGeneratedContextCN(generatedContext, contextEnhancedInfo.Context_CN);
                 baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords };
                 if (primaryType === 1) {
                     if (isElementaryCacheLevel(level)) {
