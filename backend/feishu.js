@@ -49,6 +49,7 @@ const {
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
+    stripOptionalQuestionCacheFields,
     summarizeCacheStatus,
 } = require('./question-cache');
 const { createContextDifficultyAdapter } = require('./language-enrichment');
@@ -460,9 +461,20 @@ async function getQuestionCacheRecords() {
     return getRecords(QUESTION_CACHE_TABLE);
 }
 
+function isFieldNameNotFound(error) {
+    return String(error?.message || error || '').includes('FieldNameNotFound');
+}
+
 async function addQuestionCacheRecords(rows) {
     if (!QUESTION_CACHE_TABLE || rows.length === 0) return { skipped: true, count: 0 };
-    return addRecords(QUESTION_CACHE_TABLE, rows);
+    try {
+        return await addRecords(QUESTION_CACHE_TABLE, rows);
+    } catch (error) {
+        if (!isFieldNameNotFound(error)) throw error;
+        const compatibleRows = rows.map(stripOptionalQuestionCacheFields);
+        console.log('question cache table is missing optional fields; retrying compatible write');
+        return addRecords(QUESTION_CACHE_TABLE, compatibleRows);
+    }
 }
 
 async function deleteQuestionCacheRows(userId, type) {

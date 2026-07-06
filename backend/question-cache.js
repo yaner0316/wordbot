@@ -62,6 +62,22 @@ function buildCacheRowsForRecord({ userId, level, primaryQuestion, reviewQuestio
     return rows;
 }
 
+const OPTIONAL_FEISHU_CACHE_FIELDS = new Set([
+    'context_cn',
+    'suffix',
+    'ai_audit_status',
+    'last_used_at',
+    'source_version',
+]);
+
+function stripOptionalQuestionCacheFields(row) {
+    const stripped = {};
+    for (const [key, value] of Object.entries(row || {})) {
+        if (!OPTIONAL_FEISHU_CACHE_FIELDS.has(key)) stripped[key] = value;
+    }
+    return stripped;
+}
+
 function normalizeCacheRow(row) {
     const fields = row.fields || row;
     return {
@@ -170,18 +186,18 @@ function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary'
 function incrementSummary(bucket, row) {
     if (!bucket[row.level]) bucket[row.level] = { total: 0, ready: 0 };
     bucket[row.level].total += 1;
-    if (row.qualityStatus === QUESTION_CACHE_STATUS.READY) bucket[row.level].ready += 1;
+    if (isCacheQuestionReady(row)) bucket[row.level].ready += 1;
 }
 
 function summarizeCacheStatus(rows) {
     const normalized = (rows || []).map(normalizeCacheRow);
     const summary = { total: normalized.length, ready: 0, byLevel: {}, byRoundType: {} };
     for (const row of normalized) {
-        if (row.qualityStatus === QUESTION_CACHE_STATUS.READY) summary.ready += 1;
+        if (isCacheQuestionReady(row)) summary.ready += 1;
         incrementSummary(summary.byLevel, row);
         if (!summary.byRoundType[row.roundType]) summary.byRoundType[row.roundType] = { total: 0, ready: 0 };
         summary.byRoundType[row.roundType].total += 1;
-        if (row.qualityStatus === QUESTION_CACHE_STATUS.READY) summary.byRoundType[row.roundType].ready += 1;
+        if (isCacheQuestionReady(row)) summary.byRoundType[row.roundType].ready += 1;
     }
     return summary;
 }
@@ -193,5 +209,6 @@ module.exports = {
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
+    stripOptionalQuestionCacheFields,
     summarizeCacheStatus,
 };

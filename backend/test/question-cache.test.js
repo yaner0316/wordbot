@@ -8,6 +8,7 @@ const {
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
+    stripOptionalQuestionCacheFields,
     summarizeCacheStatus,
 } = require('../question-cache');
 
@@ -262,6 +263,7 @@ test('elementary cached quiz selects only fill-in questions', () => {
     assert.equal(counts[3] || 0, 0);
 });
 test('cache status summary reports ready counts by level and round type', () => {
+    const defaultLevel = question().level;
     const summary = summarizeCacheStatus([
         question({ round_type: 'primary' }),
         question({ round_type: 'review' }),
@@ -271,9 +273,48 @@ test('cache status summary reports ready counts by level and round type', () => 
 
     assert.equal(summary.total, 4);
     assert.equal(summary.ready, 3);
-    assert.equal(summary.byLevel['中学'].ready, 2);
+    assert.equal(summary.byLevel[defaultLevel].ready, 2);
     assert.equal(summary.byRoundType.primary.ready, 2);
     assert.equal(summary.byRoundType.review.ready, 1);
+});
+
+test('cache status summary counts only questions that are actually selectable', () => {
+    const defaultLevel = question().level;
+    const summary = summarizeCacheStatus([
+        question({ word_record_id: 'rec-valid', word: 'valid', round_type: 'primary' }),
+        question({
+            word_record_id: 'rec-bad',
+            word: 'bad',
+            round_type: 'primary',
+            option_meanings: JSON.stringify([]),
+        }),
+    ]);
+
+    assert.equal(summary.total, 2);
+    assert.equal(summary.ready, 1);
+    assert.equal(summary.byLevel[defaultLevel].ready, 1);
+    assert.equal(summary.byRoundType.primary.ready, 1);
+});
+
+test('strips optional cache fields before retrying older Feishu cache tables', () => {
+    const row = question({
+        context_cn: '中文句子',
+        suffix: ' after blank.',
+        ai_audit_status: 'skipped',
+        last_used_at: '',
+        source_version: 'phase-2',
+    });
+    const stripped = stripOptionalQuestionCacheFields(row);
+
+    assert.equal(stripped.user, row.user);
+    assert.equal(stripped.word, row.word);
+    assert.equal(stripped.option_meanings, row.option_meanings);
+    assert.equal(stripped.correct_meaning, row.correct_meaning);
+    assert.equal('context_cn' in stripped, false);
+    assert.equal('suffix' in stripped, false);
+    assert.equal('ai_audit_status' in stripped, false);
+    assert.equal('last_used_at' in stripped, false);
+    assert.equal('source_version' in stripped, false);
 });
 
 test('rejects cached definition questions that contain Chinese AI meta-response text', () => {
