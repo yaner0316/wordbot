@@ -317,6 +317,19 @@ test('strips optional cache fields before retrying older Feishu cache tables', (
     assert.equal('source_version' in stripped, false);
 });
 
+test('can strip a selected optional cache field while preserving translations', () => {
+    const row = question({
+        context_cn: '中文句子',
+        suffix: ' after blank.',
+        source_version: 'phase-2',
+    });
+    const stripped = stripOptionalQuestionCacheFields(row, ['source_version']);
+
+    assert.equal(stripped.context_cn, '中文句子');
+    assert.equal(stripped.suffix, ' after blank.');
+    assert.equal('source_version' in stripped, false);
+});
+
 test('rejects cached definition questions that contain Chinese AI meta-response text', () => {
     assert.equal(isCacheQuestionReady(question({
         word_record_id: 'rec-meta-cn',

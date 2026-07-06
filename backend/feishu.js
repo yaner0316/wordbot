@@ -467,13 +467,18 @@ function isFieldNameNotFound(error) {
 
 async function addQuestionCacheRecords(rows) {
     if (!QUESTION_CACHE_TABLE || rows.length === 0) return { skipped: true, count: 0 };
-    try {
-        return await addRecords(QUESTION_CACHE_TABLE, rows);
-    } catch (error) {
-        if (!isFieldNameNotFound(error)) throw error;
-        const compatibleRows = rows.map(stripOptionalQuestionCacheFields);
-        console.log('question cache table is missing optional fields; retrying compatible write');
-        return addRecords(QUESTION_CACHE_TABLE, compatibleRows);
+    const fieldDropOrder = ['source_version', 'ai_audit_status', 'last_used_at', 'suffix', 'context_cn'];
+    let removedFields = [];
+    let attemptRows = rows;
+    for (let attempt = 0; attempt <= fieldDropOrder.length; attempt++) {
+        try {
+            return await addRecords(QUESTION_CACHE_TABLE, attemptRows);
+        } catch (error) {
+            if (!isFieldNameNotFound(error) || attempt === fieldDropOrder.length) throw error;
+            removedFields = [...removedFields, fieldDropOrder[attempt]];
+            attemptRows = rows.map(row => stripOptionalQuestionCacheFields(row, removedFields));
+            console.log('question cache table missing optional fields; retrying without ' + removedFields.join(','));
+        }
     }
 }
 

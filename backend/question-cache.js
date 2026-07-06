@@ -70,10 +70,11 @@ const OPTIONAL_FEISHU_CACHE_FIELDS = new Set([
     'source_version',
 ]);
 
-function stripOptionalQuestionCacheFields(row) {
+function stripOptionalQuestionCacheFields(row, fieldsToStrip = OPTIONAL_FEISHU_CACHE_FIELDS) {
+    const fields = new Set(fieldsToStrip);
     const stripped = {};
     for (const [key, value] of Object.entries(row || {})) {
-        if (!OPTIONAL_FEISHU_CACHE_FIELDS.has(key)) stripped[key] = value;
+        if (!fields.has(key)) stripped[key] = value;
     }
     return stripped;
 }
