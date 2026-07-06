@@ -351,8 +351,16 @@ const LEARNING_SETTINGS_FIELDS = [
     { field_name: 'Level_Changed_At', type: 5 },
     { field_name: 'Question_Cache_Status', type: 1 },
 ];
+const QUESTION_CACHE_OPTIONAL_FIELDS = [
+    { field_name: 'context_cn', type: 1 },
+    { field_name: 'suffix', type: 1 },
+    { field_name: 'ai_audit_status', type: 1 },
+    { field_name: 'last_used_at', type: 1 },
+    { field_name: 'source_version', type: 1 },
+];
 let accountFieldsReady = false;
 let learningSettingsFieldsReady = false;
+let questionCacheOptionalFieldsReady = false;
 
 async function listTableFields(table, timeoutOverrideMs) {
     const token = await getToken();
@@ -400,6 +408,12 @@ async function ensureLearningSettingsFields() {
     if (learningSettingsFieldsReady) return;
     await ensureTableFields(STATS_TABLE, LEARNING_SETTINGS_FIELDS, AUTH_ACCOUNT_FIELD_TIMEOUT_MS);
     learningSettingsFieldsReady = true;
+}
+
+async function ensureQuestionCacheOptionalFields() {
+    if (!QUESTION_CACHE_TABLE || questionCacheOptionalFieldsReady) return;
+    await ensureTableFields(QUESTION_CACHE_TABLE, QUESTION_CACHE_OPTIONAL_FIELDS, AUTH_ACCOUNT_FIELD_TIMEOUT_MS);
+    questionCacheOptionalFieldsReady = true;
 }
 
 const AUTH_ACCOUNT_WRITE_TIMEOUT_MS = Number(process.env.WORDBOT_AUTH_ACCOUNT_WRITE_TIMEOUT_MS || 5000);
@@ -475,6 +489,14 @@ async function addQuestionCacheRecords(rows) {
             return await addRecords(QUESTION_CACHE_TABLE, attemptRows);
         } catch (error) {
             if (!isFieldNameNotFound(error) || attempt === fieldDropOrder.length) throw error;
+            if (attempt === 0 && !questionCacheOptionalFieldsReady) {
+                try {
+                    await ensureQuestionCacheOptionalFields();
+                    return await addRecords(QUESTION_CACHE_TABLE, rows);
+                } catch (fieldError) {
+                    if (!isFieldNameNotFound(fieldError)) console.log('question cache optional field preparation failed: ' + fieldError.message);
+                }
+            }
             removedFields = [...removedFields, fieldDropOrder[attempt]];
             attemptRows = rows.map(row => stripOptionalQuestionCacheFields(row, removedFields));
             console.log('question cache table missing optional fields; retrying without ' + removedFields.join(','));
