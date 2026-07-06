@@ -457,3 +457,18 @@ test('generated fill-in contexts are translated before cached rows are built', (
     assert.ok(rebuildSource.includes('contextEnhancedInfo.Context_CN = await ensureGeneratedContextCN'));
     assert.ok(rebuildSource.includes('baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords }'));
 });
+
+test('listUserWords applies status filtering before pagination', () => {
+    const start = feishuSource.indexOf('async function listUserWords');
+    const end = feishuSource.indexOf('async function getWordByRecordId', start);
+    assert.ok(start >= 0 && end > start, 'listUserWords source should be findable');
+    const source = feishuSource.slice(start, end);
+
+    assert.ok(source.includes('const status = getFieldValue(options.status).trim();'));
+    const statusFilter = source.indexOf(".filter(record => !status || getFieldValue(record.fields?.Status || 'Pending') === status)");
+    const total = source.indexOf('const total = userRecords.length;');
+    const slice = source.indexOf('userRecords.slice(start, start + pageSize)');
+    assert.ok(statusFilter >= 0, 'listUserWords should filter by status when requested');
+    assert.ok(statusFilter < total, 'status filtering must happen before total is calculated');
+    assert.ok(total < slice, 'pagination must happen after filtered total is calculated');
+});

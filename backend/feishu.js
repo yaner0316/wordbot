@@ -2699,9 +2699,11 @@ function mapWordRecord(record) {
 async function listUserWords(userId, options = {}) {
     const pageSize = Math.max(1, Math.min(50, Number(options.pageSize) || 20));
     const page = Math.max(1, Number(options.page) || 1);
+    const status = getFieldValue(options.status).trim();
     const records = await getRecords(WORD_TABLE);
     const userRecords = records
         .filter(record => userMatches(record.fields?.user, userId))
+        .filter(record => !status || getFieldValue(record.fields?.Status || 'Pending') === status)
         .sort((a, b) => getFieldValue(a.fields?.Word).localeCompare(getFieldValue(b.fields?.Word)));
     const total = userRecords.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));

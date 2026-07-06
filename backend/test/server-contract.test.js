@@ -583,11 +583,11 @@ test('parent word library endpoint returns paginated words', async () => {
     }));
 
     await withServer(app, async baseUrl => {
-        const response = await fetch(`${baseUrl}/api/admin/words?userId=Draggy&page=2&pageSize=20`);
+        const response = await fetch(`${baseUrl}/api/admin/words?userId=Draggy&page=2&pageSize=20&status=Pending`);
         const body = await response.json();
 
         assert.equal(response.status, 200);
-        assert.deepEqual(calls, [['Draggy', { page: 2, pageSize: 20 }]]);
+        assert.deepEqual(calls, [['Draggy', { page: 2, pageSize: 20, status: 'Pending' }]]);
         assert.equal(body.total, 31);
         assert.equal(body.totalPages, 2);
         assert.equal(body.words.length, 2);

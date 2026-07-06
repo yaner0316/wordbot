@@ -403,7 +403,8 @@ app.get('/api/admin/words', async (req, res) => {
         if (!userId) return res.status(400).json({ error: '缺少userId参数' });
         const page = Number(req.query.page || 1);
         const pageSize = Number(req.query.pageSize || 20);
-        const result = await listUserWords(userId, { page, pageSize });
+        const status = String(req.query.status || '').trim();
+        const result = await listUserWords(userId, { page, pageSize, status: status || undefined });
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
