@@ -27,14 +27,9 @@ function userKey(value) {
     return String(value || '').trim().toLowerCase();
 }
 
-function buildCacheRow({ userId, level, roundType, question, sourceVersion, now }) {
+function buildCacheQuestionFields({ question, sourceVersion, now = Date.now() }) {
     return {
-        user: userId,
-        word_record_id: question.record_id,
-        word: question.word,
         question_type: question.type,
-        level,
-        round_type: roundType,
         question_text: question.context,
         context_cn: question.contextCN || '',
         suffix: question.suffix || '',
@@ -48,6 +43,17 @@ function buildCacheRow({ userId, level, roundType, question, sourceVersion, now 
         last_used_at: '',
         generated_at: now,
         source_version: sourceVersion || 'v1',
+    };
+}
+
+function buildCacheRow({ userId, level, roundType, question, sourceVersion, now }) {
+    return {
+        user: userId,
+        word_record_id: question.record_id,
+        word: question.word,
+        level,
+        round_type: roundType,
+        ...buildCacheQuestionFields({ question, sourceVersion, now }),
     };
 }
 
@@ -206,6 +212,7 @@ function summarizeCacheStatus(rows) {
 module.exports = {
     QUESTION_CACHE_STATUS,
     buildCacheRowsForRecord,
+    buildCacheQuestionFields,
     getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     normalizeCacheRow,

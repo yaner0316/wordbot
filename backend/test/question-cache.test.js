@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
     QUESTION_CACHE_STATUS,
     buildCacheRowsForRecord,
+    buildCacheQuestionFields,
     getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     normalizeCacheRow,
@@ -38,6 +39,28 @@ function question(overrides) {
     };
 }
 
+test('builds an update payload for a replacement fill-in cache question', () => {
+    const fields = buildCacheQuestionFields({
+        question: {
+            type: 1,
+            context: 'The child used a brush to paint the wall.',
+            contextCN: '孩子用刷子粉刷墙壁。',
+            options: ['A. brush', 'B. spoon', 'C. shoe', 'D. cup'],
+            optionMeanings: ['刷子', '勺子', '鞋', '杯子'],
+            answer: 'A',
+            correctMeaning: '刷子',
+        },
+        now: 456,
+        sourceVersion: 'mistake-recovery-v1',
+    });
+
+    assert.equal(fields.question_type, 1);
+    assert.equal(fields.question_text, 'The child used a brush to paint the wall.');
+    assert.equal(fields.context_cn, '孩子用刷子粉刷墙壁。');
+    assert.equal(fields.answer, 'A');
+    assert.equal(fields.generated_at, 456);
+    assert.equal(fields.source_version, 'mistake-recovery-v1');
+});
 test('cache rows preserve translated question explanations', () => {
     const rows = buildCacheRowsForRecord({
         userId: 'yusi',

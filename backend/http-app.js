@@ -51,6 +51,20 @@ function startReviewPrebuild({ createReviewRound, user, testId, result }) {
         console.warn('review prebuild failed:', error.message);
     }
 }
+function startWrongQuestionCachePrebuild({ prebuildWrongQuestionCache, user, testId, result }) {
+    if (typeof prebuildWrongQuestionCache !== 'function' || !hasWrongAnswers(result)) return;
+    try {
+        Promise.resolve(prebuildWrongQuestionCache({
+            userId: user,
+            testId,
+            result,
+        })).catch(error => {
+            console.warn('wrong-question cache prebuild failed:', error.message);
+        });
+    } catch (error) {
+        console.warn('wrong-question cache prebuild failed:', error.message);
+    }
+}
 function createApp({
     submitAnswers,
     registerUser,
@@ -59,6 +73,7 @@ function createApp({
     setParentCredentials,
     resetChildPassword,
     createReviewRound,
+    prebuildWrongQuestionCache,
     getActiveReviewRound,
     submitReviewRound,
     deferReviewRound,
@@ -147,6 +162,7 @@ function createApp({
 
             const data = await submitAnswers(user, testId, answers);
             startReviewPrebuild({ createReviewRound, user, testId, result: data });
+            startWrongQuestionCachePrebuild({ prebuildWrongQuestionCache, user, testId, result: data });
             res.json(data);
         } catch (error) {
             const status = isClientError(error) ? 400 : 500;

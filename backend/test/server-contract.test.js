@@ -164,6 +164,46 @@ test('quiz endpoint preserves request delegation and response shape', async () =
     });
 });
 
+test('submit endpoint starts wrong-question cache prebuild in the background', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        submitAnswers: async () => ({
+            results: [{ correct: false, recordId: 'word-1' }],
+            correct: 0,
+            total: 1,
+            accuracy: '0.0%',
+        }),
+        prebuildWrongQuestionCache: async input => {
+            calls.push(input);
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user: 'student',
+                testId: 'real-contract-quiz',
+                answers: [{ option: 1 }],
+            }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).correct, 0);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(calls, [{
+            userId: 'student',
+            testId: 'real-contract-quiz',
+            result: {
+                results: [{ correct: false, recordId: 'word-1' }],
+                correct: 0,
+                total: 1,
+                accuracy: '0.0%',
+            },
+        }]);
+    });
+});
 test('parent addWords endpoint preserves payload contract', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

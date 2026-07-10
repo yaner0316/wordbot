@@ -69,10 +69,30 @@ function createReviewService({
     isSubmitted,
     isCorrect,
     fieldValue,
+    resolveMeaningRecallAnswer = null,
     recordReadRetryAttempts = 12,
     recordReadRetryDelayMs = 500,
 }) {
     const submittedResults = new Map();
+
+    function applySubmittedResult(records, assessmentId) {
+        const summary = submittedResults.get(assessmentId);
+        if (!summary || !Array.isArray(summary.remainingRecordIds)) return records;
+        const remaining = new Set(summary.remainingRecordIds.map(item => String(item)));
+        return records.map(record => {
+            if (record?.fields?.is_correct !== undefined && record?.fields?.is_correct !== null) {
+                return record;
+            }
+            const recordId = fieldValue(record?.fields?.record_id);
+            return {
+                ...record,
+                fields: {
+                    ...(record.fields || {}),
+                    is_correct: remaining.has(recordId) ? wrongValue : correctValue,
+                },
+            };
+        });
+    }
 
     function wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -98,12 +118,13 @@ function createReviewService({
     function toSource(record) {
         const fields = record.fields || {};
         return {
-            sourceQuestionId: record.record_id,
+            sourceQuestionId: fieldValue(fields.source_question_id) || record.record_id,
             recordId: fieldValue(fields.record_id),
             word: fieldValue(fields.word).toLowerCase(),
             type: Number(fieldValue(fields.question_type)) || 1,
             context: fieldValue(fields.context),
             options: parseOptions(fields.options),
+            correctAnswer: fieldValue(fields.correct_answer),
         };
     }
 
@@ -133,6 +154,37 @@ function createReviewService({
         if (type === 1) return fieldValue(info.context);
         if (type === 2) return fieldValue(info.meaning).split(';')[0];
         return fieldValue(info.CN_Meaning || info.cn_meaning);
+    }
+
+    function findOriginalSourceRecord(reviewRecord, chainRecords = []) {
+        const sourceQuestionId = fieldValue(reviewRecord.fields?.source_question_id);
+        if (!sourceQuestionId) return null;
+        return chainRecords.find(record => record.record_id === sourceQuestionId) || null;
+    }
+
+    async function resolveMeaningRecallForRecord(record, fallback, chainRecords = null) {
+        if (typeof resolveMeaningRecallAnswer !== 'function') return fallback;
+        const sourceTestId = fieldValue(record.fields?.source_test_id);
+        const records = chainRecords || (sourceTestId ? await loadReviewChainRecords(sourceTestId) : []);
+        const sourceRecord = findOriginalSourceRecord(record, records);
+        const source = sourceRecord ? toSource(sourceRecord) : toSource(record);
+        const recordId = fieldValue(record.fields?.record_id);
+        let info = null;
+        if (recordId) {
+            try {
+                info = await loadWordInfo(recordId);
+            } catch {
+                info = null;
+            }
+        }
+        const resolved = await resolveMeaningRecallAnswer({
+            record,
+            source,
+            info,
+            fallback,
+            fieldValue,
+        });
+        return fieldValue(resolved).trim() || fallback;
     }
 
     async function buildRoundResponse(records) {
@@ -169,6 +221,9 @@ function createReviewService({
                         correctMeaning = raw;
                     }
                 }
+                    if (!correctMeanings) {
+                        correctMeaning = await resolveMeaningRecallForRecord(record, correctMeaning);
+                    }
                 return {
                     recordId,
                     type,
@@ -197,9 +252,12 @@ function createReviewService({
         if (existing) return existing;
 
         const sourceAssessmentId = parentReviewId || sourceTestId;
-        const sourceRecords = await loadAssessmentRecordsWithRetry(
-            sourceAssessmentId,
-            records => records.every(isSubmitted)
+        const sourceRecords = applySubmittedResult(
+            await loadAssessmentRecordsWithRetry(
+                sourceAssessmentId,
+                records => records.every(isSubmitted)
+            ),
+            sourceAssessmentId
         );
         if (!sourceRecords.length) throw new Error('Review source records not found');
         const owners = assessmentOwner(sourceRecords);
@@ -242,6 +300,9 @@ function createReviewService({
         const questions = [];
         for (const record of wrongRecords) {
             const source = toSource(record);
+            if (source.type === 4 && source.correctAnswer) {
+                source.correctMeaning = await resolveMeaningRecallForRecord(record, source.correctAnswer, chainRecords);
+            }
             const info = await loadWordInfo(source.recordId, wordRecords);
             const question = await (buildReviewQuestion || buildMeaningRecallQuestion)({
                 userId,
@@ -342,7 +403,7 @@ function createReviewService({
             for (let index = 0; index < sortedRecords.length; index++) {
                 const record = sortedRecords[index];
                 const answer = answers[index] || {};
-                const expectedRaw = fieldValue(record.fields?.correct_answer);
+                let expectedRaw = fieldValue(record.fields?.correct_answer);
 
                 // Detect multi-def: correct_answer is a JSON array
                 let expectedMeanings = null;
@@ -350,6 +411,14 @@ function createReviewService({
                     const parsed = JSON.parse(expectedRaw);
                     if (Array.isArray(parsed) && parsed.length > 1) expectedMeanings = parsed;
                 } catch { /* single-def */ }
+
+                if (!expectedMeanings) {
+                    const resolvedExpected = await resolveMeaningRecallForRecord(record, expectedRaw);
+                    if (resolvedExpected && resolvedExpected !== expectedRaw) {
+                        expectedRaw = resolvedExpected;
+                        await updateReviewRecord(record.record_id, { correct_answer: expectedRaw });
+                    }
+                }
 
                 let submitted, correct, yourTexts;
                 if (expectedMeanings) {

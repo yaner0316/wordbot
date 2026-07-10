@@ -45,6 +45,7 @@ const {
 } = require('./user-learning-settings');
 const {
     buildCacheRowsForRecord,
+    buildCacheQuestionFields,
     getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     normalizeCacheRow,
@@ -780,6 +781,128 @@ function generateQuestion(word, info, distractors, type, allWords) {
     };
 }
 
+async function prebuildWrongQuestionCache({ userId, testId, result }) {
+    if (!QUESTION_CACHE_TABLE || !userId || !testId) {
+        return { prepared: 0, skipped: true };
+    }
+
+    const wrongResults = (result?.results || []).filter(item =>
+        item && item.correct === false && item.recordId
+    );
+    const wrongRecordIds = new Set(wrongResults.map(item => String(item.recordId)));
+    if (!wrongRecordIds.size) return { prepared: 0, skipped: true };
+
+    const [assessmentRecords, wordRecords, cacheRows] = await Promise.all([
+        getUserAssessmentRecords(userId),
+        getRecords(WORD_TABLE),
+        getQuestionCacheRecords(),
+    ]);
+    const testRecords = assessmentRecords.filter(record =>
+        getFieldValue(record.fields?.test_id) === String(testId) &&
+        wrongRecordIds.has(getFieldValue(record.fields?.record_id))
+    );
+    const recordById = new Map(testRecords.map(record => [
+        getFieldValue(record.fields?.record_id),
+        record,
+    ]));
+    const { pool } = await getDistractorPool(wordRecords);
+    const settings = await getUserLearningSettings(userId);
+    const letters = ['A', 'B', 'C', 'D'];
+    const fallbackWords = wordRecords
+        .map(record => getFieldValue(record.fields?.Word).trim().toLowerCase())
+        .filter(word => word && !isReservedTestWord(word));
+    let prepared = 0;
+
+    for (const resultItem of wrongResults) {
+        const recordId = String(resultItem.recordId);
+        const sourceRecord = recordById.get(recordId);
+        if (!sourceRecord || Number(getFieldValue(sourceRecord.fields?.question_type)) !== 1) continue;
+
+        const level = getFieldValue(sourceRecord.fields?.level) || settings.learningLevel;
+        const info = pool[recordId];
+        if (!info || !info.word) continue;
+
+        const oldContext = getFieldValue(sourceRecord.fields?.context).trim();
+        const nextContext = await generateNaturalFillInContext(
+            info.word,
+            info.CN_Meaning || info.meaning,
+            level,
+            oldContext
+        );
+        if (!nextContext || nextContext.trim().toLowerCase() === oldContext.toLowerCase()) continue;
+
+        const nextInfo = {
+            ...info,
+            context: nextContext,
+            Context_CN: '',
+            fallbackDistractors: fallbackWords,
+        };
+        let forcedDistractors = null;
+        if (isElementaryCacheLevel(level)) {
+            const elementaryDistractors = generateElementaryDistractors(info.word);
+            if (elementaryDistractors.length === 3) forcedDistractors = elementaryDistractors;
+        } else if (MINIMAX_API_KEY) {
+            const candidates = [...new Set(
+                [...(info.distractors || []), ...fallbackWords]
+                    .map(item => String(item || '').trim().toLowerCase())
+                    .filter(item => item && item !== String(info.word).toLowerCase())
+            )];
+            forcedDistractors = await selectContextualDistractors({
+                word: info.word,
+                context: nextContext,
+                candidates,
+                callLLM: prompt => callMiniMaxAPI(prompt, 'MiniMax-M2.7', 10000),
+            }).catch(() => null);
+        }
+
+        const question = buildQuizQuestion(
+            recordId,
+            nextInfo,
+            1,
+            'mistake-recovery-cache',
+            letters,
+            forcedDistractors ? { forcedDistractors } : {}
+        );
+        if (!question) continue;
+        question.level = level;
+        await ensureFillInQuestionContextTranslations([question]);
+        await enrichContextualCorrectMeanings([question], { generateContextMeaning });
+        await enrichQuestionOptionMeanings({
+            questions: [question],
+            records: wordRecords,
+            translateWords: translateWordsToCN,
+            updateRecord: (id, fields) => updateRecord(WORD_TABLE, id, fields),
+        });
+
+        const matchingCacheRows = cacheRows.filter(row =>
+            userMatches(row.fields?.user, userId) &&
+            getFieldValue(row.fields?.word_record_id) === recordId &&
+            getFieldValue(row.fields?.round_type) === 'primary' &&
+            Number(getFieldValue(row.fields?.question_type)) === 1
+        );
+        const cacheRow = matchingCacheRows.find(row =>
+            getFieldValue(row.fields?.level) === level
+        ) || matchingCacheRows[0];
+        const fields = buildCacheQuestionFields({
+            question,
+            sourceVersion: 'mistake-recovery-v1',
+            now: Date.now(),
+        });
+        if (cacheRow?.record_id) {
+            await updateRecord(QUESTION_CACHE_TABLE, cacheRow.record_id, fields);
+        } else {
+            await addQuestionCacheRecords(buildCacheRowsForRecord({
+                userId,
+                level,
+                primaryQuestion: question,
+                sourceVersion: 'mistake-recovery-v1',
+            }));
+        }
+        prepared++;
+    }
+
+    return { prepared, skipped: false };
+}
 async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     const markTiming = createQuizTimingLogger({
         enabled: process.env.WORDBOT_QUIZ_TIMING === '1',
@@ -821,6 +944,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 () => crypto.randomUUID().split('-')[0]
             );
             const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);
+            await ensureFillInQuestionContextTranslations(randomizedQuestions);
             const baseTestTime = Date.now();
             const testRecordWriteStarted = Date.now();
             await addRecords(TEST_TABLE, randomizedQuestions.map((q, index) => ({
@@ -1059,6 +1183,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
 
     markTiming('difficulty-rewrite');
     normalizeQuizArticleContexts(questions);
+    await ensureFillInQuestionContextTranslations(questions);
     await enrichQuestionOptionMeanings({
         questions,
         records: wordRecords,
@@ -1474,7 +1599,7 @@ const reviewService = createReviewService({
     },
     buildReviewQuestion: async input => {
         const info = input.info || {};
-        let correctMeaning = String(info.CN_Meaning || '').trim();
+        let correctMeaning = String(input.source?.correctMeaning || info.CN_Meaning || '').trim();
         if (!correctMeaning || hasAiMetaResponse(correctMeaning)) {
             const translated = await translateToCN(info.meaning || info.word).catch(() => '');
             if (translated && !hasAiMetaResponse(translated)) {
@@ -1509,6 +1634,17 @@ const reviewService = createReviewService({
             record_id: input.source.recordId,
             testId: input.reviewId,
         };
+    },
+    resolveMeaningRecallAnswer: async ({ source, info, fallback }) => {
+        const sourceContext = String(source?.context || '').trim();
+        const wordStr = String(info?.word || source?.word || '').trim();
+        if (source?.type === 1 && sourceContext && sourceContext !== wordStr) {
+            const contextual = await generateContextMeaning(wordStr, sourceContext).catch(() => '');
+            if (contextual && !hasAiMetaResponse(contextual) && hasMeaningfulChineseMeaning(contextual)) {
+                return contextual;
+            }
+        }
+        return fallback;
     },
     addReviewRecords: rows => addRecords(TEST_TABLE, rows),
     updateReviewRecord: (rowId, fields) => updateRecord(TEST_TABLE, rowId, fields),
@@ -1797,6 +1933,28 @@ async function ensureGeneratedContextCN(context, fallbackContextCN = '') {
     return translateContextToCN(text).catch(() => '');
 }
 
+function correctOptionWordForQuestion(question) {
+    const answer = String(question?.answer || '').trim();
+    const option = (question?.options || []).find(item => String(item || '').trim().startsWith(answer + '.'));
+    return String(option || '').replace(/^[A-D]\.\s*/i, '').trim() || String(question?.word || '').trim();
+}
+
+function completeFillInSentenceForTranslation(question) {
+    const context = String(question?.context || '').trim();
+    if (!context) return '';
+    const correctWord = correctOptionWordForQuestion(question);
+    return context.replace(/_{3,}/g, correctWord || String(question?.word || '').trim());
+}
+
+async function ensureFillInQuestionContextTranslations(questions) {
+    if (!MINIMAX_API_KEY) return;
+    for (const question of questions || []) {
+        if (!question || Number(question.type) !== 1 || String(question.contextCN || '').trim()) continue;
+        const completedSentence = completeFillInSentenceForTranslation(question);
+        question.contextCN = await ensureGeneratedContextCN(completedSentence, question.contextCN);
+    }
+}
+
 function addRejectReason(summary, reason) {
     if (!reason) return;
     summary[reason] = (summary[reason] || 0) + 1;
@@ -2052,6 +2210,7 @@ async function rebuildQuestionCacheForUser(userId) {
             continue;
         }
         normalizeQuizArticleContexts(cacheQuestions);
+        await ensureFillInQuestionContextTranslations(cacheQuestions);
         await enrichContextualCorrectMeanings(cacheQuestions, {
             generateContextMeaning,
         });
@@ -2334,7 +2493,7 @@ Return JSON only: {"example": "sentence"}`;
     return null;
 }
 
-async function generateNaturalFillInContext(word, meaning, level = '') {
+async function generateNaturalFillInContext(word, meaning, level = '', avoidContext = '') {
     if (!MINIMAX_API_KEY) return '';
     const target = String(word || '').trim().toLowerCase();
     if (!target) return '';
@@ -2359,6 +2518,7 @@ Rules:
 3. Do not write a dictionary definition, word list, anatomy/science explanation, or phrase like "the word is used in context".
 4. Add enough context clues so the target word makes sense in the required meaning.
 5. Use 8 to 16 words.
+6. Do not reuse this previous sentence: "${avoidContext}"
 Return JSON only: {"context":"sentence"}`;
     try {
         const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 8000);
@@ -2371,6 +2531,7 @@ Return JSON only: {"context":"sentence"}`;
         const escaped = escapeRegExp(target);
         const occurrences = (context.toLowerCase().match(new RegExp(`\\b${escaped}\\b`, 'g')) || []).length;
         if (occurrences !== 1) return '';
+        if (avoidContext && context.toLowerCase() === String(avoidContext).trim().toLowerCase()) return '';
         return isContextUsableForWord(target, context) ? context : '';
     } catch (e) { }
     return '';
@@ -2985,4 +3146,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };

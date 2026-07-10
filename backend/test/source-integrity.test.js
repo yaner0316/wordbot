@@ -458,6 +458,55 @@ test('generated fill-in contexts are translated before cached rows are built', (
     assert.ok(rebuildSource.includes('baseInfo = { ...contextEnhancedInfo, fallbackDistractors: fallbackWords }'));
 });
 
+test('fill-in questions are translated before live and cached quiz responses are returned', () => {
+    assert.ok(feishuSource.includes('async function ensureFillInQuestionContextTranslations'), 'translation helper should exist');
+    assert.ok(feishuSource.includes('function completeFillInSentenceForTranslation'), 'fill-in translation should complete the sentence before translating');
+
+    const liveStart = feishuSource.indexOf('async function generateQuiz');
+    const liveEnd = feishuSource.indexOf('async function validateAndFixQuiz', liveStart);
+    assert.ok(liveStart >= 0 && liveEnd > liveStart, 'generateQuiz source should be findable');
+    const liveSource = feishuSource.slice(liveStart, liveEnd);
+    const cacheHitRandomize = liveSource.indexOf('const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);');
+    const cacheHitTranslate = liveSource.indexOf('await ensureFillInQuestionContextTranslations(randomizedQuestions);', cacheHitRandomize);
+    const cacheHitWrite = liveSource.indexOf('await addRecords(TEST_TABLE', cacheHitRandomize);
+    assert.ok(cacheHitRandomize >= 0, 'cache hit path should randomize cached questions');
+    assert.ok(cacheHitTranslate > cacheHitRandomize, 'cache hit path should translate old cached fill-in contexts before returning');
+    assert.ok(cacheHitWrite > cacheHitTranslate, 'cache hit path should translate before writing test rows');
+
+    const normalizeLive = liveSource.indexOf('normalizeQuizArticleContexts(questions);');
+    const translateLive = liveSource.indexOf('await ensureFillInQuestionContextTranslations(questions);', normalizeLive);
+    const enrichLive = liveSource.indexOf('await enrichQuestionOptionMeanings');
+    assert.ok(normalizeLive >= 0, 'live generation should normalize article contexts');
+    assert.ok(translateLive > normalizeLive, 'live generation should translate after final context normalization');
+    assert.ok(enrichLive > translateLive, 'live generation should translate before returning/enriching final response');
+
+    const cacheStart = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const cacheEnd = feishuSource.indexOf('async function validateWords', cacheStart);
+    assert.ok(cacheStart >= 0 && cacheEnd > cacheStart, 'cache rebuild source should be findable');
+    const cacheSource = feishuSource.slice(cacheStart, cacheEnd);
+    const adaptCache = cacheSource.indexOf('await adaptContextsByLevel(cacheQuestions, level);');
+    const translateCache = cacheSource.indexOf('await ensureFillInQuestionContextTranslations(cacheQuestions);');
+    const appendCache = cacheSource.indexOf('appendReadyCacheRows(bufferedRows');
+    assert.ok(translateCache >= 0, 'cache rebuild should translate fill-in contexts');
+    assert.ok(adaptCache === -1 || translateCache > adaptCache, 'cache rebuild should translate after difficulty rewrite');
+    assert.ok(appendCache > translateCache, 'cache rebuild should translate before cached rows are built');
+});
+
+test('review meaning recall keeps contextual meanings across review rounds', () => {
+    const configStart = feishuSource.indexOf('const reviewService = createReviewService({');
+    const configEnd = feishuSource.indexOf('async function createReviewRound', configStart);
+    assert.ok(configStart >= 0 && configEnd > configStart, 'review service config should be findable');
+    const configSource = feishuSource.slice(configStart, configEnd);
+    assert.ok(configSource.includes('resolveMeaningRecallAnswer'), 'review service should repair old contextual meaning recall answers');
+    assert.ok(configSource.includes('generateContextMeaning'), 'review meaning repair should use the original type-one context');
+
+    const buildStart = configSource.indexOf('buildReviewQuestion: async input => {');
+    const buildEnd = configSource.indexOf('addReviewRecords:', buildStart);
+    assert.ok(buildStart >= 0 && buildEnd > buildStart, 'buildReviewQuestion source should be findable');
+    const buildSource = configSource.slice(buildStart, buildEnd);
+    assert.ok(buildSource.includes('input.source?.correctMeaning'), 'second review rounds should preserve prior contextual meanings');
+});
+
 test('listUserWords applies status filtering before pagination', () => {
     const start = feishuSource.indexOf('async function listUserWords');
     const end = feishuSource.indexOf('async function getWordByRecordId', start);

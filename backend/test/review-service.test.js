@@ -118,6 +118,65 @@ test('creates Chinese meaning recall questions for wrong answers', async () => {
     assert.equal(added[0][0].options, '[]');
 });
 
+test('repairs old meaning recall rows from the original type-one source context', async () => {
+    const { assessments, updates } = createFixture();
+    assessments.set('real-q1', [record('q-row-dirt', {
+        user: 'student',
+        test_id: 'real-q1',
+        record_id: 'word-dirt',
+        word: 'dirt',
+        question_type: 1,
+        context: 'The reporter uncovered _____ about the mayor.',
+        options: '["A. dirt","B. soil","C. dust","D. mud"]',
+        is_correct: 'wrong',
+    })]);
+    assessments.set('real-review-old', [record('review-row-old', {
+        user: 'student',
+        test_id: 'real-review-old',
+        source_test_id: 'real-q1',
+        parent_review_id: '',
+        review_round: 1,
+        review_status: 'active',
+        source_question_id: 'q-row-dirt',
+        record_id: 'word-dirt',
+        word: 'dirt',
+        question_type: 4,
+        context: '',
+        options: '[]',
+        correct_answer: '土',
+    })]);
+    const service = createReviewService({
+        createId: () => 'unused',
+        loadAssessmentRecords: async assessmentId => assessments.get(assessmentId) || [],
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordInfo: async () => ({ word: 'dirt', CN_Meaning: '土' }),
+        resolveMeaningRecallAnswer: async ({ source, fallback }) => source.type === 1 ? '丑闻' : fallback,
+        addReviewRecords: async () => {},
+        updateReviewRecord: async (rowId, fields) => updates.push({ rowId, fields }),
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+        recordReadRetryAttempts: 1,
+        recordReadRetryDelayMs: 0,
+    });
+
+    const active = await service.getActiveRound({ userId: 'student', sourceTestId: 'real-q1' });
+    assert.equal(active.questions[0].correctMeaning, '丑闻');
+
+    const result = await service.submitRound({
+        userId: 'student',
+        reviewId: 'real-review-old',
+        answers: [{ text: '丑闻' }],
+    });
+
+    assert.equal(result.correct, 1);
+    assert.equal(result.results[0].answer, '丑闻');
+    assert.equal(updates.some(update => update.rowId === 'review-row-old' && update.fields.correct_answer === '丑闻'), true);
+});
+
 test('submits Chinese meaning review answers without multiple-choice options', async () => {
     const { service, added, updates } = createFixture();
     const round = await service.createRound({
@@ -337,6 +396,27 @@ test('waits for previous review submission fields before creating the next revie
     assert.deepEqual(second.questions.map(q => q.recordId), ['word-2']);
 });
 
+
+test('uses the submitted result when the next round reads stale review rows', async () => {
+    const { service, assessments } = createFixture();
+    const first = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+
+    await service.submitRound({
+        userId: 'student',
+        reviewId: first.reviewId,
+        answers: [{ text: 'not yet' }],
+    });
+
+    const second = await service.createRound({
+        userId: 'student',
+        sourceTestId: 'real-q1',
+        parentReviewId: first.reviewId,
+    });
+
+    assert.equal(second.round, 2);
+    assert.deepEqual(second.questions.map(q => q.recordId), ['word-2']);
+    assert.equal(assessments.get(first.reviewId)[0].fields.is_correct, undefined);
+});
 test('default retry window waits long enough for slow Feishu review submission visibility', async () => {
     const { service, assessments } = createFixture();
     const first = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
