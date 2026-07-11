@@ -492,6 +492,42 @@ test('fill-in questions are translated before live and cached quiz responses are
     assert.ok(appendCache > translateCache, 'cache rebuild should translate before cached rows are built');
 });
 
+test('formal quiz selection uses an eighteen hour word cooldown without blocking cache rebuild', () => {
+    assert.ok(
+        feishuSource.includes('const WORD_QUIZ_COOLDOWN_MS = 18 * 60 * 60 * 1000;'),
+        'formal quizzes should use a shared 18 hour cooldown constant'
+    );
+
+    const quizStart = feishuSource.indexOf('async function generateQuiz');
+    const quizEnd = feishuSource.indexOf('async function validateAndFixQuiz', quizStart);
+    assert.ok(quizStart >= 0 && quizEnd > quizStart, 'generateQuiz source should be findable');
+    const quizSource = feishuSource.slice(quizStart, quizEnd);
+    assert.ok(
+        quizSource.includes('getQuizCooldownExcludedRecordIds(wordRecordsForCache, userId)'),
+        'cache hit path should exclude word records newer than the cooldown'
+    );
+    assert.ok(
+        quizSource.includes('excludedRecordIds: excludedCacheRecordIds'),
+        'cache hit path should pass cooldown and recent exclusions into cache selection'
+    );
+    assert.ok(
+        quizSource.includes('getPendingWords(userId, wordRecords, submittedRecords, { minAgeMs: WORD_QUIZ_COOLDOWN_MS })'),
+        'live quiz path should only consider words older than the cooldown'
+    );
+
+    const rebuildStart = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
+    const rebuildEnd = feishuSource.indexOf('async function validateWords', rebuildStart);
+    assert.ok(rebuildStart >= 0 && rebuildEnd > rebuildStart, 'cache rebuild source should be findable');
+    const rebuildSource = feishuSource.slice(rebuildStart, rebuildEnd);
+    assert.ok(
+        rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords);'),
+        'cache rebuild should still prepare newly entered words immediately'
+    );
+    assert.ok(
+        !rebuildSource.includes('WORD_QUIZ_COOLDOWN_MS'),
+        'cache rebuild must not wait 18 hours before preparing rows'
+    );
+});
 test('cached quiz selection excludes recent quiz words before randomizing', () => {
     const start = feishuSource.indexOf('async function generateQuiz');
     const end = feishuSource.indexOf('async function validateAndFixQuiz', start);
@@ -501,12 +537,14 @@ test('cached quiz selection excludes recent quiz words before randomizing', () =
     const assessmentRead = source.indexOf('const userAssessmentRecords = await getUserAssessmentRecords(userId)');
     const recentRead = source.indexOf('await getRecentQuizFootprint(userId, 4, userAssessmentRecords)');
     const cacheSelect = source.indexOf('selectReadyCachedQuestions({');
-    const excluded = source.indexOf('excludedRecordIds: recent.recordIds', cacheSelect);
+    const mergedExclusions = source.indexOf('const excludedCacheRecordIds = new Set([...recent.recordIds, ...cooldownExcludedRecordIds]);');
+    const excluded = source.indexOf('excludedRecordIds: excludedCacheRecordIds', cacheSelect);
     const randomize = source.indexOf('const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);');
 
     assert.ok(assessmentRead >= 0, 'cache path should read existing assessment records before selecting cache rows');
     assert.ok(recentRead > assessmentRead, 'cache path should derive a recent quiz footprint before selecting cache rows');
     assert.ok(cacheSelect > recentRead, 'cache selection should happen after the recent footprint is available');
+    assert.ok(mergedExclusions > recentRead && mergedExclusions < cacheSelect, 'cache path should merge recent and cooldown exclusions before selection');
     assert.ok(excluded > cacheSelect && excluded < randomize, 'cache selection should exclude recently used record ids');
 });
 test('review meaning recall keeps contextual meanings across review rounds', () => {

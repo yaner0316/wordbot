@@ -81,6 +81,7 @@ const {
 } = require('./config');
 
 const { STATUS_MASTERED, STATUS_PENDING } = STATUS;
+const WORD_QUIZ_COOLDOWN_MS = 18 * 60 * 60 * 1000;
 const {
   STATUS_MASTERED: OPT_STATUS_MASTERED,
   STATUS_PENDING: OPT_STATUS_PENDING,
@@ -152,6 +153,27 @@ function hasSubmittedAnswer(record) {
     return record?.fields?.is_correct !== undefined && record?.fields?.is_correct !== null;
 }
 
+function getWordRecordTimestamp(record) {
+    const recordTime = Number(getFieldValue(record?.fields?.record_time));
+    if (Number.isFinite(recordTime) && recordTime > 0) return recordTime;
+    const createdTime = Number(record?.created_time || 0);
+    return Number.isFinite(createdTime) && createdTime > 0 ? createdTime : 0;
+}
+
+function isWordRecordPastQuizCooldown(record, { now = Date.now(), minAgeMs = WORD_QUIZ_COOLDOWN_MS } = {}) {
+    if (!minAgeMs) return true;
+    const timestamp = getWordRecordTimestamp(record);
+    if (!timestamp) return true;
+    return now - timestamp >= minAgeMs;
+}
+
+function getQuizCooldownExcludedRecordIds(records, userId, now = Date.now()) {
+    return new Set((records || [])
+        .filter(record => userMatches(record.fields?.user, userId))
+        .filter(record => !isWordRecordPastQuizCooldown(record, { now, minAgeMs: WORD_QUIZ_COOLDOWN_MS }))
+        .map(record => record.record_id)
+        .filter(Boolean));
+}
 function summarizeWordProgress(wordRecords, submittedRecords) {
     const groups = new Map();
     for (const record of wordRecords || []) {
@@ -603,8 +625,9 @@ async function getDistractorPool(records = null) {
     return { pool, wordIndex };
 }
 
-async function getPendingWords(userId, records = null, submittedRecords = null) {
+async function getPendingWords(userId, records = null, submittedRecords = null, options = {}) {
     records = records || await getRecords(WORD_TABLE);
+    const { minAgeMs = 0, now = Date.now() } = options || {};
     const userRecords = records
         .filter(r => userMatches(r.fields.user, userId))
         .sort((a, b) => (a.created_time || 0) - (b.created_time || 0));
@@ -628,6 +651,7 @@ async function getPendingWords(userId, records = null, submittedRecords = null) 
         }
     }
     return userRecords
+        .filter(r => !minAgeMs || isWordRecordPastQuizCooldown(r, { now, minAgeMs }))
         .filter(r => {
             const meaningProgress = masteryByRecordId.get(r.record_id);
             return !meaningProgress?.mastered;
@@ -928,6 +952,8 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         diagnostics.cacheAttempted = true;
         const cacheReadStarted = Date.now();
         const cachedRows = await getQuestionCacheRecords();
+        const wordRecordsForCache = await getRecords(WORD_TABLE);
+        const cooldownExcludedRecordIds = getQuizCooldownExcludedRecordIds(wordRecordsForCache, userId);
         let recent = { recordIds: new Set(), words: new Set() };
         try {
             const userAssessmentRecords = await getUserAssessmentRecords(userId);
@@ -935,13 +961,14 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         } catch (e) {
             console.log(`recent quiz footprint failed before cache selection: ${e.message}`);
         }
+        const excludedCacheRecordIds = new Set([...recent.recordIds, ...cooldownExcludedRecordIds]);
         const cachedQuestions = selectReadyCachedQuestions({
             rows: cachedRows,
             userId,
             level: effectiveLevel,
             roundType: 'primary',
             limit: requiredQuestionCount,
-            excludedRecordIds: recent.recordIds,
+            excludedRecordIds: excludedCacheRecordIds,
         });
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
         diagnostics.readyCount = cachedQuestions.length;
@@ -1013,7 +1040,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
     markTiming('word-records');
     const { pool } = await getDistractorPool(wordRecords);
     const submittedRecords = filterAssessmentRecords((await getUserAssessmentRecords(userId)).filter(hasSubmittedAnswer), ASSESSMENT_MODE.REAL);
-    const pendingBase = await getPendingWords(userId, wordRecords, submittedRecords);
+    const pendingBase = await getPendingWords(userId, wordRecords, submittedRecords, { minAgeMs: WORD_QUIZ_COOLDOWN_MS });
     const userAssessmentRecords = await getUserAssessmentRecords(userId).catch(e => {
         console.log(`user assessment records failed: ${e.message}`);
         return [];
