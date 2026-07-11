@@ -2328,6 +2328,43 @@ function findDuplicateWordEntries(records, targetUser, entries) {
     }));
 }
 
+function findRepeatedWordEntries(entries) {
+    const byWord = new Map();
+    for (const entry of entries || []) {
+        const word = String(entry.word || '').trim().toLowerCase();
+        if (!word) continue;
+        if (!byWord.has(word)) byWord.set(word, []);
+        byWord.get(word).push(entry);
+    }
+    return [...byWord.entries()]
+        .filter(([, repeatedEntries]) => repeatedEntries.length > 1)
+        .map(([word, repeatedEntries]) => ({
+            word,
+            existing: [{ recordId: '', word, cnMeaning: '\u672c\u6b21\u8f93\u5165\u4e2d\u91cd\u590d' }],
+            entries: repeatedEntries,
+        }));
+}
+
+function mergeDuplicateWordEntries(...groups) {
+    const merged = new Map();
+    for (const item of groups.flat().filter(Boolean)) {
+        if (!merged.has(item.word)) {
+            merged.set(item.word, { word: item.word, existing: [], entries: [] });
+        }
+        const target = merged.get(item.word);
+        target.existing.push(...(item.existing || []));
+        target.entries.push(...(item.entries || []));
+    }
+    return [...merged.values()].map(item => ({
+        ...item,
+        existing: item.existing.filter((record, index, list) =>
+            index === list.findIndex(other =>
+                String(other.recordId || '') === String(record.recordId || '') &&
+                String(other.cnMeaning || other.meaning || '') === String(record.cnMeaning || record.meaning || '')
+            )
+        ),
+    }));
+}
 function duplicateConfirmationResult(duplicateWords) {
     return {
         success: false,
@@ -2344,7 +2381,10 @@ async function validateWords(targetUserOrWords, maybeWords) {
     const multiMeanings = [];
     const records = await getRecords(WORD_TABLE);
     const { pool: distPool } = await getDistractorPool(records);
-    const duplicateWords = findDuplicateWordEntries(records, targetUser, entries);
+    const duplicateWords = mergeDuplicateWordEntries(
+        findDuplicateWordEntries(records, targetUser, entries),
+        findRepeatedWordEntries(entries)
+    );
 
     for (const entry of entries) {
         const lowerWord = entry.word;
@@ -2771,7 +2811,10 @@ async function addWords(targetUser, words, options = {}) {
     const errors = [];
     const entries = normalizeWordEntries(words);
     const wordRecords = await getRecords(WORD_TABLE);
-    const duplicateWords = findDuplicateWordEntries(wordRecords, targetUser, entries);
+    const duplicateWords = mergeDuplicateWordEntries(
+        findDuplicateWordEntries(wordRecords, targetUser, entries),
+        findRepeatedWordEntries(entries)
+    );
     const duplicateWordSet = new Set(duplicateWords.map(item => item.word));
 
     if (duplicateWords.length && !options.skipDuplicateWords && !options.confirmNewMeanings) {

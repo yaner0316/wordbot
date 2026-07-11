@@ -492,6 +492,38 @@ test('fill-in questions are translated before live and cached quiz responses are
     assert.ok(appendCache > translateCache, 'cache rebuild should translate before cached rows are built');
 });
 
+test('word entry duplicate confirmation covers same-batch duplicate words', () => {
+    assert.ok(
+        feishuSource.includes('function findRepeatedWordEntries(entries)'),
+        'word entry should detect repeated words inside the same submission'
+    );
+    assert.ok(
+        feishuSource.includes('function mergeDuplicateWordEntries'),
+        'word entry should merge existing-library duplicates and same-batch duplicates'
+    );
+
+    const validateStart = feishuSource.indexOf('async function validateWords');
+    const validateEnd = feishuSource.indexOf('async function addWords', validateStart);
+    assert.ok(validateStart >= 0 && validateEnd > validateStart, 'validateWords source should be findable');
+    const validateSource = feishuSource.slice(validateStart, validateEnd);
+    assert.ok(
+        validateSource.includes('findRepeatedWordEntries(entries)'),
+        'validateWords should report same-batch duplicate words before add'
+    );
+
+    const addStart = feishuSource.indexOf('async function addWords');
+    const addEnd = feishuSource.indexOf('async function updateMultiDefinition', addStart);
+    assert.ok(addStart >= 0 && addEnd > addStart, 'addWords source should be findable');
+    const addSource = feishuSource.slice(addStart, addEnd);
+    assert.ok(
+        addSource.includes('findRepeatedWordEntries(entries)'),
+        'addWords should require confirmation for same-batch duplicate words'
+    );
+    assert.ok(
+        addSource.includes('if (duplicateWords.length && !options.skipDuplicateWords && !options.confirmNewMeanings)'),
+        'same-batch duplicates should use the existing confirmation response path'
+    );
+});
 test('formal quiz selection uses an eighteen hour word cooldown without blocking cache rebuild', () => {
     assert.ok(
         feishuSource.includes('const WORD_QUIZ_COOLDOWN_MS = 18 * 60 * 60 * 1000;'),
