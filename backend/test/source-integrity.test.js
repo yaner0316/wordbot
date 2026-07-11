@@ -492,6 +492,23 @@ test('fill-in questions are translated before live and cached quiz responses are
     assert.ok(appendCache > translateCache, 'cache rebuild should translate before cached rows are built');
 });
 
+test('cached quiz selection excludes recent quiz words before randomizing', () => {
+    const start = feishuSource.indexOf('async function generateQuiz');
+    const end = feishuSource.indexOf('async function validateAndFixQuiz', start);
+    assert.ok(start >= 0 && end > start, 'generateQuiz source should be findable');
+    const source = feishuSource.slice(start, end);
+
+    const assessmentRead = source.indexOf('const userAssessmentRecords = await getUserAssessmentRecords(userId)');
+    const recentRead = source.indexOf('await getRecentQuizFootprint(userId, 4, userAssessmentRecords)');
+    const cacheSelect = source.indexOf('selectReadyCachedQuestions({');
+    const excluded = source.indexOf('excludedRecordIds: recent.recordIds', cacheSelect);
+    const randomize = source.indexOf('const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);');
+
+    assert.ok(assessmentRead >= 0, 'cache path should read existing assessment records before selecting cache rows');
+    assert.ok(recentRead > assessmentRead, 'cache path should derive a recent quiz footprint before selecting cache rows');
+    assert.ok(cacheSelect > recentRead, 'cache selection should happen after the recent footprint is available');
+    assert.ok(excluded > cacheSelect && excluded < randomize, 'cache selection should exclude recently used record ids');
+});
 test('review meaning recall keeps contextual meanings across review rounds', () => {
     const configStart = feishuSource.indexOf('const reviewService = createReviewService({');
     const configEnd = feishuSource.indexOf('async function createReviewRound', configStart);

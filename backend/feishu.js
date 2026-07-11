@@ -928,12 +928,20 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         diagnostics.cacheAttempted = true;
         const cacheReadStarted = Date.now();
         const cachedRows = await getQuestionCacheRecords();
+        let recent = { recordIds: new Set(), words: new Set() };
+        try {
+            const userAssessmentRecords = await getUserAssessmentRecords(userId);
+            recent = await getRecentQuizFootprint(userId, 4, userAssessmentRecords);
+        } catch (e) {
+            console.log(`recent quiz footprint failed before cache selection: ${e.message}`);
+        }
         const cachedQuestions = selectReadyCachedQuestions({
             rows: cachedRows,
             userId,
             level: effectiveLevel,
             roundType: 'primary',
             limit: requiredQuestionCount,
+            excludedRecordIds: recent.recordIds,
         });
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
         diagnostics.readyCount = cachedQuestions.length;
