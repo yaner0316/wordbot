@@ -608,3 +608,59 @@ test('listUserWords applies status filtering before pagination', () => {
     assert.ok(statusFilter < total, 'status filtering must happen before total is calculated');
     assert.ok(total < slice, 'pagination must happen after filtered total is calculated');
 });
+test('feishu review generation wires same-type rewritten review questions before meaning fallback', () => {
+    const configStart = feishuSource.indexOf('const reviewService = createReviewService({');
+    const configEnd = feishuSource.indexOf('async function createReviewRound', configStart);
+    assert.ok(configStart >= 0 && configEnd > configStart, 'review service config should be findable');
+    const configSource = feishuSource.slice(configStart, configEnd);
+
+    const buildStart = configSource.indexOf('buildReviewQuestion: async input => {');
+    const buildEnd = configSource.indexOf('addReviewRecords:', buildStart);
+    assert.ok(buildStart >= 0 && buildEnd > buildStart, 'buildReviewQuestion source should be findable');
+    const buildSource = configSource.slice(buildStart, buildEnd);
+
+    assert.ok(
+        buildSource.includes('buildReviewQuestionCore(input)'),
+        'review service should call the rewritten same-type review builder for source question types 1-3'
+    );
+    assert.ok(
+        buildSource.indexOf('buildReviewQuestionCore(input)') < buildSource.indexOf('type: 4'),
+        'same-type rewritten question generation should run before the type-4 meaning recall fallback'
+    );
+});
+
+test('word edit cache invalidation uses word record id and rebuilds even when no stale cache row exists', () => {
+    const start = feishuSource.indexOf('async function updateWord');
+    const end = feishuSource.indexOf('async function getReviewWords', start);
+    assert.ok(start >= 0 && end > start, 'updateWord source should be findable');
+    const source = feishuSource.slice(start, end);
+
+    assert.ok(
+        source.includes("getFieldValue(r.fields?.word_record_id) === record.record_id"),
+        'updateWord cache invalidation should match cache rows by stable word_record_id'
+    );
+    const staleDelete = source.indexOf('if (staleIds.length)');
+    const rebuild = source.indexOf('rebuildQuestionCacheForUser(resolvedUserId)');
+    assert.ok(staleDelete >= 0 && rebuild > staleDelete, 'updateWord should still include stale cache deletion');
+    assert.ok(
+        source.includes('const shouldRebuildCache = contentChanged && QUESTION_CACHE_TABLE;'),
+        'updateWord should remember to rebuild after any question-relevant content change'
+    );
+    const rebuildBranch = source.lastIndexOf('if (shouldRebuildCache)', rebuild);
+    assert.ok(
+        rebuildBranch > staleDelete,
+        'cache rebuild should be outside the staleIds-only branch'
+    );
+});
+
+test('word deletion cache cleanup uses stable word record id as well as word text', () => {
+    const start = feishuSource.indexOf('async function deleteWord');
+    const end = feishuSource.indexOf('async function backfillTranslations', start);
+    assert.ok(start >= 0 && end > start, 'deleteWord source should be findable');
+    const source = feishuSource.slice(start, end);
+
+    assert.ok(
+        source.includes("getFieldValue(r.fields?.word_record_id) === record.record_id"),
+        'deleteWord cache cleanup should delete cache rows by stable word_record_id'
+    );
+});

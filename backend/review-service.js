@@ -125,6 +125,7 @@ function createReviewService({
             context: fieldValue(fields.context),
             options: parseOptions(fields.options),
             correctAnswer: fieldValue(fields.correct_answer),
+            level: fieldValue(fields.level),
         };
     }
 

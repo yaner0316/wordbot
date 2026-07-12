@@ -59,6 +59,35 @@ test('changes question type when another valid type exists', async () => {
     assert.notEqual(question.type, 1);
 });
 
+test('can preserve the source question type and rewrite it even when alternatives exist', async () => {
+    const { builder, buildCalls } = makeBuilder({
+        preferSourceType: true,
+    });
+
+    const question = await builder({
+        reviewId: 'real-review-r1',
+        source: {
+            type: 1,
+            recordId: 'word-1',
+            context: 'Old target context with enough useful clue words.',
+            options: ['A. target', 'B. old-a', 'C. old-b', 'D. old-c'],
+        },
+        info: {
+            word: 'target',
+            context: 'Old target context with enough useful clue words.',
+            meaning: 'the intended object',
+            CN_Meaning: '目标',
+        },
+        usedDistractors: new Set(),
+    });
+
+    assert.equal(question.type, 1);
+    assert.equal(buildCalls[0].type, 1);
+    assert.notEqual(
+        buildCalls[0].info.context,
+        'Old target context with enough useful clue words.'
+    );
+});
 test('replaces all three wrong options and excludes earlier review options', async () => {
     let exclusions;
     const { builder, buildCalls } = makeBuilder({

@@ -18,6 +18,7 @@ function createReviewQuestionBuilder({
     generateDistractors,
     chooseType,
     isContextUsableForWord,
+    preferSourceType = false,
 }) {
     return async function buildReviewQuestion({
         reviewId,
@@ -35,13 +36,17 @@ function createReviewQuestionBuilder({
         ]);
 
         const availableTypes = validQuestionTypes(info, isContextUsableForWord);
-        const alternativeTypes = availableTypes.filter(type => type !== source.type);
-        const type = alternativeTypes.length > 0
-            ? chooseType(alternativeTypes)
-            : source.type;
+        const sourceType = Number(source.type) || 1;
+        const shouldPreserveSourceType = typeof preferSourceType === 'function'
+            ? Boolean(preferSourceType({ source, info, availableTypes }))
+            : Boolean(preferSourceType);
+        const alternativeTypes = availableTypes.filter(type => type !== sourceType);
+        const type = shouldPreserveSourceType && availableTypes.includes(sourceType)
+            ? sourceType
+            : (alternativeTypes.length > 0 ? chooseType(alternativeTypes) : sourceType);
 
         let reviewInfo = { ...info };
-        if (type === source.type) {
+        if (type === sourceType) {
             reviewInfo = await rewriteContext({ source, info: reviewInfo, type });
             const field = type === 1
                 ? 'context'
@@ -52,7 +57,7 @@ function createReviewQuestionBuilder({
                 String(reviewInfo[field] || '').trim() ===
                     String(originalText || '').trim()
             ) {
-                throw new Error('复习题必须使用新的题干');
+                throw new Error('Review question must use a new prompt');
             }
         }
 

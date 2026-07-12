@@ -678,25 +678,31 @@ async function getUserAssessmentRecords(userId, timeout = 12000) {
     );
 }
 
-async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords = null) {
+async function getRecentQuizFootprint(userId, _testCount = 4, assessmentRecords = null) {
     const allRecords = assessmentRecords || await getUserAssessmentRecords(userId);
     const records = filterAssessmentRecords(allRecords, ASSESSMENT_MODE.REAL);
-    const recentTestIds = [];
-    const seenTests = new Set();
+
+    // Find the most recent test id only
+    let lastTestId = null;
     for (const record of records) {
         const testId = getFieldValue(record.fields.test_id);
-        if (!testId || seenTests.has(testId)) continue;
-        seenTests.add(testId);
-        recentTestIds.push(testId);
-        if (recentTestIds.length >= testCount) break;
+        if (testId) { lastTestId = testId; break; }
     }
 
-    const recentSet = new Set(recentTestIds);
     const recordIds = new Set();
     const words = new Set();
+    if (!lastTestId) return { recordIds, words };
+
+    // Only exclude questions from the last round that were answered WRONG
     for (const record of records) {
         const testId = getFieldValue(record.fields.test_id);
-        if (!recentSet.has(testId)) continue;
+        if (testId !== lastTestId) continue;
+        const isCorrectVal = record.fields.is_correct;
+        const hasAnswer = isCorrectVal !== undefined && isCorrectVal !== null &&
+            getFieldValue(isCorrectVal).trim() !== '';
+        if (!hasAnswer) continue;
+        const isWrong = !isCorrectField(isCorrectVal);
+        if (!isWrong) continue;
         const recordId = getFieldValue(record.fields.record_id);
         const word = getFieldValue(record.fields.word).toLowerCase();
         if (recordId) recordIds.add(recordId);
@@ -1071,10 +1077,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         return info && !isReservedTestWord(r.word) && (info.distractors || []).filter(d => d).length >= 3;
     });
     const reviewClean = validBase.filter(r => !r.quality_flags);
-    const valid = reviewClean.length >= 2 ? reviewClean : validBase;
+    const valid = reviewClean.length >= 5 ? reviewClean : validBase;
 
-    if (valid.length < 2) {
-        return { error: `Not enough valid questions (0)` };
+    if (valid.length < 5) {
+        return { error: '词库词数不足，请至少录入5个单词后再开始练习。' };
     }
 
     const wordGroup = {};
@@ -1534,40 +1540,50 @@ async function submitAnswers(userId, testId, answers) {
     return submissionCoordinator.submit(userId, testId, answers);
 }
 
-async function rewriteReviewQuestion({ info, type }) {
+async function rewriteReviewQuestion({ source, info, type }) {
     const field = type === 1 ? 'context' : type === 2 ? 'meaning' : 'CN_Meaning';
     const original = info[field] || '';
     if (type === 1 && info.word) {
-        return {
-            ...info,
-            context: `During a fresh review exercise, the learner used ${info.word} to complete a meaningful practice sentence.`,
-        };
+        const level = info.level || source?.level || '';
+        const newContext = await generateNaturalFillInContext(
+            info.word,
+            info.CN_Meaning || info.meaning || '',
+            level,
+            original
+        );
+        if (!newContext || newContext.trim().toLowerCase() === original.trim().toLowerCase()) {
+            throw new Error('复习题无法生成新语境句');
+        }
+        return { ...info, context: newContext.trim(), Context_CN: '' };
     }
     if (type === 2 && info.meaning) {
-        return {
-            ...info,
-            meaning: `A review clue for the same idea: ${info.meaning}`,
-        };
+        const prompt = [
+            'Rewrite this English vocabulary definition with different wording, keeping the same meaning.',
+            'Word: "' + info.word + '"',
+            'Original definition: "' + info.meaning + '"',
+            'Return only the rewritten definition, no explanation.',
+        ].join('\n');
+        const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 5000);
+        if (!rewritten || rewritten.trim() === original.trim()) {
+            throw new Error('复习题无法改写英文释义');
+        }
+        return { ...info, meaning: rewritten.trim() };
     }
     if (type === 3 && info.CN_Meaning) {
-        return {
-            ...info,
-            CN_Meaning: `${info.CN_Meaning} (review wording)`,
-        };
+        const prompt = [
+            '用不同的中文表达方式改写以下词义，保持意思相同，不超过10个字。',
+            '单词：' + info.word,
+            '原释义：' + info.CN_Meaning,
+            '只返回改写后的释义，不要解释。',
+        ].join('\n');
+        const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 5000);
+        if (!rewritten || rewritten.trim() === original.trim()) {
+            throw new Error('复习题无法改写中文释义');
+        }
+        return { ...info, CN_Meaning: rewritten.trim() };
     }
-    const prompt = `Rewrite this vocabulary review prompt with different wording.
-Target word: "${info.word}"
-Question type: ${type}
-Original: "${original}"
-Keep the same tested meaning. For type 1, include the target word in a natural sentence.
-Return only the rewritten text.`;
-    const rewritten = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 5000);
-    if (!rewritten || rewritten.trim() === original.trim()) {
-        throw new Error('Failed to rewrite review prompt');
-    }
-    return { ...info, [field]: rewritten.trim() };
+    throw new Error('复习题改写：题型不支持');
 }
-
 async function generateReviewDistractors({ info, excludedDistractors }) {
     const key = String(info.word || '').trim().toLowerCase();
     const excluded = new Set([...excludedDistractors].map(word =>
@@ -1605,6 +1621,7 @@ const buildReviewQuestionCore = createReviewQuestionBuilder({
     generateDistractors: generateReviewDistractors,
     chooseType: types => secureRandom(types, 1)[0],
     isContextUsableForWord,
+    preferSourceType: ({ source }) => [1, 2, 3].includes(Number(source?.type)),
 });
 
 const reviewService = createReviewService({
@@ -1633,6 +1650,14 @@ const reviewService = createReviewService({
         };
     },
     buildReviewQuestion: async input => {
+        const sourceType = Number(input.source?.type) || 1;
+        if ([1, 2, 3].includes(sourceType)) {
+            try {
+                return await buildReviewQuestionCore(input);
+            } catch (error) {
+                console.log('review same-type rewrite failed word=' + (input.info?.word || input.source?.word || '') + ': ' + error.message);
+            }
+        }
         const info = input.info || {};
         let correctMeaning = String(input.source?.correctMeaning || info.CN_Meaning || '').trim();
         if (!correctMeaning || hasAiMetaResponse(correctMeaning)) {
@@ -1754,6 +1779,22 @@ async function addWord(targetUser, wordData) {
     if (!Word || !Meaning) {
         throw new Error('Word and meaning are required');
     }
+
+    // Duplicate detection: reject if same word already exists for this user
+    const existing = await getRecords(WORD_TABLE);
+    const wordLower = String(Word).trim().toLowerCase();
+    const duplicate = existing.find(r =>
+        userMatches(r.fields?.user, targetUser) &&
+        getFieldValue(r.fields?.Word).trim().toLowerCase() === wordLower
+    );
+    if (duplicate) {
+        return {
+            success: false,
+            duplicate: true,
+            word: Word,
+            message: '"' + Word + '" 已在词库中，无需重复录入。',
+        };
+    }
     const [cnMeaning, contextCN] = await Promise.all([
         translateToCN(Meaning),
         Context ? translateContextToCN(Context) : Promise.resolve(null),
@@ -1771,6 +1812,13 @@ async function addWord(targetUser, wordData) {
     if (contextCN) fields.Context_CN = toSimp(contextCN);
 
     await addRecord(WORD_TABLE, fields);
+
+    // Trigger cache rebuild so the new word becomes quizzable without manual intervention
+    if (QUESTION_CACHE_TABLE) {
+        rebuildQuestionCacheForUser(targetUser)
+            .catch(e => console.log(`addWord cache rebuild failed for ${targetUser}: ${e.message}`));
+    }
+
     return { success: true, word: Word };
 }
 
@@ -1875,6 +1923,13 @@ async function updateUserLearningSettings(userId, requestedLevel) {
         await writeLearningSettingsRecord(userRecord, updateFields);
     }
     learningSettingsOverlay.set(canonicalUserId, settings);
+
+    // On level change, delete stale cache so the next quiz builds with new level questions
+    if (!change.unchanged && QUESTION_CACHE_TABLE) {
+        deleteQuestionCacheRows(canonicalUserId)
+            .then(r => console.log(`level change: purged ${r.deleted} stale cache rows for ${canonicalUserId}`))
+            .catch(e => console.log(`level change cache purge failed for ${canonicalUserId}: ${e.message}`));
+    }
 
     return {
         success: true,
@@ -2459,48 +2514,61 @@ function generateDistractorsWithAI(word, meaning) {
     return null;
 }
 
-async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7', timeout = 15000) {
-    return new Promise((resolve, reject) => {
-        if (!MINIMAX_API_KEY) {
-            reject(new Error('MINIMAX_API_KEY not set'));
-            return;
-        }
-        const data = JSON.stringify({
-            model: model,
-            messages: [{ role: 'user', content: prompt }]
-        });
-        const options = {
-            hostname: 'api.minimax.chat',
-            path: '/v1/text/chatcompletion_v2',
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-                'Content-Length': Buffer.byteLength(data)
-            }
-        };
-        const req = https.request(options, (res) => {
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => {
-                try {
-                    const result = JSON.parse(Buffer.concat(chunks).toString());
-                    const content = result.choices?.[0]?.message?.content;
-                    resolve(content);
-                } catch (e) {
-                    reject(e);
+async function callMiniMaxAPI(prompt, model = 'MiniMax-M2.7', timeout = 15000, retries = 2) {
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await new Promise((resolve, reject) => {
+                if (!MINIMAX_API_KEY) {
+                    reject(new Error('MINIMAX_API_KEY not set'));
+                    return;
                 }
+                const data = JSON.stringify({
+                    model: model,
+                    messages: [{ role: 'user', content: prompt }]
+                });
+                const options = {
+                    hostname: 'api.minimax.chat',
+                    path: '/v1/text/chatcompletion_v2',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+                        'Content-Length': Buffer.byteLength(data)
+                    }
+                };
+                const req = https.request(options, (res) => {
+                    const chunks = [];
+                    res.on('data', c => chunks.push(c));
+                    res.on('end', () => {
+                        try {
+                            const result = JSON.parse(Buffer.concat(chunks).toString());
+                            const content = result.choices?.[0]?.message?.content;
+                            resolve(content);
+                        } catch (e) {
+                            reject(e);
+                        }
+                    });
+                });
+                req.on('error', reject);
+                const timer = setTimeout(() => {
+                    req.destroy();
+                    reject(new Error('timeout'));
+                }, timeout);
+                req.on('close', () => clearTimeout(timer));
+                req.write(data);
+                req.end();
             });
-        });
-        req.on('error', reject);
-        const timer = setTimeout(() => {
-            req.destroy();
-            reject(new Error('timeout'));
-        }, timeout);
-        req.on('close', () => clearTimeout(timer));
-        req.write(data);
-        req.end();
-    });
+        } catch (err) {
+            lastErr = err;
+            if (attempt < retries) {
+                const isRetryable = err.message === 'timeout' || err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED';
+                if (!isRetryable) throw err;
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            }
+        }
+    }
+    throw lastErr;
 }
 
 async function generateDistractorsWithContext(word, context) {
@@ -2624,10 +2692,9 @@ async function generateContextMeaning(word, context) {
     const result = await callMiniMaxAPI(prompt, 'MiniMax-M2.7', 8000);
     return toSimp(result || '').trim();
 }
-
 async function translateToCN(text) {
     if (!text) return null;
-    const prompt = `Translate the following English word or phrase to Simplified Chinese. Return ONLY the Chinese translation 闁?no explanations, no greetings, no extra text.\n\nEnglish: ${text}`;
+    const prompt = `Translate the following English word or phrase to Simplified Chinese. Return ONLY the Chinese translation, no explanations, no greetings, no extra text.\n\nEnglish: ${text}`;
     try {
         const result = await callMiniMaxAPI(prompt);
         if (!result) return null;
@@ -2975,6 +3042,42 @@ async function updateWord(userId, word, fields) {
     if (fields.qualityFlags !== undefined) updateFields.Quality_Flags = fields.qualityFlags;
     if (fields.qualityNote !== undefined) updateFields.Quality_Note = fields.qualityNote;
     await updateRecord(WORD_TABLE, record.record_id, updateFields);
+
+    // If question-relevant fields changed, delete stale cache rows for this word
+    const contentChanged = fields.word !== undefined || fields.meaning !== undefined ||
+        fields.cnMeaning !== undefined || fields.context !== undefined || fields.distractors !== undefined;
+    const shouldRebuildCache = contentChanged && QUESTION_CACHE_TABLE;
+    if (shouldRebuildCache) {
+        const resolvedUserId = getFieldValue(record.fields?.user) || userId;
+        const oldWordStr = String(getFieldValue(record.fields?.Word) || word || '').toLowerCase();
+        const newWordStr = String(fields.word || oldWordStr || '').toLowerCase();
+        const cacheRows = await getQuestionCacheRecords();
+        const staleIds = cacheRows
+            .filter(r => userMatches(r.fields?.user, resolvedUserId) && (
+                getFieldValue(r.fields?.word_record_id) === record.record_id ||
+                String(getFieldValue(r.fields?.word)).toLowerCase() === oldWordStr ||
+                String(getFieldValue(r.fields?.word)).toLowerCase() === newWordStr
+            ))
+            .map(r => r.record_id)
+            .filter(Boolean);
+        if (staleIds.length) {
+            const cacheToken = await getToken();
+            for (let i = 0; i < staleIds.length; i += 500) {
+                await request(
+                    'POST',
+                    `/open-apis/bitable/v1/apps/${QUESTION_CACHE_TABLE.appToken}/tables/${QUESTION_CACHE_TABLE.tableId}/records/batch_delete`,
+                    { records: staleIds.slice(i, i + 500) },
+                    cacheToken
+                ).catch(e => console.log(`updateWord cache invalidation failed: ${e.message}`));
+            }
+            invalidateRecordsCache(QUESTION_CACHE_TABLE);
+        }
+    }
+    if (shouldRebuildCache) {
+        const resolvedUserId = getFieldValue(record.fields?.user) || userId;
+        rebuildQuestionCacheForUser(resolvedUserId)
+            .catch(e => console.log(`updateWord cache rebuild failed: ${e.message}`));
+    }
     return { success: true };
 }
 
@@ -3168,6 +3271,32 @@ async function deleteWord(userId, word) {
         req.on('error', reject);
         req.end();
     });
+
+    // Clean up cache rows for deleted word
+    if (QUESTION_CACHE_TABLE) {
+        const wordLower = String(word).toLowerCase();
+        const cacheRows = await getQuestionCacheRecords();
+        const orphanIds = cacheRows
+            .filter(r => userMatches(r.fields?.user, userId) && (
+                getFieldValue(r.fields?.word_record_id) === record.record_id ||
+                String(getFieldValue(r.fields?.word)).toLowerCase() === wordLower
+            ))
+            .map(r => r.record_id)
+            .filter(Boolean);
+        if (orphanIds.length) {
+            const cacheToken = await getToken();
+            for (let i = 0; i < orphanIds.length; i += 500) {
+                await request(
+                    'POST',
+                    `/open-apis/bitable/v1/apps/${QUESTION_CACHE_TABLE.appToken}/tables/${QUESTION_CACHE_TABLE.tableId}/records/batch_delete`,
+                    { records: orphanIds.slice(i, i + 500) },
+                    cacheToken
+                ).catch(e => console.log(`deleteWord cache cleanup failed: ${e.message}`));
+            }
+            invalidateRecordsCache(QUESTION_CACHE_TABLE);
+        }
+    }
+
     return { success: true };
 }
 

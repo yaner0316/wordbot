@@ -64,10 +64,10 @@ test('builds a fill-in question and neutralizes the indefinite article', () => {
         word: 'opportunity',
         context: 'It was a(n) _____ to learn.',
         options: [
-            'A. opportunity',
-            'B. abandon',
-            'C. significant',
-            'D. genuine',
+            'A. Opportunity',
+            'B. Abandon',
+            'C. Significant',
+            'D. Genuine',
         ],
         answer: 'A',
         articleNormalized: true,
@@ -95,10 +95,10 @@ test('inflects all fill-in options to match the context surface form', () => {
 
     assert.equal(question.context, 'They _____ the project after the storm damaged the site.');
     assert.deepEqual(question.options, [
-        'A. abandoned',
-        'B. accepted',
-        'C. supported',
-        'D. continued',
+        'A. Abandoned',
+        'B. Accepted',
+        'C. Supported',
+        'D. Continued',
     ]);
     assert.equal(question.answer, 'A');
 });
@@ -121,10 +121,10 @@ test('does not add another ed to distractors that are already past-tense forms',
 
     assert.ok(question);
     assert.deepEqual(question.options, [
-        'A. earned',
-        'B. inherited',
-        'C. requested',
-        'D. borrowed',
+        'A. Earned',
+        'B. Inherited',
+        'C. Requested',
+        'D. Borrowed',
     ]);
 });
 

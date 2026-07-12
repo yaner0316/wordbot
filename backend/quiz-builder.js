@@ -148,9 +148,7 @@ function createQuizBuilder({
             const normalized = normalizeArticleContext(context);
             context = normalized.text;
             articleNormalized = normalized.normalized;
-            if (isSentenceInitialBlank(context)) {
-                options = options.map(option => option.replace(/^([A-D]\.\s+)(.+)$/i, (_, prefix, text) => prefix + capitalizeFirst(text)));
-            }
+            options = options.map(option => option.replace(/^([A-D]\.\s+)(.+)$/i, (_, prefix, text) => prefix + capitalizeFirst(text)));
             question = {
                 type: 1,
                 word: key,
