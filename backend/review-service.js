@@ -74,6 +74,11 @@ function createReviewService({
     recordReadRetryDelayMs = 500,
 }) {
     const submittedResults = new Map();
+    const inFlightRounds = new Map();
+
+    function reviewCreationKey({ userId, sourceTestId, parentReviewId = '' }) {
+        return [userId, sourceTestId, parentReviewId || ''].map(value => String(value ?? '')).join('\u0000');
+    }
 
     function applySubmittedResult(records, assessmentId) {
         const summary = submittedResults.get(assessmentId);
@@ -240,7 +245,7 @@ function createReviewService({
         };
     }
 
-    async function createRound({
+    async function createRoundOnce({
         userId,
         sourceTestId,
         parentReviewId = '',
@@ -362,6 +367,16 @@ function createReviewService({
                 correctMeanings: question.correctMeanings || null,
             })),
         };
+    }
+
+    function createRound(input) {
+        const key = reviewCreationKey(input || {});
+        if (inFlightRounds.has(key)) return inFlightRounds.get(key);
+        const promise = createRoundOnce(input).finally(() => {
+            inFlightRounds.delete(key);
+        });
+        inFlightRounds.set(key, promise);
+        return promise;
     }
 
     async function getActiveRound({ userId, sourceTestId }) {

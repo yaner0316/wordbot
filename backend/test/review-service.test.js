@@ -450,3 +450,62 @@ test('default retry window waits long enough for slow Feishu review submission v
     assert.equal(second.round, 2);
     assert.deepEqual(second.questions.map(q => q.recordId), ['word-2']);
 });
+
+
+test('deduplicates concurrent review creation for the same source while the first write is pending', async () => {
+    const assessments = new Map([['real-q1', [record('q-row-1', {
+        user: 'student',
+        test_id: 'real-q1',
+        record_id: 'word-1',
+        word: 'alpha',
+        question_type: 1,
+        options: '[]',
+        is_correct: 'wrong',
+    })]]]);
+    let addCalls = 0;
+    let releaseAdd;
+    const addCanFinish = new Promise(resolve => { releaseAdd = resolve; });
+    let firstAddStarted;
+    const firstAddPromise = new Promise(resolve => { firstAddStarted = resolve; });
+    let id = 0;
+    const service = createReviewService({
+        createId: () => `r${++id}`,
+        loadAssessmentRecords: async assessmentId => assessments.get(assessmentId) || [],
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordInfo: async () => ({ word: 'alpha', CN_Meaning: 'definition clue' }),
+        buildReviewQuestion: async ({ source, info, reviewId }) => ({
+            type: 4,
+            answerMode: 'cn_meaning',
+            word: info.word,
+            context: '',
+            options: [],
+            correctMeaning: info.CN_Meaning,
+            answer: undefined,
+            record_id: source.recordId,
+            testId: reviewId,
+        }),
+        addReviewRecords: async rows => {
+            addCalls += 1;
+            if (addCalls === 1) firstAddStarted();
+            await addCanFinish;
+            assessments.set(rows[0].test_id, rows.map((fields, index) => record(`review-row-${index}`, fields)));
+        },
+        updateReviewRecord: async () => {},
+        submitAssessment: async () => ({ results: [], masteredWords: [] }),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+    });
+
+    const first = service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+    await firstAddPromise;
+    const second = service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    assert.equal(addCalls, 1);
+    releaseAdd();
+    const [firstRound, secondRound] = await Promise.all([first, second]);
+    assert.equal(secondRound.reviewId, firstRound.reviewId);
+});

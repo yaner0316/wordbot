@@ -634,3 +634,38 @@ test('parent word library endpoint returns paginated words', async () => {
         assert.equal(body.words[1].status, 'Mastered');
     });
 });
+
+test('review submit endpoint starts the next round prebuild in the background', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        submitReviewRound: async () => ({
+            reviewId: 'real-review-r1',
+            sourceTestId: 'real-q1',
+            remainingRecordIds: ['word-1'],
+            reviewed: 1,
+            correct: 0,
+            total: 1,
+        }),
+        createReviewRound: async input => {
+            calls.push(input);
+            return { reviewId: 'real-review-r2', input, questions: [] };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/reviews/real-review-r1/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'student', answers: [{ text: 'wrong' }] }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal((await response.json()).reviewId, 'real-review-r1');
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(calls, [{
+            userId: 'student',
+            sourceTestId: 'real-q1',
+            parentReviewId: 'real-review-r1',
+        }]);
+    });
+});

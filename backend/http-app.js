@@ -51,6 +51,22 @@ function startReviewPrebuild({ createReviewRound, user, testId, result }) {
         console.warn('review prebuild failed:', error.message);
     }
 }
+function startNextReviewPrebuild({ createReviewRound, user, reviewId, result }) {
+    if (typeof createReviewRound !== 'function') return;
+    if (!Array.isArray(result?.remainingRecordIds) || result.remainingRecordIds.length === 0) return;
+    if (!result?.sourceTestId) return;
+    try {
+        Promise.resolve(createReviewRound({
+            userId: user,
+            sourceTestId: result.sourceTestId,
+            parentReviewId: reviewId,
+        })).catch(error => {
+            console.warn('review next-round prebuild failed:', error.message);
+        });
+    } catch (error) {
+        console.warn('review next-round prebuild failed:', error.message);
+    }
+}
 function startWrongQuestionCachePrebuild({ prebuildWrongQuestionCache, user, testId, result }) {
     if (typeof prebuildWrongQuestionCache !== 'function' || !hasWrongAnswers(result)) return;
     try {
@@ -213,11 +229,18 @@ function createApp({
                 if (!user || !Array.isArray(answers)) {
                     return res.status(400).json({ error: '缺少参数' });
                 }
-                res.json(await submitReviewRound({
+                const result = await submitReviewRound({
                     userId: user,
                     reviewId: req.params.reviewId,
                     answers,
-                }));
+                });
+                startNextReviewPrebuild({
+                    createReviewRound,
+                    user,
+                    reviewId: req.params.reviewId,
+                    result,
+                });
+                res.json(result);
             } catch (error) {
                 const status = isClientError(error) ? 400 : 500;
                 res.status(status).json({ error: error.message });
