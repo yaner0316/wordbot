@@ -1242,6 +1242,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             question_type: q.type,
             correct_answer: q.answer,
             options: JSON.stringify(q.options),
+            context: q.context,
             test_time: baseTestTime + index,
             level: effectiveLevel || '',
             source: 'live_fallback',
@@ -3305,7 +3306,6 @@ async function deleteWord(userId, word, options = {}) {
 
     return { success: true };
 }
-
 async function backfillTranslations(filterUser) {
     const all = await getRecords(WORD_TABLE);
     const records = filterUser

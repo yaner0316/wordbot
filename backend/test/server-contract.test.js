@@ -357,6 +357,50 @@ test('history endpoint preserves grouped history response shape', async () => {
         assert.equal(body.history[0].questions[0].isCorrect, true);
     });
 });
+test('history endpoint prefers the saved quiz context for fill-in records', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        getRecords: async table => {
+            if (table.tableId === 'test-table') {
+                return [{
+                    record_id: 'test-row-fill-in',
+                    fields: {
+                        user: 'student',
+                        test_id: 'real-fill-in-quiz',
+                        test_time: 456,
+                        question_type: 1,
+                        word: 'punish',
+                        context: 'He was _____ for the mistake.',
+                        options: JSON.stringify(['A. punished', 'B. rewarded']),
+                        your_answer: 'A|sure',
+                        correct_answer: 'A',
+                        is_correct: 'optHGT7gYf',
+                    },
+                }];
+            }
+            if (table.tableId === 'word-table') {
+                return [{
+                    record_id: 'word-1',
+                    fields: {
+                        user: 'student',
+                        Word: 'punish',
+                        Meaning: 'to make someone suffer for doing wrong',
+                        CN_Meaning: 'punish meaning in Chinese',
+                        Context: 'The teacher may punish students for bad behavior.',
+                    },
+                }];
+            }
+            return [];
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/history/student?mode=real`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(body.history[0].questions[0].question, 'He was _____ for the mistake.');
+    });
+});
 test('saving unchanged learning level starts rebuild when selected level cache is not ready', async () => {
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
     const calls = [];

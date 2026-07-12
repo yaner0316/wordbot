@@ -198,11 +198,12 @@ app.get('/api/history/:user', async (req, res) => {
             }
             const isCorrect = getFieldVal(rec.fields.is_correct) === OPTION_IDS.IS_CORRECT;
             const wi = wordMap[word.toLowerCase()] || {};
+            const savedContext = getFieldVal(rec.fields.context);
             let question = '';
-            if (qType === 1) question = wi.context || word;
-            else if (qType === 2) question = wi.meaning || word;
-            else if (qType === 3) question = wi.cnMeaning || wi.meaning || word;
-            else question = word;
+            if (qType === 1) question = savedContext || wi.context || word;
+            else if (qType === 2) question = savedContext || wi.meaning || word;
+            else if (qType === 3) question = savedContext || wi.cnMeaning || wi.meaning || word;
+            else question = savedContext || word;
             testMap[testId].questions.push({
                 word,
                 question,

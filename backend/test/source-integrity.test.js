@@ -265,6 +265,7 @@ test('quiz assessment rows persist level and source trace fields', () => {
     assert.ok(cacheWriteSource.includes('level: effectiveLevel'));
     assert.ok(cacheWriteSource.includes("source: 'question_cache'"));
     assert.ok(liveWriteSource.includes('level: effectiveLevel'));
+    assert.ok(liveWriteSource.includes('context: q.context'));
     assert.ok(liveWriteSource.includes("source: 'live_fallback'"));
 });
 
