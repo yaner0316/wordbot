@@ -195,11 +195,11 @@ test('selects only structurally valid ready cached questions', () => {
     assert.deepEqual(selected.map(item => item.word), ['valid']);
 });
 
-test('selects cached quiz questions with fill-in heavy type mix', () => {
+test('junior-high cached quiz moves English-definition quota into fill-in questions', () => {
     const rows = [];
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
     const cnApple = String.fromCharCode(0x82f9, 0x679c);
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= 9; i++) {
         rows.push(question({ word_record_id: `rec-t1-${i}`, word: 'apple', level: middleLevel, question_type: 1 }));
     }
     for (let i = 1; i <= 4; i++) {
@@ -222,29 +222,28 @@ test('selects cached quiz questions with fill-in heavy type mix', () => {
     }, {});
 
     assert.equal(selected.length, 10);
-    assert.equal(counts[1], 7);
-    assert.equal(counts[2], 2);
+    assert.equal(counts[1], 9);
+    assert.equal(counts[2] || 0, 0);
     assert.equal(counts[3], 1);
 });
-
 test('caps cached quiz definition questions at three when fill-ins are short', () => {
     const rows = [];
-    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const highSchoolLevel = String.fromCharCode(0x9ad8, 0x4e2d);
     const cnApple = String.fromCharCode(0x82f9, 0x679c);
     for (let i = 1; i <= 3; i++) {
-        rows.push(question({ record_id: `row-t1-short-${i}`, word_record_id: `rec-t1-short-${i}`, word: `apple${i}`, level: middleLevel, question_type: 1 }));
+        rows.push(question({ record_id: `row-t1-short-${i}`, word_record_id: `rec-t1-short-${i}`, word: `apple${i}`, level: highSchoolLevel, question_type: 1 }));
     }
     for (let i = 1; i <= 12; i++) {
-        rows.push(question({ record_id: `row-t2-extra-${i}`, word_record_id: `rec-t2-extra-${i}`, word: `word${i}`, level: middleLevel, question_type: 2, question_text: `simple clue ${i}` }));
+        rows.push(question({ record_id: `row-t2-extra-${i}`, word_record_id: `rec-t2-extra-${i}`, word: `word${i}`, level: highSchoolLevel, question_type: 2, question_text: `simple clue ${i}` }));
     }
     for (let i = 1; i <= 4; i++) {
-        rows.push(question({ record_id: `row-t3-extra-${i}`, word_record_id: `rec-t3-extra-${i}`, word: `cnword${i}`, level: middleLevel, question_type: 3, question_text: cnApple }));
+        rows.push(question({ record_id: `row-t3-extra-${i}`, word_record_id: `rec-t3-extra-${i}`, word: `cnword${i}`, level: highSchoolLevel, question_type: 3, question_text: cnApple }));
     }
 
     const selected = selectReadyCachedQuestions({
         rows,
         userId: 'qiuqiu',
-        level: middleLevel,
+        level: highSchoolLevel,
         roundType: 'primary',
         limit: 10,
     });

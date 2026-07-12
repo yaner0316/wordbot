@@ -678,31 +678,25 @@ async function getUserAssessmentRecords(userId, timeout = 12000) {
     );
 }
 
-async function getRecentQuizFootprint(userId, _testCount = 4, assessmentRecords = null) {
+async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords = null) {
     const allRecords = assessmentRecords || await getUserAssessmentRecords(userId);
     const records = filterAssessmentRecords(allRecords, ASSESSMENT_MODE.REAL);
-
-    // Find the most recent test id only
-    let lastTestId = null;
+    const recentTestIds = [];
+    const seenTests = new Set();
     for (const record of records) {
         const testId = getFieldValue(record.fields.test_id);
-        if (testId) { lastTestId = testId; break; }
+        if (!testId || seenTests.has(testId)) continue;
+        seenTests.add(testId);
+        recentTestIds.push(testId);
+        if (recentTestIds.length >= testCount) break;
     }
 
+    const recentSet = new Set(recentTestIds);
     const recordIds = new Set();
     const words = new Set();
-    if (!lastTestId) return { recordIds, words };
-
-    // Only exclude questions from the last round that were answered WRONG
     for (const record of records) {
         const testId = getFieldValue(record.fields.test_id);
-        if (testId !== lastTestId) continue;
-        const isCorrectVal = record.fields.is_correct;
-        const hasAnswer = isCorrectVal !== undefined && isCorrectVal !== null &&
-            getFieldValue(isCorrectVal).trim() !== '';
-        if (!hasAnswer) continue;
-        const isWrong = !isCorrectField(isCorrectVal);
-        if (!isWrong) continue;
+        if (!recentSet.has(testId)) continue;
         const recordId = getFieldValue(record.fields.record_id);
         const word = getFieldValue(record.fields.word).toLowerCase();
         if (recordId) recordIds.add(recordId);
@@ -710,7 +704,6 @@ async function getRecentQuizFootprint(userId, _testCount = 4, assessmentRecords 
     }
     return { recordIds, words };
 }
-
 function isContextValid(ctx) {
     if (!ctx || ctx === '___' || ctx.includes('[object Object]')) return false;
     return true;
@@ -1123,6 +1116,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         );
         if (!question) return null;
         if (isElementaryCacheLevel(effectiveLevel) && Number(question.type) !== 1) return null;
+        if (isJuniorHighCacheLevel(effectiveLevel) && Number(question.type) === 2) return null;
         for (const option of question.options || []) {
             const optionWord = String(option).replace(/^[A-D]\.\s*/, '').trim().toLowerCase();
             if (optionWord && optionWord !== question.word.toLowerCase()) {
@@ -1154,10 +1148,8 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         }
     }
 
-    const typeSlots = isElementaryCacheLevel(effectiveLevel)
-        ? Array(10).fill(1)
-        : secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10);
-    const fallbackTypeSlots = isElementaryCacheLevel(effectiveLevel) ? [1] : [1, 2, 3];
+    const typeSlots = secureRandom(getPrimaryQuizTypeSlots(effectiveLevel), 10);
+    const fallbackTypeSlots = getPrimaryFallbackTypeSlots(effectiveLevel);
     const remaining = valid.filter(r => !usedRecordIds.has(r.record_id));
     function candidatesForSlot(slot) {
         return remaining.filter(r => {
@@ -2000,11 +1992,33 @@ async function getQuestionCacheDiagnostics(userId) {
 }
 
 const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
+const JUNIOR_HIGH_LEVEL = String.fromCharCode(0x4e2d, 0x5b66);
 
 function isElementaryCacheLevel(level) {
     return String(level || '').trim() === ELEMENTARY_LEVEL;
 }
 
+function isJuniorHighCacheLevel(level) {
+    return String(level || '').trim() === JUNIOR_HIGH_LEVEL;
+}
+
+function getPrimaryQuizTypeSlots(level) {
+    if (isElementaryCacheLevel(level)) return Array(10).fill(1);
+    if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];
+    return [1,1,1,1,1,1,1,2,2,3];
+}
+
+function getPrimaryQuizTypeTargets(level) {
+    if (isElementaryCacheLevel(level)) return { 1: 10, 2: 0, 3: 0 };
+    if (isJuniorHighCacheLevel(level)) return { 1: 9, 2: 0, 3: 1 };
+    return { 1: 7, 2: 2, 3: 1 };
+}
+
+function getPrimaryFallbackTypeSlots(level) {
+    if (isElementaryCacheLevel(level)) return [1];
+    if (isJuniorHighCacheLevel(level)) return [1, 3];
+    return [1, 2, 3];
+}
 function retryElementaryFillInContext(question) {
     if (!question || Number(question.type) !== 1 || !isElementaryCacheLevel(question.level)) return false;
     const issues = getQuestionQualityIssues(question);
@@ -2098,8 +2112,8 @@ async function rebuildQuestionCacheForUser(userId) {
     const bufferedRows = [];
     const writtenRows = [];
     const rejectionSummary = {};
-    const PRIMARY_TYPE_QUOTA = isElementaryCacheLevel(level) ? [1,1,1,1,1,1,1,1,1,1] : [1,1,1,1,1,1,1,2,2,3];
-    const PRIMARY_TYPE_TARGETS = isElementaryCacheLevel(level) ? { 1: 10, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 };
+    const PRIMARY_TYPE_QUOTA = getPrimaryQuizTypeSlots(level);
+    const PRIMARY_TYPE_TARGETS = getPrimaryQuizTypeTargets(level);
     const primaryReadyCounts = { 1: 0, 2: 0, 3: 0 };
     let wordIndex = 0;
     for (const rec of pending) {
@@ -2135,7 +2149,7 @@ async function rebuildQuestionCacheForUser(userId) {
         }
         const availableTypes = [
             ...(isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? [1] : []),
-            ...(contextEnhancedInfo.meaning?.trim() ? [2] : []),
+            ...(contextEnhancedInfo.meaning?.trim() && !isJuniorHighCacheLevel(level) ? [2] : []),
             ...(hasMeaningfulChineseMeaning(contextEnhancedInfo.CN_Meaning) ? [3] : []),
         ];
         const mustPreferFillIn = preferred === 1 && primaryReadyCounts[1] < PRIMARY_TYPE_TARGETS[1];

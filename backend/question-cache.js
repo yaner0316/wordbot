@@ -150,9 +150,12 @@ function isCacheQuestionReady(row) {
 }
 function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
     const elementaryLevel = String.fromCharCode(0x5c0f, 0x5b66);
-    const isElementary = String(level || '').trim() === elementaryLevel;
-    const QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 };
-    const MAX_QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : { 1: 8, 2: 3, 3: 1 };
+    const juniorHighLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const normalizedLevel = String(level || '').trim();
+    const isElementary = normalizedLevel === elementaryLevel;
+    const isJuniorHigh = normalizedLevel === juniorHighLevel;
+    const QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : isJuniorHigh ? { 1: 9, 2: 0, 3: 1 } : { 1: 7, 2: 2, 3: 1 };
+    const MAX_QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : isJuniorHigh ? { 1: 9, 2: 0, 3: 1 } : { 1: 8, 2: 3, 3: 1 };
     const targetUserKey = userKey(userId);
     const eligible = (rows || [])
         .map(normalizeCacheRow)

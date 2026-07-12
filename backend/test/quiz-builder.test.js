@@ -64,10 +64,10 @@ test('builds a fill-in question and neutralizes the indefinite article', () => {
         word: 'opportunity',
         context: 'It was a(n) _____ to learn.',
         options: [
-            'A. Opportunity',
-            'B. Abandon',
-            'C. Significant',
-            'D. Genuine',
+            'A. opportunity',
+            'B. abandon',
+            'C. significant',
+            'D. genuine',
         ],
         answer: 'A',
         articleNormalized: true,
@@ -77,6 +77,31 @@ test('builds a fill-in question and neutralizes the indefinite article', () => {
     });
 });
 
+test('keeps fill-in options lowercase when the blank is not sentence-initial', () => {
+    const buildQuizQuestion = createBuilder();
+
+    const question = buildQuizQuestion(
+        'rec-refresh',
+        {
+            word: 'refresh',
+            context: 'After hiking for hours, I began to refresh and needed a break.',
+            distractors: ['invigorate', 'tire', 'energize'],
+            CN_Meaning: '恢复精神',
+        },
+        1,
+        'test-refresh',
+        ['A', 'B', 'C', 'D']
+    );
+
+    assert.ok(question);
+    assert.equal(question.context, 'After hiking for hours, I began to _____ and needed a break.');
+    assert.deepEqual(question.options, [
+        'A. refresh',
+        'B. invigorate',
+        'C. tire',
+        'D. energize',
+    ]);
+});
 test('inflects all fill-in options to match the context surface form', () => {
     const buildQuizQuestion = createInflectingBuilder();
 
@@ -95,10 +120,10 @@ test('inflects all fill-in options to match the context surface form', () => {
 
     assert.equal(question.context, 'They _____ the project after the storm damaged the site.');
     assert.deepEqual(question.options, [
-        'A. Abandoned',
-        'B. Accepted',
-        'C. Supported',
-        'D. Continued',
+        'A. abandoned',
+        'B. accepted',
+        'C. supported',
+        'D. continued',
     ]);
     assert.equal(question.answer, 'A');
 });
@@ -121,10 +146,10 @@ test('does not add another ed to distractors that are already past-tense forms',
 
     assert.ok(question);
     assert.deepEqual(question.options, [
-        'A. Earned',
-        'B. Inherited',
-        'C. Requested',
-        'D. Borrowed',
+        'A. earned',
+        'B. inherited',
+        'C. requested',
+        'D. borrowed',
     ]);
 });
 

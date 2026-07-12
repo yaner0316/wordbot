@@ -452,6 +452,96 @@ test('default retry window waits long enough for slow Feishu review submission v
 });
 
 
+test('starts review question builds for wrong words concurrently', async () => {
+    let releaseFirstBuild;
+    const firstBuildCanFinish = new Promise(resolve => { releaseFirstBuild = resolve; });
+    let firstBuildStarted;
+    const firstBuildStartedPromise = new Promise(resolve => { firstBuildStarted = resolve; });
+    const buildCalls = [];
+    const assessments = new Map([['real-many', [
+        record('q-row-1', { user: 'student', test_id: 'real-many', record_id: 'word-1', word: 'alpha', question_type: 1, context: 'alpha here', options: '[]', is_correct: 'wrong' }),
+        record('q-row-2', { user: 'student', test_id: 'real-many', record_id: 'word-2', word: 'beta', question_type: 1, context: 'beta here', options: '[]', is_correct: 'wrong' }),
+    ]]]);
+    const service = createReviewService({
+        createId: () => 'r-many',
+        loadAssessmentRecords: async assessmentId => assessments.get(assessmentId) || [],
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordRecords: async () => [],
+        loadWordInfo: async recordId => ({ word: recordId === 'word-1' ? 'alpha' : 'beta', CN_Meaning: 'meaning' }),
+        buildReviewQuestion: async ({ source, info, reviewId }) => {
+            buildCalls.push(source.recordId);
+            if (source.recordId === 'word-1') {
+                firstBuildStarted();
+                await firstBuildCanFinish;
+            }
+            return { type: 4, answerMode: 'cn_meaning', word: info.word, context: '', options: [], correctMeaning: info.CN_Meaning, answer: undefined, record_id: source.recordId, testId: reviewId };
+        },
+        addReviewRecords: async rows => assessments.set(rows[0].test_id, rows.map((fields, index) => record('review-many-row-' + index, fields))),
+        updateReviewRecord: async () => {},
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+    });
+
+    const roundPromise = service.createRound({ userId: 'student', sourceTestId: 'real-many' });
+    await firstBuildStartedPromise;
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.deepEqual(buildCalls.sort(), ['word-1', 'word-2']);
+    releaseFirstBuild();
+    const round = await roundPromise;
+    assert.equal(round.questions.length, 2);
+});
+
+test('starts type-four review answer writes concurrently', async () => {
+    let releaseFirstWrite;
+    const firstWriteCanFinish = new Promise(resolve => { releaseFirstWrite = resolve; });
+    let firstWriteStarted;
+    const firstWriteStartedPromise = new Promise(resolve => { firstWriteStarted = resolve; });
+    const updates = [];
+    const assessments = new Map([['real-review-many', [
+        record('review-row-1', { user: 'student', test_id: 'real-review-many', source_test_id: 'real-q1', review_round: 1, review_status: 'active', record_id: 'word-1', word: 'alpha', question_type: 4, correct_answer: 'meaning one', test_time: 1 }),
+        record('review-row-2', { user: 'student', test_id: 'real-review-many', source_test_id: 'real-q1', review_round: 1, review_status: 'active', record_id: 'word-2', word: 'beta', question_type: 4, correct_answer: 'meaning two', test_time: 2 }),
+    ]]]);
+    const service = createReviewService({
+        createId: () => 'unused',
+        loadAssessmentRecords: async assessmentId => assessments.get(assessmentId) || [],
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordInfo: async recordId => ({ word: recordId === 'word-1' ? 'alpha' : 'beta', CN_Meaning: recordId }),
+        addReviewRecords: async () => {},
+        updateReviewRecord: async (rowId, fields) => {
+            updates.push({ rowId, fields });
+            if (fields.your_answer && rowId === 'review-row-1') {
+                firstWriteStarted();
+                await firstWriteCanFinish;
+            }
+        },
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+        recordReadRetryAttempts: 1,
+        recordReadRetryDelayMs: 0,
+    });
+
+    const submitPromise = service.submitRound({
+        userId: 'student',
+        reviewId: 'real-review-many',
+        answers: [{ text: 'wrong one' }, { text: 'wrong two' }],
+    });
+    await firstWriteStartedPromise;
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.ok(updates.some(update => update.rowId === 'review-row-2' && update.fields.your_answer === 'wrong two'));
+    releaseFirstWrite();
+    const result = await submitPromise;
+    assert.equal(result.total, 2);
+});
 test('deduplicates concurrent review creation for the same source while the first write is pending', async () => {
     const assessments = new Map([['real-q1', [record('q-row-1', {
         user: 'student',

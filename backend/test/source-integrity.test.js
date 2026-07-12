@@ -165,34 +165,43 @@ test('assessment record lookup uses quoted Feishu filter fields', () => {
     assert.ok(lookupSource.includes("field_name: 'test_time'"));
 });
 
-test('live quiz generation uses fill-in-only slots for elementary level and mixed slots otherwise', () => {
+test('live quiz generation removes English-definition slots for junior high', () => {
     assert.ok(
-        feishuSource.includes('const typeSlots = isElementaryCacheLevel(effectiveLevel)'),
-        'live quiz generation should branch by learning level'
+        feishuSource.includes('function getPrimaryQuizTypeSlots(level)'),
+        'live quiz generation should use a shared level-aware type slot helper'
     );
     assert.ok(
-        feishuSource.includes('? Array(10).fill(1)'),
-        'elementary live fallback should use only fill-in questions'
+        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];'),
+        'junior high live fallback should move English-definition quota into fill-in questions'
     );
     assert.ok(
-        feishuSource.includes(': secureRandom([...Array(7).fill(1), ...Array(2).fill(2), ...Array(1).fill(3)], 10)'),
-        'non-elementary live fallback should keep 7 fill-in, 2 English definition, and 1 translation question'
+        feishuSource.includes('const typeSlots = secureRandom(getPrimaryQuizTypeSlots(effectiveLevel), 10);'),
+        'live quiz generation should use level-aware type slots'
+    );
+    assert.ok(
+        feishuSource.includes('if (isJuniorHighCacheLevel(effectiveLevel) && Number(question.type) === 2) return null;'),
+        'junior high live fallback should reject English-definition questions as a final guard'
     );
 });
 test('live quiz generation tries level-appropriate fallback question types to fill ten questions', () => {
     assert.ok(
-        feishuSource.includes('const fallbackTypeSlots = isElementaryCacheLevel(effectiveLevel) ? [1] : [1, 2, 3]'),
+        feishuSource.includes('function getPrimaryFallbackTypeSlots(level)'),
+        'fallback slots should come from a shared level-aware helper'
+    );
+    assert.ok(
+        feishuSource.includes('if (isElementaryCacheLevel(level)) return [1];'),
         'elementary fallback should not retry English definition or Chinese selection types'
+    );
+    assert.ok(
+        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1, 3];'),
+        'junior high fallback should not retry English definition types'
     );
     assert.ok(
         feishuSource.includes('for (const slot of [...typeSlots, ...fallbackTypeSlots])'),
         'fallback slots should run after the preferred question mix'
     );
-    assert.ok(
-        feishuSource.includes('Number(question.type) !== 1'),
-        'elementary live fallback should reject non-fill-in questions as a final guard'
-    );
 });
+
 test('batch word translation keeps partial results and falls back only missing words', () => {
     const start = feishuSource.indexOf('async function translateWordsToCN');
     const end = feishuSource.indexOf('async function fetchWordDefinition');
@@ -327,17 +336,23 @@ test('question cache rebuild selects pending meanings from mastery evidence inst
     assert.ok(rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords)'), 'rebuild should pass evidence into pending selection');
 });
 
-test('question cache rebuild uses elementary fill-in-only quota and non-elementary 7/2/1 quota', () => {
+test('question cache rebuild removes English-definition primary quota for junior high', () => {
     const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
     const end = feishuSource.indexOf('async function validateWords');
     assert.ok(start >= 0 && end > start);
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(
-        rebuildSource.includes('isElementaryCacheLevel(level) ? [1,1,1,1,1,1,1,1,1,1] : [1,1,1,1,1,1,1,2,2,3]'),
-        'primary cache rebuild should use all fill-in for elementary and 7/2/1 for other levels'
+        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];'),
+        'primary cache rebuild should use 9/0/1 for junior high'
     );
-    assert.ok(rebuildSource.includes('isElementaryCacheLevel(level) ? { 1: 10, 2: 0, 3: 0 } : { 1: 7, 2: 2, 3: 1 }'));
+    assert.ok(
+        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return { 1: 9, 2: 0, 3: 1 };'),
+        'primary cache rebuild should target no English-definition primary rows for junior high'
+    );
+    assert.ok(rebuildSource.includes('const PRIMARY_TYPE_QUOTA = getPrimaryQuizTypeSlots(level);'));
+    assert.ok(rebuildSource.includes('const PRIMARY_TYPE_TARGETS = getPrimaryQuizTypeTargets(level);'));
+    assert.ok(rebuildSource.includes('contextEnhancedInfo.meaning?.trim() && !isJuniorHighCacheLevel(level) ? [2] : []'));
     assert.ok(!rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];'));
 });
 
@@ -560,6 +575,19 @@ test('formal quiz selection uses an eighteen hour word cooldown without blocking
         !rebuildSource.includes('WORD_QUIZ_COOLDOWN_MS'),
         'cache rebuild must not wait 18 hours before preparing rows'
     );
+});
+test('recent quiz footprint excludes all words from recent formal quizzes, not just wrong answers', () => {
+    const start = feishuSource.indexOf('async function getRecentQuizFootprint');
+    const end = feishuSource.indexOf('function isContextValid', start);
+    assert.ok(start >= 0 && end > start, 'getRecentQuizFootprint source should be findable');
+    const source = feishuSource.slice(start, end);
+
+    assert.match(source, /recentTestIds/);
+    assert.match(source, /testCount/);
+    assert.match(source, /if \(recentTestIds\.length >= testCount\) break;/);
+    assert.match(source, /const recentSet = new Set\(recentTestIds\);/);
+    assert.doesNotMatch(source, /Only exclude questions from the last round that were answered WRONG/);
+    assert.doesNotMatch(source, /isWrong/);
 });
 test('cached quiz selection excludes recent quiz words before randomizing', () => {
     const start = feishuSource.indexOf('async function generateQuiz');

@@ -303,8 +303,7 @@ function createReviewService({
         const wordRecords = typeof loadWordRecords === 'function'
             ? await loadWordRecords()
             : null;
-        const questions = [];
-        for (const record of wrongRecords) {
+        const questions = await Promise.all(wrongRecords.map(async record => {
             const source = toSource(record);
             if (source.type === 4 && source.correctAnswer) {
                 source.correctMeaning = await resolveMeaningRecallForRecord(record, source.correctAnswer, chainRecords);
@@ -318,9 +317,8 @@ function createReviewService({
                 wordRecords,
                 usedDistractors,
             });
-            questions.push({ ...question, sourceQuestionId: source.sourceQuestionId });
-        }
-
+            return { ...question, sourceQuestionId: source.sourceQuestionId };
+        }));
         // Merge same-word type-4 questions into one multi-def question
         const mergedQuestions = mergeMultiDefQuestions(questions);
 
@@ -415,9 +413,7 @@ function createReviewService({
                 Number(fieldValue(left.fields?.test_time)) -
                 Number(fieldValue(right.fields?.test_time))
             );
-            const results = [];
-            for (let index = 0; index < sortedRecords.length; index++) {
-                const record = sortedRecords[index];
+            const results = await Promise.all(sortedRecords.map(async (record, index) => {
                 const answer = answers[index] || {};
                 let expectedRaw = fieldValue(record.fields?.correct_answer);
 
@@ -451,7 +447,7 @@ function createReviewService({
                     your_answer: submitted,
                     is_correct: correct ? correctValue : wrongValue,
                 });
-                results.push({
+                return {
                     q: index + 1,
                     word: fieldValue(record.fields?.word),
                     recordId,
@@ -461,15 +457,13 @@ function createReviewService({
                     expectedMeanings: expectedMeanings || null,
                     correct,
                     confidence: answer.confidence || '',
-                });
-            }
+                };
+            }));
             const summary = summarizeReviewRound(results);
             submittedResults.set(reviewId, summary);
-            for (const record of records) {
-                await updateReviewRecord(record.record_id, {
-                    review_status: summary.status,
-                });
-            }
+            await Promise.all(records.map(record => updateReviewRecord(record.record_id, {
+                review_status: summary.status,
+            })));
             const total = results.length;
             const correct = results.filter(result => result.correct).length;
             return {
@@ -477,21 +471,20 @@ function createReviewService({
                 results,
                 correct,
                 total,
-                accuracy: total ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
+                accuracy: total ? ((correct / total) * 100).toFixed(1) + '%' : '0.0%',
                 masteredWords: [],
                 ...summary,
                 reviewId,
                 sourceTestId: fieldValue(first.source_test_id),
                 round: Number(fieldValue(first.review_round)) || 1,
             };
-        }        const result = await submitAssessment(userId, reviewId, answers);
+        }
+        const result = await submitAssessment(userId, reviewId, answers);
         const summary = summarizeReviewRound(result.results || []);
         submittedResults.set(reviewId, summary);
-        for (const record of records) {
-            await updateReviewRecord(record.record_id, {
-                review_status: summary.status,
-            });
-        }
+        await Promise.all(records.map(record => updateReviewRecord(record.record_id, {
+            review_status: summary.status,
+        })));
         return {
             ...result,
             ...summary,
@@ -500,7 +493,6 @@ function createReviewService({
             round: Number(fieldValue(first.review_round)) || 1,
         };
     }
-
     async function deferRound({ userId, reviewId }) {
         const records = await loadAssessmentRecordsWithRetry(reviewId);
         if (!records.length) throw new Error('Review records not found');
