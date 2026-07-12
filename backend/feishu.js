@@ -81,6 +81,8 @@ const {
 } = require('./config');
 
 const { STATUS_MASTERED, STATUS_PENDING } = STATUS;
+const STATUS_RECOGNIZED = 'Recognized';
+const STATUS_CONSOLIDATING = 'Consolidating';
 const WORD_QUIZ_COOLDOWN_MS = 18 * 60 * 60 * 1000;
 const {
   STATUS_MASTERED: OPT_STATUS_MASTERED,
@@ -136,7 +138,9 @@ function normalizeStatus(status) {
     const value = getFieldValue(status).trim();
     const lower = value.toLowerCase();
     if (lower === STATUS_MASTERED.toLowerCase() || value === OPT_STATUS_MASTERED || value === '\u5df2\u638c\u63e1') return STATUS_MASTERED;
-    if (lower === STATUS_PENDING.toLowerCase() || value === OPT_STATUS_PENDING || value === '\u5f85\u590d\u4e60') return STATUS_PENDING;
+    if (lower === STATUS_CONSOLIDATING.toLowerCase() || value === '\u5de9\u56fa\u4e2d') return STATUS_CONSOLIDATING;
+    if (lower === STATUS_RECOGNIZED.toLowerCase() || value === '\u5df2\u521d\u8bc6') return STATUS_RECOGNIZED;
+    if (lower === STATUS_PENDING.toLowerCase() || value === OPT_STATUS_PENDING || value === '\u5f85\u5b66\u4e60' || value === '\u5f85\u590d\u4e60') return STATUS_PENDING;
     return STATUS_PENDING;
 }
 
@@ -147,6 +151,13 @@ function isMasteredStatus(status) {
 function isCorrectField(value) {
     const normalized = getFieldValue(value).trim();
     return normalized === OPT_IS_CORRECT || normalized === '\u6b63\u786e' || normalized.toLowerCase() === 'true';
+}
+
+function masteryStageToWordStatus(stage) {
+    if (stage === 'mastered') return STATUS_MASTERED;
+    if (stage === 'consolidating') return STATUS_CONSOLIDATING;
+    if (stage === 'recognized') return STATUS_RECOGNIZED;
+    return STATUS_PENDING;
 }
 
 function hasSubmittedAnswer(record) {
@@ -3122,42 +3133,41 @@ async function clearWordReview(recordId) {
 }
 
 async function rebuildUserWordStatus(userId) {
-    // Recalculate status from current word and assessment records.
     const allWords = await getRecords(WORD_TABLE);
     const userWords = allWords.filter(r => userMatches(r.fields?.user, userId));
     const testRecords = await getRecords(TEST_TABLE);
-    const userTests = testRecords.filter(r => userMatches(r.fields?.user, userId));
+    const submittedRealTests = filterAssessmentRecords(
+        testRecords.filter(r => userMatches(r.fields?.user, userId) && hasSubmittedAnswer(r)),
+        ASSESSMENT_MODE.REAL
+    );
 
-    // Count submitted real-test answers by word.
-    const wordCorrectMap = {};
-    for (const t of userTests) {
-        const word = getFieldValue(t.fields?.word);
-        const isCorrect = getFieldValue(t.fields?.is_correct);
+    const wordsByText = new Map();
+    for (const wordRecord of userWords) {
+        const word = getFieldValue(wordRecord.fields?.Word).trim().toLowerCase();
         if (!word) continue;
-        if (!wordCorrectMap[word]) wordCorrectMap[word] = { correct: 0, total: 0 };
-        wordCorrectMap[word].total++;
-        if (isCorrect === 'optHGT7gYf' || isCorrect === '\u6b63\u786e' || isCorrect === true || isCorrect === 'true') {
-            wordCorrectMap[word].correct++;
-        }
+        if (!wordsByText.has(word)) wordsByText.set(word, []);
+        wordsByText.get(word).push(wordRecord);
     }
 
     let updated = 0;
-    for (const wordRecord of userWords) {
-        const word = getFieldValue(wordRecord.fields?.Word);
-        if (!word) continue;
-        const stats = wordCorrectMap[word];
-        const newStatus = (stats && stats.correct > 0) ? 'Mastered' : 'Pending';
-        const currentStatus = getFieldValue(wordRecord.fields?.Status);
-        if (currentStatus !== newStatus) {
-            const updateFields = { Status: newStatus };
-            if (newStatus === 'Mastered') {
-                updateFields.remember_time = Date.now();
+    for (const meanings of wordsByText.values()) {
+        const recordIds = meanings.map(record => record.record_id).filter(Boolean);
+        const evaluation = evaluateWordMastery(recordIds, submittedRealTests, isCorrectField);
+        for (const meaning of meanings) {
+            const meaningStage = evaluation.meanings?.[meaning.record_id]?.stage || evaluation.stage;
+            const newStatus = evaluation.mastered ? STATUS_MASTERED : masteryStageToWordStatus(meaningStage);
+            const currentStatus = getFieldValue(meaning.fields?.Status);
+            if (currentStatus !== newStatus) {
+                const updateFields = { Status: newStatus };
+                if (newStatus === STATUS_MASTERED) {
+                    updateFields.remember_time = Date.now();
+                }
+                await updateRecord(WORD_TABLE, meaning.record_id, updateFields);
+                updated++;
             }
-            await updateRecord(WORD_TABLE, wordRecord.record_id, updateFields);
-            updated++;
         }
     }
-    console.log(`rebuildUserWordStatus: user= updated=`);
+    console.log(`rebuildUserWordStatus: user=${userId} updated=${updated}`);
     return updated;
 }
 

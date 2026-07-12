@@ -336,6 +336,29 @@ test('question cache rebuild selects pending meanings from mastery evidence inst
     assert.ok(rebuildSource.includes('getPendingWords(userId, wordRecords, submittedRecords)'), 'rebuild should pass evidence into pending selection');
 });
 
+test('manual word status rebuild uses mastery evidence thresholds', () => {
+    const rebuildStart = feishuSource.indexOf('async function rebuildUserWordStatus');
+    const deleteStart = feishuSource.indexOf('async function deleteUserTestData', rebuildStart);
+    assert.ok(rebuildStart >= 0 && deleteStart > rebuildStart, 'rebuildUserWordStatus source should be findable');
+    const rebuildSource = feishuSource.slice(rebuildStart, deleteStart);
+
+    assert.ok(
+        rebuildSource.includes('evaluateWordMastery'),
+        'status rebuild should use the same mastery evidence rules as stats and cache selection'
+    );
+    assert.ok(
+        rebuildSource.includes('filterAssessmentRecords'),
+        'status rebuild should consider submitted real assessment records only'
+    );
+    assert.ok(
+        rebuildSource.includes('evaluation.mastered'),
+        'status rebuild should write Mastered only after the evidence threshold is met'
+    );
+    assert.ok(
+        !rebuildSource.includes('stats.correct > 0'),
+        'one correct answer must not rebuild a word to Mastered'
+    );
+});
 test('question cache rebuild removes English-definition primary quota for junior high', () => {
     const start = feishuSource.indexOf('async function rebuildQuestionCacheForUser');
     const end = feishuSource.indexOf('async function validateWords');
