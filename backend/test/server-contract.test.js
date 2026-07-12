@@ -269,6 +269,27 @@ test('word update endpoint preserves status and field update payload', async () 
     });
 });
 
+
+test('word delete endpoint can delete a selected duplicate row by record id', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        deleteWord: async (...args) => {
+            calls.push(args);
+            return { success: true };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/word?recordId=rec-promotion-2', {
+            method: 'DELETE',
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { success: true });
+        assert.deepEqual(calls, [['', '', { recordId: 'rec-promotion-2' }]]);
+    });
+});
+
 test('stats endpoint preserves response passthrough', async () => {
     const app = loadServerWithFeishu(createFakeFeishu());
 

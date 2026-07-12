@@ -663,4 +663,12 @@ test('word deletion cache cleanup uses stable word record id as well as word tex
         source.includes("getFieldValue(r.fields?.word_record_id) === record.record_id"),
         'deleteWord cache cleanup should delete cache rows by stable word_record_id'
     );
+    assert.ok(
+        source.includes('options = {}'),
+        'deleteWord should keep a backward-compatible options argument'
+    );
+    assert.ok(
+        source.includes('record.record_id === recordId'),
+        'deleteWord should accept recordId to delete the selected duplicate row'
+    );
 });

@@ -471,9 +471,9 @@ app.post('/api/admin/reviewWords/clear', async (req, res) => {
 
 app.delete('/api/word', async (req, res) => {
     try {
-        const { userId, word } = req.query;
-        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
-        const data = await deleteWord(userId, word);
+        const { userId = '', word = '', recordId = '' } = req.query;
+        if (!recordId && (!userId || !word)) return res.status(400).json({ error: '缺少参数' });
+        const data = await deleteWord(userId, word, { recordId });
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

@@ -3021,7 +3021,7 @@ async function listUserWords(userId, options = {}) {
 
 async function getWordByRecordId(recordId) {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(r => r.record_id === recordId);
+    const record = records.find(record => record.record_id === recordId);
     return record ? mapWordRecord(record) : null;
 }
 
@@ -3252,10 +3252,16 @@ async function rebuildUserStats(userId) {
     }
 }
 
-async function deleteWord(userId, word) {
+async function deleteWord(userId, word, options = {}) {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(r => userMatches(r.fields.user, userId) && r.fields.Word?.toLowerCase() === word.toLowerCase());
+    const recordId = getFieldValue(options.recordId || '').trim();
+    const normalizedWord = String(word || '').trim().toLowerCase();
+    const record = recordId
+        ? records.find(record => record.record_id === recordId)
+        : records.find(r => userMatches(r.fields.user, userId) && getFieldValue(r.fields.Word).trim().toLowerCase() === normalizedWord);
     if (!record) return { error: 'Word not found' };
+    const resolvedUserId = userId || getFieldValue(record.fields.user);
+    const resolvedWord = word || getFieldValue(record.fields.Word);
     const token = await getToken();
     await new Promise((resolve, reject) => {
         const req = https.request({
@@ -3274,12 +3280,12 @@ async function deleteWord(userId, word) {
 
     // Clean up cache rows for deleted word
     if (QUESTION_CACHE_TABLE) {
-        const wordLower = String(word).toLowerCase();
+        const wordLower = String(resolvedWord || '').toLowerCase();
         const cacheRows = await getQuestionCacheRecords();
         const orphanIds = cacheRows
-            .filter(r => userMatches(r.fields?.user, userId) && (
+            .filter(r => (!resolvedUserId || userMatches(r.fields?.user, resolvedUserId)) && (
                 getFieldValue(r.fields?.word_record_id) === record.record_id ||
-                String(getFieldValue(r.fields?.word)).toLowerCase() === wordLower
+                (wordLower && String(getFieldValue(r.fields?.word)).toLowerCase() === wordLower)
             ))
             .map(r => r.record_id)
             .filter(Boolean);
