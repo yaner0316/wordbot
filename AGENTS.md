@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## 工作模式
+- 每次任务前静默判断：该用 Work 还是 Codex，当前模型是否足够；只有需要切换模式或升级 GPT-5.5 High / GPT-5.6 时，用一句话提醒我，否则直接执行。
+- 如果任务会影响长期规则、批处理流程、发布标准、事实边界或多文件架构，请优先提醒我是否应切到 Work 或升级到 GPT-5.5 High / GPT-5.6。
+
 ## 项目概览
 单词机器人 (WordBot) - 英语单词学习与考核系统。
 - **后端**：Node.js + Express，端口 5000
@@ -74,3 +78,9 @@ node --check backend/config.js
 2. **双下划线**：已修复，blank 用 `&nbsp;` 替代 `______`
 3. **search timeout**：已修复，stats/history 改用 `getRecords` 替代 `searchRecords`
 4. **环境变量缺失**：检查 `/workspace/projects/backend/.env`，或按 `.env.example` 模板配置
+## 协作提醒
+- 如果任务需要用户调整模型档位/参数，或需要使用 `/` 触发的命令、插件、技能、模式切换等能力，Agent 应主动提醒用户，不要默认让用户自己猜。
+
+## 前后端规则同步提醒
+- WordBot 同时有后端正式出题逻辑（app/backend）和前端展示/demo/本地逻辑（web/src）。凡是修改题型比例、type1 词形/大小写、题干展示、选项展示、中文释义解释、答案解析、demo quiz、继续答题/提交状态、家长入口或学习难度展示，必须同时检查 app 与 web，并补齐对应测试。
+- 如果只改后端或只改前端，应在交付说明中明确另一侧是否无需同步，以及原因。
