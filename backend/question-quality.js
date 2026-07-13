@@ -266,6 +266,17 @@ const PUBLICATION_CATEGORY_WORDS = new Set([
     'newspaper', 'journal', 'storybook', 'comic',
 ]);
 
+const MATERIAL_CATEGORY_WORDS = new Set([
+    'cotton', 'linen', 'wool', 'silk', 'nylon', 'polyester', 'leather',
+    'denim', 'velvet', 'canvas', 'rubber', 'plastic', 'metal', 'steel',
+    'wood', 'glass', 'paper', 'gold', 'silver',
+]);
+
+const SOUND_ADJECTIVE_WORDS = new Set([
+    'strange', 'sudden', 'distant', 'quiet', 'loud', 'soft', 'faint',
+    'sharp', 'muffled', 'weird', 'odd', 'unusual', 'clear', 'low', 'high',
+]);
+
 const PLAYGROUND_ACTION_WORDS = new Set([
     'swing', 'jump', 'climb', 'slide', 'run', 'walk',
 ]);
@@ -293,6 +304,24 @@ function hasAmbiguousFillInContext(question) {
         publicationOptionCount >= 3 &&
         /\b(?:this|that|the|a|an)\s+[a-z]+\s+_____\s+(?:explains|teaches|describes|introduces|covers|shows)\b/.test(context)
     ) {
+        return true;
+    }
+
+    const materialOptionCount = optionWords.filter(word => MATERIAL_CATEGORY_WORDS.has(word)).length;
+    const hasAmbiguousMaterialContext = [
+        /\bmade\s+(?:of|from|out\s+of)\s+(?:pure\s+)?_____\b/,
+        /\b(?:pure|soft|warm|thin|thick)\s+_____\b.*\b(?:wore\s+out|holes?|clothes?|socks?|shirt|coat|fabric)\b/,
+    ].some(pattern => pattern.test(context));
+    if (materialOptionCount >= 3 && hasAmbiguousMaterialContext) {
+        return true;
+    }
+
+    const soundAdjectiveCount = optionWords.filter(word => SOUND_ADJECTIVE_WORDS.has(word)).length;
+    const hasAmbiguousSoundContext = [
+        /\b(?:the|a|an)\s+_____\s+(?:noise|sound|voice)\b/,
+        /\b_____\s+(?:noise|sound|voice)\b.*\b(?:made|makes|making|heard|hear|wonder|wondered)\b/,
+    ].some(pattern => pattern.test(context));
+    if (soundAdjectiveCount >= 3 && hasAmbiguousSoundContext) {
         return true;
     }
     return false;

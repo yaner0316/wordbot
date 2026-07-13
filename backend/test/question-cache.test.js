@@ -452,3 +452,20 @@ test('rejects cached sense-mismatched fill-in rows across learning levels', () =
         assert.ok(issues.includes('sense_mismatch_chest'), level + ' issues=' + issues.join(','));
     }
 });
+
+test('selects at most one cached primary question per word record', () => {
+    const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
+    const selected = selectReadyCachedQuestions({
+        rows: [
+            question({ record_id: 'cache-cotton-newer', word_record_id: 'rec-cotton', word: 'cotton', level: middleLevel, generated_at: 300 }),
+            question({ record_id: 'cache-cotton-older', word_record_id: 'rec-cotton', word: 'cotton', level: middleLevel, generated_at: 200 }),
+            question({ record_id: 'cache-linen', word_record_id: 'rec-linen', word: 'linen', level: middleLevel, generated_at: 100 }),
+        ],
+        userId: 'qiuqiu',
+        level: middleLevel,
+        roundType: 'primary',
+        limit: 2,
+    });
+
+    assert.deepEqual(selected.map(item => item.record_id), ['rec-cotton', 'rec-linen']);
+});

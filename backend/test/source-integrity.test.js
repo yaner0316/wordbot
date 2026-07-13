@@ -599,8 +599,8 @@ test('formal quiz selection uses an eighteen hour word cooldown without blocking
         'cache rebuild must not wait 18 hours before preparing rows'
     );
 });
-test('recent quiz footprint excludes all words from recent formal quizzes, not just wrong answers', () => {
-    const start = feishuSource.indexOf('async function getRecentQuizFootprint');
+test('recent quiz footprint excludes only submitted wrong answers from recent formal quizzes', () => {
+    const start = feishuSource.indexOf('function getRecentQuizFootprintFromRecords');
     const end = feishuSource.indexOf('function isContextValid', start);
     assert.ok(start >= 0 && end > start, 'getRecentQuizFootprint source should be findable');
     const source = feishuSource.slice(start, end);
@@ -609,8 +609,8 @@ test('recent quiz footprint excludes all words from recent formal quizzes, not j
     assert.match(source, /testCount/);
     assert.match(source, /if \(recentTestIds\.length >= testCount\) break;/);
     assert.match(source, /const recentSet = new Set\(recentTestIds\);/);
-    assert.doesNotMatch(source, /Only exclude questions from the last round that were answered WRONG/);
-    assert.doesNotMatch(source, /isWrong/);
+    assert.match(source, /hasSubmittedAnswer\(record\)/);
+    assert.ok(source.includes('!isCorrectField(record.fields?.is_correct)'));
 });
 test('cached quiz selection excludes recent quiz words before randomizing', () => {
     const start = feishuSource.indexOf('async function generateQuiz');

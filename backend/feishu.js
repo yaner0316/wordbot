@@ -689,9 +689,9 @@ async function getUserAssessmentRecords(userId, timeout = 12000) {
     );
 }
 
-async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords = null) {
-    const allRecords = assessmentRecords || await getUserAssessmentRecords(userId);
-    const records = filterAssessmentRecords(allRecords, ASSESSMENT_MODE.REAL);
+function getRecentQuizFootprintFromRecords(allRecords, testCount = 4) {
+    const records = filterAssessmentRecords(allRecords, ASSESSMENT_MODE.REAL)
+        .filter(record => hasSubmittedAnswer(record) && !isCorrectField(record.fields?.is_correct));
     const recentTestIds = [];
     const seenTests = new Set();
     for (const record of records) {
@@ -701,7 +701,6 @@ async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords =
         recentTestIds.push(testId);
         if (recentTestIds.length >= testCount) break;
     }
-
     const recentSet = new Set(recentTestIds);
     const recordIds = new Set();
     const words = new Set();
@@ -714,6 +713,10 @@ async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords =
         if (word) words.add(word);
     }
     return { recordIds, words };
+}
+async function getRecentQuizFootprint(userId, testCount = 4, assessmentRecords = null) {
+    const allRecords = assessmentRecords || await getUserAssessmentRecords(userId);
+    return getRecentQuizFootprintFromRecords(allRecords, testCount);
 }
 function isContextValid(ctx) {
     if (!ctx || ctx === '___' || ctx.includes('[object Object]')) return false;
@@ -3383,4 +3386,4 @@ async function backfillTranslations(filterUser) {
 
     return { cnFilled, cnSkipped, ctxFilled, ctxSkipped, total: records.length };
 }
-module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations };
+module.exports = { registerUser, loginUser, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword, generateQuiz, submitAnswers, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, updateRecord, getToken, backfillTranslations, getRecentQuizFootprintFromRecords };

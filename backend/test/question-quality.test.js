@@ -545,3 +545,34 @@ test('elementary quality rejects screenshot ambiguous food and playground fill-i
         assert.ok(issues.includes(sample.expected), sample.word + ' issues=' + issues.join(','));
     }
 });
+
+test('fill-in rejects ambiguous same-category material contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'cotton',
+        context: 'Socks were made of pure _____, which wore out at the toes and heels so holes occurred very often.',
+        correctMeaning: String.fromCharCode(0x68c9, 0x82b1),
+        options: ['A. linen', 'B. cotton', 'C. wool', 'D. silk'],
+        answer: 'B',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
+test('fill-in rejects ambiguous same-category sound adjective contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'strange',
+        context: 'The _____ noise in the attic made me wonder if someone was hiding up there.',
+        correctMeaning: String.fromCharCode(0x5947, 0x602a, 0x7684),
+        options: ['A. quiet', 'B. sudden', 'C. distant', 'D. strange'],
+        answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});

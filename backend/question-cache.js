@@ -167,14 +167,35 @@ function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary'
     const counts = { 1: 0, 2: 0, 3: 0 };
     const selected = [];
     const selectedKeys = new Set();
+    const selectedWordRecordIds = new Set();
+    const selectedQuestionSignatures = new Set();
+    function questionSignature(row) {
+        const question = row.question || {};
+        return [
+            row.type,
+            String(row.word || '').trim().toLowerCase(),
+            String(question.context || '').trim().toLowerCase().replace(/\s+/g, ' '),
+            JSON.stringify(question.options || []),
+        ].join('|');
+    }
+    function canSelectRow(row) {
+        const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
+        const wordRecordId = String(row.wordRecordId || '').trim();
+        const signature = wordRecordId ? '' : questionSignature(row);
+        return !selectedKeys.has(key) &&
+            (!wordRecordId || !selectedWordRecordIds.has(wordRecordId)) &&
+            (!signature || !selectedQuestionSignatures.has(signature));
+    }
     function selectRow(row) {
         selected.push(row);
         selectedKeys.add(row.recordId || row.wordRecordId || `${row.word}:${row.type}`);
+        if (row.wordRecordId) selectedWordRecordIds.add(String(row.wordRecordId).trim());
+        else selectedQuestionSignatures.add(questionSignature(row));
         counts[row.type] = (counts[row.type] || 0) + 1;
     }
     for (const row of eligible) {
         if (selected.length >= limit) break;
-        if ((counts[row.type] || 0) < (QUOTA[row.type] || 0)) {
+        if (canSelectRow(row) && (counts[row.type] || 0) < (QUOTA[row.type] || 0)) {
             selectRow(row);
         }
     }
@@ -182,8 +203,7 @@ function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary'
         for (const type of [1, 2, 3]) {
             for (const row of eligible) {
                 if (selected.length >= limit) break;
-                const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
-                if (row.type !== type || selectedKeys.has(key)) continue;
+                if (row.type !== type || !canSelectRow(row)) continue;
                 if ((counts[row.type] || 0) < (MAX_QUOTA[row.type] || QUOTA[row.type] || 0)) {
                     selectRow(row);
                 }
