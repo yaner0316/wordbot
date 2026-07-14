@@ -42,3 +42,7 @@ Deleting a word in Feishu can leave a database cache row behind because this sta
 The current app treats used_count as a traversal cursor. Selection uses the lowest used_count frontier after readiness and de-duplication; it must not fall back to older used_count tiers just to fill a quiz. QUESTION_POOL_EXHAUSTED means ready questions exist but the current unused frontier cannot fill a set; QUESTION_CACHE_NOT_READY means the ready pool itself is insufficient or not ready. Stage 1 mirrors used_count as observed data only. A future DB write path must use an atomic increment (used_count = used_count + 1), keep Feishu as the read authority during dual-write, and reconcile counts before any cutover.
 
 The app 090e859 review-meaning cleanup affects newly generated type-4 questions. Existing long correct_answer values are not backfilled by Stage 1.
+
+## Source protection
+
+The sync now requires question_text, options, and answer field keys before accepting a Feishu row. If more than 20% of the source rows lack this cache shape, it hard-fails with NOT_QUESTION_CACHE_SOURCE before any Supabase upsert. Individual malformed cache rows are skipped and reported with invalidRecordIds and invalidReasonCounts. used_count is deliberately not used as a source-shape signal because the mapper defaults it to zero.

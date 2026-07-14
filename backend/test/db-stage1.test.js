@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeUserKey, collectUserAliases, mapQuestionCacheRecord } = require('../db/stage1-mapper');
+const { normalizeUserKey, collectUserAliases, inspectQuestionCacheRecord, mapQuestionCacheRecord } = require('../db/stage1-mapper');
 const { buildReconciliationReport } = require('../db/stage1-reconcile');
 
 test('normalizes user casing while preserving original aliases', () => {
@@ -25,6 +25,11 @@ test('maps a Feishu cache row to the existing question_cache schema', () => {
     assert.deepEqual(row.raw_fields.options, ['A. fruit']);
     assert.equal(Object.hasOwn(row, 'created_at'), false);
     assert.equal(Object.hasOwn(row, 'updated_at'), false);
+});
+
+test('rejects a vocabulary-shaped row as a non-cache source', () => {
+    const validation = inspectQuestionCacheRecord({ record_id: 'w1', fields: { user: 'Yusi', Word: 'apple', Meaning: 'fruit', Distractors: 'x,y,z' } });
+    assert.deepEqual(validation, { valid: false, reason: 'NOT_QUESTION_CACHE_SOURCE' });
 });
 
 test('reports cache counts by user and level/status with diffs and risks', () => {

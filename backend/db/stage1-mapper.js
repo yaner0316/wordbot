@@ -37,6 +37,20 @@ function toTimestamp(value) {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+const CACHE_REQUIRED_FIELDS = ['question_text', 'options', 'answer'];
+const CACHE_SUPPORTING_FIELDS = ['quality_status', 'question_type', 'round_type', 'used_count', 'word_record_id', 'level'];
+
+function inspectQuestionCacheRecord(record) {
+    const fields = record?.fields || {};
+    const hasRequiredShape = CACHE_REQUIRED_FIELDS.every(name => Object.hasOwn(fields, name));
+    if (!hasRequiredShape) return { valid: false, reason: 'NOT_QUESTION_CACHE_SOURCE' };
+    const feishuRecordId = String(record?.record_id || record?.recordId || '').trim();
+    const originalUser = getOriginalUser(record);
+    const word = firstField(fields, ['word', 'Word']);
+    if (!feishuRecordId || !normalizeUserKey(originalUser) || !word) return { valid: false, reason: 'INVALID_CACHE_ROW' };
+    return { valid: true, supportingSignals: CACHE_SUPPORTING_FIELDS.filter(name => Object.hasOwn(fields, name)) };
+}
+
 function mapQuestionCacheRecord(record, batch) {
     const fields = record?.fields || {};
     const feishuRecordId = String(record?.record_id || record?.recordId || '').trim();
@@ -101,4 +115,4 @@ function findDuplicateMeanings(records) {
     return [...groups.values()].filter(item => item.feishuCount > 1);
 }
 
-module.exports = { collectUserAliases, findDuplicateMeanings, firstField, getFieldValue, mapQuestionCacheRecord, normalizeUserKey, toTimestamp };
+module.exports = { CACHE_REQUIRED_FIELDS, collectUserAliases, findDuplicateMeanings, firstField, getFieldValue, inspectQuestionCacheRecord, mapQuestionCacheRecord, normalizeUserKey, toTimestamp };

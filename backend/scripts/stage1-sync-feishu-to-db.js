@@ -2,7 +2,7 @@
 const { QUESTION_CACHE_TABLE } = require('../config');
 const { getRecords } = require('../feishu');
 const { createSupabaseMirrorClient } = require('../db/supabase-mirror-client');
-const { mapQuestionCacheRecord } = require('../db/stage1-mapper');
+const { inspectQuestionCacheRecord, mapQuestionCacheRecord } = require('../db/stage1-mapper');
 const { syncQuestionCacheRows } = require('../db/stage1-sync');
 
 async function loadFeishuSnapshot({ getRecordsImpl = getRecords } = {}) {
