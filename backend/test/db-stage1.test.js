@@ -14,13 +14,14 @@ test('normalizes user casing while preserving original aliases', () => {
 test('maps a Feishu cache row to the existing question_cache schema', () => {
     const row = mapQuestionCacheRecord({ record_id: 'q1', fields: {
         user: 'Yusi', word: 'apple', level: 'middle', round_type: 'primary',
-        quality_status: 'ready', question_type: 1, options: ['A. fruit'], generated_at: 1700000000000,
+        quality_status: 'ready', question_type: 1, options: ['A. fruit'], used_count: 3, generated_at: 1700000000000,
     } }, { id: 'batch-1', syncedAt: '2026-07-13T00:00:00.000Z' });
     assert.equal(row.feishu_record_id, 'q1');
     assert.equal(row.user_key, 'yusi');
     assert.equal(row.original_user, 'Yusi');
     assert.equal(row.display_name, 'Yusi');
     assert.equal(row.sync_batch, 'batch-1');
+    assert.equal(row.used_count, 3);
     assert.deepEqual(row.raw_fields.options, ['A. fruit']);
     assert.equal(Object.hasOwn(row, 'created_at'), false);
     assert.equal(Object.hasOwn(row, 'updated_at'), false);

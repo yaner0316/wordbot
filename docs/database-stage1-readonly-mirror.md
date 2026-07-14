@@ -36,3 +36,9 @@ The readiness fix keeps the cache row shape unchanged. A future DB reader must r
 The current table does not have typed columns for question_type, last_used_at, source_version, or source. The mirror preserves these values in raw_fields and reports CACHE_SCHEMA_GAP; no ALTER TABLE is performed in Stage 1.
 
 Deleting a word in Feishu can leave a database cache row behind because this stage only upserts and never deletes. The reconciliation report emits ORPHAN_CACHE. A later cleanup policy must be approved separately and must use stable word_record_id/feishu_record_id.
+
+## Alignment with app 090e859
+
+The current app treats used_count as a traversal cursor. Selection uses the lowest used_count frontier after readiness and de-duplication; it must not fall back to older used_count tiers just to fill a quiz. QUESTION_POOL_EXHAUSTED means ready questions exist but the current unused frontier cannot fill a set; QUESTION_CACHE_NOT_READY means the ready pool itself is insufficient or not ready. Stage 1 mirrors used_count as observed data only. A future DB write path must use an atomic increment (used_count = used_count + 1), keep Feishu as the read authority during dual-write, and reconcile counts before any cutover.
+
+The app 090e859 review-meaning cleanup affects newly generated type-4 questions. Existing long correct_answer values are not backfilled by Stage 1.
