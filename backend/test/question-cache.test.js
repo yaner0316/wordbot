@@ -9,6 +9,7 @@ const {
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
+    analyzeReadyCachedQuestions,
     stripOptionalQuestionCacheFields,
     summarizeCacheStatus,
 } = require('../question-cache');
@@ -39,6 +40,17 @@ function question(overrides) {
     };
 }
 
+function makeTraversalRows(count, usedCount = 0, overrides = {}) {
+    return Array.from({ length: count }, (_, index) => question({
+        record_id: `cache-traverse-${usedCount}-${index + 1}`,
+        word_record_id: `rec-traverse-${usedCount}-${index + 1}`,
+        word: `word${usedCount}-${index + 1}`,
+        question_text: `The student practiced word ${usedCount}-${index + 1} in a clear sentence.`,
+        used_count: usedCount,
+        generated_at: index + 1,
+        ...overrides,
+    }));
+}
 test('builds an update payload for a replacement fill-in cache question', () => {
     const fields = buildCacheQuestionFields({
         question: {
@@ -117,24 +129,93 @@ test('builds two cache rows for a meaning record', () => {
     assert.equal(rows[1].question_type, 2);
 });
 
-test('selects ready current-level primary questions before older used ones', () => {
-    const selected = selectReadyCachedQuestions({
+test('reports exhaustion instead of mixing older used rows into the current traversal frontier', () => {
+    const analysis = analyzeReadyCachedQuestions({
         rows: [
             question({ word_record_id: 'rec-used', word: 'used', used_count: 3, generated_at: 1 }),
             question({ word_record_id: 'rec-fresh', word: 'fresh', used_count: 0, generated_at: 2 }),
             question({ word_record_id: 'rec-stale', word: 'stale', quality_status: 'stale' }),
-            question({ word_record_id: 'rec-other-level', word: 'hard', level: '高中' }),
+            question({ word_record_id: 'rec-other-level', word: 'hard', level: SENIOR_HIGH }),
             question({ word_record_id: 'rec-review', word: 'review', round_type: 'review' }),
         ],
         userId: 'qiuqiu',
-        level: '中学',
+        level: question().level,
         roundType: 'primary',
         limit: 2,
     });
 
-    assert.deepEqual(selected.map(item => item.word), ['fresh', 'used']);
+    assert.equal(analysis.poolCount, 2);
+    assert.equal(analysis.frontierCount, 1);
+    assert.equal(analysis.exhausted, true);
+    assert.deepEqual(analysis.questions, []);
 });
 
+test('analyzes traversal exhaustion after every ready cache row has been used once', () => {
+    const analysis = analyzeReadyCachedQuestions({
+        rows: makeTraversalRows(25, 1, { level: JUNIOR_HIGH }),
+        userId: 'qiuqiu',
+        level: JUNIOR_HIGH,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(analysis.poolCount, 25);
+    assert.equal(analysis.minUsed, 1);
+    assert.equal(analysis.exhausted, true);
+    assert.equal(analysis.notReady, false);
+    assert.deepEqual(analysis.questions, []);
+});
+
+test('traversal does not mix repeated questions into a partial fresh frontier', () => {
+    const analysis = analyzeReadyCachedQuestions({
+        rows: [
+            ...makeTraversalRows(5, 0, { level: JUNIOR_HIGH }),
+            ...makeTraversalRows(20, 1, { level: JUNIOR_HIGH }),
+        ],
+        userId: 'qiuqiu',
+        level: JUNIOR_HIGH,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(analysis.poolCount, 25);
+    assert.equal(analysis.minUsed, 0);
+    assert.equal(analysis.frontierCount, 5);
+    assert.equal(analysis.exhausted, true);
+    assert.equal(analysis.notReady, false);
+    assert.deepEqual(analysis.questions, []);
+});
+
+test('traversal selection carries known used counts for cache usage writes', () => {
+    const selected = selectReadyCachedQuestions({
+        rows: makeTraversalRows(12, 0, { level: JUNIOR_HIGH }),
+        userId: 'qiuqiu',
+        level: JUNIOR_HIGH,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(selected.length, 10);
+    assert.ok(selected.every(item => item.cacheUsedCount === 0));
+});
+
+test('traversal relaxes type quotas within the current frontier only', () => {
+    const rows = [
+        ...makeTraversalRows(10, 0, { level: SENIOR_HIGH, question_type: 1 }),
+        ...makeTraversalRows(10, 1, { level: SENIOR_HIGH, question_type: 3 }),
+    ];
+    const selected = selectReadyCachedQuestions({
+        rows,
+        userId: 'qiuqiu',
+        level: SENIOR_HIGH,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(selected.length, 10);
+    assert.deepEqual([...new Set(selected.map(item => item.type))], [1]);
+    assert.ok(selected.every(item => item.cacheUsedCount === 0));
+});
 test('selects cached questions case-insensitively by user', () => {
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
     const selected = selectReadyCachedQuestions({
@@ -179,22 +260,24 @@ test('rejects cached definition questions that contain AI meta-response text', (
     })), false);
 });
 
-test('selects only structurally valid ready cached questions', () => {
-    const selected = selectReadyCachedQuestions({
+test('reports not-ready when structurally valid ready cached questions are below a full set', () => {
+    const analysis = analyzeReadyCachedQuestions({
         rows: [
             question({ word_record_id: 'rec-valid', word: 'valid' }),
             question({ word_record_id: 'rec-bad-options', word: 'bad-options', options: JSON.stringify(['A. apple']) }),
             question({ word_record_id: 'rec-bad-meanings', word: 'bad-meanings', option_meanings: JSON.stringify([]) }),
         ],
         userId: 'qiuqiu',
-        level: '中学',
+        level: question().level,
         roundType: 'primary',
         limit: 10,
     });
 
-    assert.deepEqual(selected.map(item => item.word), ['valid']);
+    assert.equal(analysis.poolCount, 1);
+    assert.equal(analysis.notReady, true);
+    assert.equal(analysis.exhausted, false);
+    assert.deepEqual(analysis.questions, []);
 });
-
 test('junior-high cached quiz moves English-definition quota into fill-in questions', () => {
     const rows = [];
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
@@ -226,7 +309,7 @@ test('junior-high cached quiz moves English-definition quota into fill-in questi
     assert.equal(counts[2] || 0, 0);
     assert.equal(counts[3], 1);
 });
-test('caps cached quiz definition questions at three when fill-ins are short', () => {
+test('relaxes cached quiz type caps within the current traversal frontier', () => {
     const rows = [];
     const highSchoolLevel = String.fromCharCode(0x9ad8, 0x4e2d);
     const cnApple = String.fromCharCode(0x82f9, 0x679c);
@@ -252,10 +335,9 @@ test('caps cached quiz definition questions at three when fill-ins are short', (
         return acc;
     }, {});
 
-    assert.equal(selected.length, 7);
+    assert.equal(selected.length, 10);
     assert.equal(counts[1], 3);
-    assert.equal(counts[2], 3);
-    assert.equal(counts[3], 1);
+    assert.equal(counts[2] + counts[3], 7);
 });
 test('elementary cached quiz selects only fill-in questions', () => {
     const rows = [];

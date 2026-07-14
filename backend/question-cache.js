@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { getQuestionQualityIssues, isQuestionQualityAcceptable } = require('./question-quality');
 
 const QUESTION_CACHE_STATUS = {
@@ -148,71 +149,144 @@ function getCacheQuestionReadinessIssues(row) {
 function isCacheQuestionReady(row) {
     return getCacheQuestionReadinessIssues(row).length === 0;
 }
-function selectReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
+function getTypePolicy(level, limit) {
     const elementaryLevel = String.fromCharCode(0x5c0f, 0x5b66);
     const juniorHighLevel = String.fromCharCode(0x4e2d, 0x5b66);
     const normalizedLevel = String(level || '').trim();
-    const isElementary = normalizedLevel === elementaryLevel;
-    const isJuniorHigh = normalizedLevel === juniorHighLevel;
-    const QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : isJuniorHigh ? { 1: 9, 2: 0, 3: 1 } : { 1: 7, 2: 2, 3: 1 };
-    const MAX_QUOTA = isElementary ? { 1: limit, 2: 0, 3: 0 } : isJuniorHigh ? { 1: 9, 2: 0, 3: 1 } : { 1: 8, 2: 3, 3: 1 };
+    if (normalizedLevel === elementaryLevel) return { quota: { 1: limit, 2: 0, 3: 0 }, allowed: new Set([1]) };
+    if (normalizedLevel === juniorHighLevel) return { quota: { 1: 9, 2: 0, 3: 1 }, allowed: new Set([1, 3]) };
+    return { quota: { 1: 7, 2: 2, 3: 1 }, allowed: new Set([1, 2, 3]) };
+}
+
+function questionSignature(row) {
+    const question = row.question || {};
+    return [
+        row.type,
+        String(row.word || '').trim().toLowerCase(),
+        String(question.context || '').trim().toLowerCase().replace(/\s+/g, ' '),
+        JSON.stringify(question.options || []),
+    ].join('|');
+}
+
+function shuffleRows(rows) {
+    const result = [...rows];
+    for (let i = result.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(0, i + 1);
+        [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+}
+
+function shuffleWithinUsedCount(rows) {
+    const groups = new Map();
+    for (const row of rows) {
+        if (!groups.has(row.usedCount)) groups.set(row.usedCount, []);
+        groups.get(row.usedCount).push(row);
+    }
+    return [...groups.keys()]
+        .sort((a, b) => a - b)
+        .flatMap(usedCount => shuffleRows(groups.get(usedCount)));
+}
+function dedupeSelectableRows(rows) {
+    const selectedKeys = new Set();
+    const selectedWordRecordIds = new Set();
+    const selectedQuestionSignatures = new Set();
+    const result = [];
+    for (const row of rows) {
+        const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
+        const wordRecordId = String(row.wordRecordId || '').trim();
+        const signature = wordRecordId ? '' : questionSignature(row);
+        if (selectedKeys.has(key)) continue;
+        if (wordRecordId && selectedWordRecordIds.has(wordRecordId)) continue;
+        if (signature && selectedQuestionSignatures.has(signature)) continue;
+        result.push(row);
+        selectedKeys.add(key);
+        if (wordRecordId) selectedWordRecordIds.add(wordRecordId);
+        else selectedQuestionSignatures.add(signature);
+    }
+    return result;
+}
+
+function buildSelectableCachePool({ rows, userId, level, roundType = 'primary', excludedRecordIds = new Set() }) {
     const targetUserKey = userKey(userId);
+    const normalizedExcluded = new Set([...excludedRecordIds].map(id => String(id || '').trim()).filter(Boolean));
     const eligible = (rows || [])
         .map(normalizeCacheRow)
         .filter(row => userKey(row.user) === targetUserKey && row.level === level && row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
         .filter(row => isCacheQuestionReady(row))
-        .filter(row => !excludedRecordIds.has(row.wordRecordId))
+        .filter(row => !normalizedExcluded.has(String(row.wordRecordId || '').trim()))
         .sort((a, b) => a.usedCount - b.usedCount || b.generatedAt - a.generatedAt || a.word.localeCompare(b.word));
-    const counts = { 1: 0, 2: 0, 3: 0 };
-    const selected = [];
-    const selectedKeys = new Set();
-    const selectedWordRecordIds = new Set();
-    const selectedQuestionSignatures = new Set();
-    function questionSignature(row) {
-        const question = row.question || {};
-        return [
-            row.type,
-            String(row.word || '').trim().toLowerCase(),
-            String(question.context || '').trim().toLowerCase().replace(/\s+/g, ' '),
-            JSON.stringify(question.options || []),
-        ].join('|');
-    }
-    function canSelectRow(row) {
-        const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
-        const wordRecordId = String(row.wordRecordId || '').trim();
-        const signature = wordRecordId ? '' : questionSignature(row);
-        return !selectedKeys.has(key) &&
-            (!wordRecordId || !selectedWordRecordIds.has(wordRecordId)) &&
-            (!signature || !selectedQuestionSignatures.has(signature));
-    }
-    function selectRow(row) {
-        selected.push(row);
-        selectedKeys.add(row.recordId || row.wordRecordId || `${row.word}:${row.type}`);
-        if (row.wordRecordId) selectedWordRecordIds.add(String(row.wordRecordId).trim());
-        else selectedQuestionSignatures.add(questionSignature(row));
-        counts[row.type] = (counts[row.type] || 0) + 1;
-    }
-    for (const row of eligible) {
-        if (selected.length >= limit) break;
-        if (canSelectRow(row) && (counts[row.type] || 0) < (QUOTA[row.type] || 0)) {
-            selectRow(row);
-        }
-    }
-    if (selected.length < limit) {
-        for (const type of [1, 2, 3]) {
-            for (const row of eligible) {
-                if (selected.length >= limit) break;
-                if (row.type !== type || !canSelectRow(row)) continue;
-                if ((counts[row.type] || 0) < (MAX_QUOTA[row.type] || QUOTA[row.type] || 0)) {
-                    selectRow(row);
-                }
-            }
-        }
-    }
-    return selected.map(row => ({ ...row.question, cacheRecordId: row.recordId }));
+    return dedupeSelectableRows(eligible);
 }
 
+function selectRowsFromFrontier(frontier, { level, limit }) {
+    const { quota, allowed } = getTypePolicy(level, limit);
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    const selected = [];
+    const selectedIds = new Set();
+    function select(row) {
+        selected.push(row);
+        selectedIds.add(row.recordId || row.wordRecordId || `${row.word}:${row.type}`);
+        counts[row.type] = (counts[row.type] || 0) + 1;
+    }
+    for (const row of frontier) {
+        if (selected.length >= limit) break;
+        if (!allowed.has(row.type)) continue;
+        if ((counts[row.type] || 0) < (quota[row.type] || 0)) select(row);
+    }
+    if (selected.length < limit) {
+        for (const row of frontier) {
+            if (selected.length >= limit) break;
+            const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
+            if (!allowed.has(row.type) || selectedIds.has(key)) continue;
+            select(row);
+        }
+    }
+    return selected;
+}
+
+function rowToQuestion(row) {
+    return {
+        ...row.question,
+        cacheRecordId: row.recordId,
+        cacheUsedCount: row.usedCount,
+    };
+}
+
+function analyzeReadyCachedQuestions({ rows, userId, level, roundType = 'primary', limit = 10, excludedRecordIds = new Set() }) {
+    const pool = buildSelectableCachePool({ rows, userId, level, roundType, excludedRecordIds });
+    if (pool.length === 0) {
+        return { questions: [], poolCount: 0, minUsed: null, frontierCount: 0, exhausted: false, notReady: true };
+    }
+    const minUsed = Math.min(...pool.map(row => row.usedCount));
+    if (pool.length < limit) {
+        return { questions: [], poolCount: pool.length, minUsed, frontierCount: pool.length, exhausted: false, notReady: true };
+    }
+    if (minUsed >= 1) {
+        return { questions: [], poolCount: pool.length, minUsed, frontierCount: 0, exhausted: true, notReady: false };
+    }
+    const frontier = pool.filter(row => row.usedCount === minUsed);
+    if (frontier.length < limit) {
+        return { questions: [], poolCount: pool.length, minUsed, frontierCount: frontier.length, exhausted: true, notReady: false };
+    }
+    const selected = selectRowsFromFrontier(frontier, { level, limit });
+    if (selected.length < limit) {
+        return { questions: [], poolCount: pool.length, minUsed, frontierCount: frontier.length, exhausted: true, notReady: false };
+    }
+    return {
+        questions: selected.map(rowToQuestion),
+        poolCount: pool.length,
+        minUsed,
+        frontierCount: frontier.length,
+        exhausted: false,
+        notReady: false,
+    };
+}
+
+function selectReadyCachedQuestions(options) {
+    return analyzeReadyCachedQuestions(options).questions;
+}
 function incrementSummary(bucket, row) {
     if (!bucket[row.level]) bucket[row.level] = { total: 0, ready: 0 };
     bucket[row.level].total += 1;
@@ -240,6 +314,7 @@ module.exports = {
     isCacheQuestionReady,
     normalizeCacheRow,
     selectReadyCachedQuestions,
+    analyzeReadyCachedQuestions,
     stripOptionalQuestionCacheFields,
     summarizeCacheStatus,
 };

@@ -1,5 +1,6 @@
 const { getAssessmentMode } = require('./assessment-mode');
 const { isMeaningAnswerCorrect, isMultiMeaningCorrect } = require('./meaning-review');
+const { cleanContextualMeaning } = require('./context-meaning');
 const { buildReviewRecordFields } = require('./review-record');
 const {
     REVIEW_STATUS,
@@ -190,7 +191,8 @@ function createReviewService({
             fallback,
             fieldValue,
         });
-        return fieldValue(resolved).trim() || fallback;
+        const cleaned = cleanContextualMeaning(resolved);
+        return cleaned || fallback;
     }
 
     async function buildRoundResponse(records) {

@@ -30,7 +30,7 @@ const {
     normalizeQuizArticleContexts,
 } = require('./article-context');
 const { enrichQuestionOptionMeanings } = require('./option-meanings');
-const { enrichContextualCorrectMeanings } = require('./context-meaning');
+const { cleanContextualMeaning, enrichContextualCorrectMeanings } = require('./context-meaning');
 const { createQuizBuilder } = require('./quiz-builder');
 const { getQuestionQualityIssues, hasAiMetaResponse, hasMeaningfulChineseMeaning } = require('./question-quality');
 const {
@@ -568,14 +568,46 @@ async function deleteQuestionCacheRows(userId, type) {
     return { deleted };
 }
 
-async function markQuestionCacheUsed(cacheRecordIds) {
-    if (!QUESTION_CACHE_TABLE) return;
-    for (const recordId of cacheRecordIds.filter(Boolean)) {
+const questionCacheUsageWrites = new Map();
+const questionCacheLocalLatest = new Map();
+
+function normalizeCacheUsageEntry(entry) {
+    if (!entry) return null;
+    if (typeof entry === 'string') return { cacheRecordId: entry, knownCount: 0 };
+    return {
+        cacheRecordId: entry.cacheRecordId || entry.recordId || '',
+        knownCount: Number(entry.knownCount ?? entry.cacheUsedCount ?? 0) || 0,
+    };
+}
+
+async function queueQuestionCacheUsageWrite(entry) {
+    const normalized = normalizeCacheUsageEntry(entry);
+    const recordId = normalized?.cacheRecordId;
+    if (!recordId) return;
+    const previous = questionCacheUsageWrites.get(recordId) || Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
+        const localLatest = Number(questionCacheLocalLatest.get(recordId) || 0);
+        const nextUsedCount = Math.max(normalized.knownCount, localLatest) + 1;
         await updateRecord(QUESTION_CACHE_TABLE, recordId, {
-            used_count: 1,
+            used_count: nextUsedCount,
             last_used_at: String(Date.now()),
         });
+        questionCacheLocalLatest.set(recordId, nextUsedCount);
+    });
+    questionCacheUsageWrites.set(recordId, current);
+    try {
+        await current;
+    } finally {
+        if (questionCacheUsageWrites.get(recordId) === current) {
+            questionCacheUsageWrites.delete(recordId);
+        }
     }
+}
+
+async function markQuestionCacheUsed(cacheRecordIds) {
+    if (!QUESTION_CACHE_TABLE) return;
+    await Promise.all((cacheRecordIds || []).filter(Boolean).map(queueQuestionCacheUsageWrite));
+    invalidateRecordsCache(QUESTION_CACHE_TABLE);
 }
 
 async function updateRecord(table, recordId, fields, timeoutOverrideMs) {
@@ -975,7 +1007,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             console.log(`recent quiz footprint failed before cache selection: ${e.message}`);
         }
         const excludedCacheRecordIds = new Set([...recent.recordIds, ...cooldownExcludedRecordIds]);
-        const cachedQuestions = selectReadyCachedQuestions({
+        const cacheAnalysis = analyzeReadyCachedQuestions({
             rows: cachedRows,
             userId,
             level: effectiveLevel,
@@ -983,9 +1015,28 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             limit: requiredQuestionCount,
             excludedRecordIds: excludedCacheRecordIds,
         });
+        const cachedQuestions = cacheAnalysis.questions;
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
-        diagnostics.readyCount = cachedQuestions.length;
+        diagnostics.readyCount = cacheAnalysis.poolCount;
+        diagnostics.cachePoolCount = cacheAnalysis.poolCount;
+        diagnostics.cacheFrontierCount = cacheAnalysis.frontierCount;
+        diagnostics.cacheMinUsed = cacheAnalysis.minUsed;
+        diagnostics.cacheExhausted = cacheAnalysis.exhausted;
         markTiming('question-cache-read');
+        if (cacheAnalysis.exhausted) {
+            return {
+                error: 'Question pool exhausted for this level. Please review, rest, wait for new cache, or add new words.',
+                code: 'QUESTION_POOL_EXHAUSTED',
+                source: 'question_cache',
+                level: effectiveLevel,
+                diagnostics: {
+                    ...diagnostics,
+                    fallbackUsed: false,
+                },
+                readyCount: cacheAnalysis.poolCount,
+                requiredCount: requiredQuestionCount,
+            };
+        }
         if (cachedQuestions.length >= 10) {
             const testId = createAssessmentId(
                 assessmentMode,
@@ -1009,10 +1060,13 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 source: 'question_cache',
             })));
             diagnostics.testRecordWriteLatencyMs = Date.now() - testRecordWriteStarted;
-            diagnostics.cacheUsageWriteScheduled = true;
-            markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))
-                .then(() => console.log('question cache usage marked count=' + randomizedQuestions.length))
-                .catch(error => console.log('question cache usage mark failed: ' + error.message));
+            const cacheUsageWriteStartedAt = Date.now();
+            await markQuestionCacheUsed(randomizedQuestions.map(q => ({
+                cacheRecordId: q.cacheRecordId,
+                knownCount: q.cacheUsedCount,
+            })));
+            diagnostics.cacheUsageWriteLatencyMs = Date.now() - cacheUsageWriteStartedAt;
+            diagnostics.cacheUsageWriteScheduled = false;
             markTiming('question-cache-hit');
             return {
                 testId,
@@ -1686,8 +1740,9 @@ const reviewService = createReviewService({
         const wordStr = String(info.word || '').trim();
         if (input.source?.type === 1 && sourceContext && sourceContext !== wordStr) {
             const contextual = await generateContextMeaning(wordStr, sourceContext).catch(() => '');
-            if (contextual && !hasAiMetaResponse(contextual)) {
-                correctMeaning = contextual;
+            const cleanedContextual = cleanContextualMeaning(contextual);
+            if (cleanedContextual) {
+                correctMeaning = cleanedContextual;
             }
         }
         return {
@@ -1707,8 +1762,9 @@ const reviewService = createReviewService({
         const wordStr = String(info?.word || source?.word || '').trim();
         if (source?.type === 1 && sourceContext && sourceContext !== wordStr) {
             const contextual = await generateContextMeaning(wordStr, sourceContext).catch(() => '');
-            if (contextual && !hasAiMetaResponse(contextual) && hasMeaningfulChineseMeaning(contextual)) {
-                return contextual;
+            const cleanedContextual = cleanContextualMeaning(contextual);
+            if (cleanedContextual) {
+                return cleanedContextual;
             }
         }
         return fallback;

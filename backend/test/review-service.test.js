@@ -177,6 +177,56 @@ test('repairs old meaning recall rows from the original type-one source context'
     assert.equal(updates.some(update => update.rowId === 'review-row-old' && update.fields.correct_answer === '丑闻'), true);
 });
 
+test('keeps a short meaning recall fallback when resolver returns a long definition', async () => {
+    const { assessments, added } = createFixture();
+    assessments.set('real-q1', [record('q-row-soulmate', {
+        user: 'student',
+        test_id: 'real-q1',
+        record_id: 'word-soulmate',
+        word: 'soulmate',
+        question_type: 4,
+        context: '',
+        options: '[]',
+        correct_answer: '灵魂伴侣',
+        is_correct: 'wrong',
+    })]);
+    const service = createReviewService({
+        createId: () => 'r-short',
+        loadAssessmentRecords: async assessmentId => assessments.get(assessmentId) || [],
+        loadReviewChainRecords: async () => [...assessments.values()].flat(),
+        loadWordInfo: async () => ({ word: 'soulmate', CN_Meaning: '灵魂伴侣' }),
+        resolveMeaningRecallAnswer: async () => '一个人，尤其是浪漫伴侣，被认为与另一个人非常契合',
+        buildReviewQuestion: async ({ source, info, reviewId }) => ({
+            type: 4,
+            answerMode: 'cn_meaning',
+            word: info.word,
+            context: '',
+            options: [],
+            correctMeaning: source.correctMeaning || info.CN_Meaning,
+            answer: undefined,
+            record_id: source.recordId,
+            testId: reviewId,
+        }),
+        addReviewRecords: async rows => {
+            added.push(rows);
+        },
+        updateReviewRecord: async () => {},
+        submitAssessment: async () => ({}),
+        isSubmitted: item => item.fields.is_correct !== undefined,
+        correctValue: 'correct',
+        wrongValue: 'wrong',
+        isCorrect: value => value === 'correct',
+        fieldValue: value => String(value ?? ''),
+        recordReadRetryAttempts: 1,
+        recordReadRetryDelayMs: 0,
+    });
+
+    const round = await service.createRound({ userId: 'student', sourceTestId: 'real-q1' });
+
+    assert.equal(round.questions[0].correctMeaning, '灵魂伴侣');
+    assert.equal(added[0][0].correct_answer, '灵魂伴侣');
+});
+
 test('submits Chinese meaning review answers without multiple-choice options', async () => {
     const { service, added, updates } = createFixture();
     const round = await service.createRound({

@@ -291,7 +291,7 @@ test('quiz response keeps difficultyApplied for frontend guards', () => {
 });
 
 test('question cache usage writes text timestamp for Feishu text field', () => {
-    const markStart = feishuSource.indexOf('async function markQuestionCacheUsed');
+    const markStart = feishuSource.indexOf('const questionCacheUsageWrites = new Map();');
     const markEnd = feishuSource.indexOf('async function updateRecord', markStart);
     assert.ok(markStart >= 0 && markEnd > markStart);
 
@@ -307,15 +307,30 @@ test('quiz cache diagnostics include Feishu write latencies', () => {
     assert.ok(!feishuSource.includes('const cacheUsageWriteStarted = Date.now()'));
 });
 
-test('question cache usage marking runs after response is prepared', () => {
+test('question cache usage marking is awaited with known used counts before returning quiz', () => {
     const cacheStart = feishuSource.indexOf('if (cachedQuestions.length >= 10)');
     const cacheEnd = feishuSource.indexOf('questions: randomizedQuestions.map', cacheStart);
     assert.ok(cacheStart >= 0 && cacheEnd > cacheStart);
     const cacheHitSource = feishuSource.slice(cacheStart, cacheEnd);
 
-    assert.ok(cacheHitSource.includes('markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))'));
-    assert.ok(!cacheHitSource.includes('await markQuestionCacheUsed(randomizedQuestions.map(q => q.cacheRecordId))'));
-    assert.ok(cacheHitSource.includes('cacheUsageWriteScheduled'));
+    assert.ok(cacheHitSource.includes('await markQuestionCacheUsed'));
+    assert.ok(cacheHitSource.includes('randomizedQuestions.map(q =>'));
+    assert.ok(cacheHitSource.includes('({'));
+    assert.ok(cacheHitSource.includes('cacheRecordId: q.cacheRecordId'));
+    assert.ok(cacheHitSource.includes('knownCount: q.cacheUsedCount'));
+    assert.ok(!cacheHitSource.includes('.then(() => console.log'));
+});
+
+test('question cache usage increments from known used counts instead of writing a constant', () => {
+    const markStart = feishuSource.indexOf('const questionCacheUsageWrites = new Map();');
+    const markEnd = feishuSource.indexOf('async function updateRecord', markStart);
+    assert.ok(markStart >= 0 && markEnd > markStart);
+    const markSource = feishuSource.slice(markStart, markEnd);
+
+    assert.ok(!markSource.includes('used_count: 1'));
+    assert.ok(markSource.includes('knownCount'));
+    assert.ok(markSource.includes('localLatest'));
+    assert.ok(markSource.includes('invalidateRecordsCache(QUESTION_CACHE_TABLE);'));
 });
 test('question cache rebuild selects pending meanings from mastery evidence instead of legacy Status', () => {
     const pendingStart = feishuSource.indexOf('async function getPendingWords');
@@ -620,7 +635,7 @@ test('cached quiz selection excludes recent quiz words before randomizing', () =
 
     const assessmentRead = source.indexOf('const userAssessmentRecords = await getUserAssessmentRecords(userId)');
     const recentRead = source.indexOf('await getRecentQuizFootprint(userId, 4, userAssessmentRecords)');
-    const cacheSelect = source.indexOf('selectReadyCachedQuestions({');
+    const cacheSelect = source.indexOf('analyzeReadyCachedQuestions({');
     const mergedExclusions = source.indexOf('const excludedCacheRecordIds = new Set([...recent.recordIds, ...cooldownExcludedRecordIds]);');
     const excluded = source.indexOf('excludedRecordIds: excludedCacheRecordIds', cacheSelect);
     const randomize = source.indexOf('const randomizedQuestions = secureRandom(cachedQuestions, requiredQuestionCount);');
