@@ -65,8 +65,8 @@ function mapQuestionCacheRecord(record, batch) {
         correct_meaning: firstField(fields, ['correct_meaning', 'correctMeaning']) || null,
         used_count: Number(firstField(fields, ['used_count', 'usedCount']) || 0) || 0,
         generated_at: toTimestamp(firstField(fields, ['generated_at', 'generatedAt'])),
-        created_at: toTimestamp(record.created_time),
-        updated_at: toTimestamp(record.last_modified_time || record.updated_time),
+        ...(toTimestamp(record.created_time) ? { created_at: toTimestamp(record.created_time) } : {}),
+        ...(toTimestamp(record.last_modified_time || record.updated_time) ? { updated_at: toTimestamp(record.last_modified_time || record.updated_time) } : {}),
     };
 }
 

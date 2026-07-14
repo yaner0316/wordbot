@@ -22,6 +22,8 @@ test('maps a Feishu cache row to the existing question_cache schema', () => {
     assert.equal(row.display_name, 'Yusi');
     assert.equal(row.sync_batch, 'batch-1');
     assert.deepEqual(row.raw_fields.options, ['A. fruit']);
+    assert.equal(Object.hasOwn(row, 'created_at'), false);
+    assert.equal(Object.hasOwn(row, 'updated_at'), false);
 });
 
 test('reports cache counts by user and level/status with diffs and risks', () => {
