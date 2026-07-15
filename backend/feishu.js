@@ -65,6 +65,10 @@ const {
     getDeferredRecordIds,
     prioritizePendingRecords,
 } = require('./review-priority');
+const {
+    buildQuizWordQueue,
+    selectCachedQuestionsForWordQueue,
+} = require('./quiz-word-queue');
 const { calculateGameReward } = require('./game-reward');
 const { createQuizRecordWriteStaging } = require('./quiz-record-staging');
 const { createSubmitRewardSummary } = require('./reward-submit-summary');
@@ -1001,8 +1005,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
         const wordRecordsForCache = await getRecords(WORD_TABLE);
         const cooldownExcludedRecordIds = getQuizCooldownExcludedRecordIds(wordRecordsForCache, userId);
         let recent = { recordIds: new Set(), words: new Set() };
+        let cacheAssessmentRecords = [];
         try {
             const userAssessmentRecords = await getUserAssessmentRecords(userId);
+            cacheAssessmentRecords = userAssessmentRecords;
             recent = await getRecentQuizFootprint(userId, 4, userAssessmentRecords);
         } catch (e) {
             console.log(`recent quiz footprint failed before cache selection: ${e.message}`);
@@ -1016,15 +1022,32 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             limit: requiredQuestionCount,
             excludedRecordIds: excludedCacheRecordIds,
         });
-        const cachedQuestions = cacheAnalysis.questions;
+        const queuedRecordIds = buildQuizWordQueue({
+            wordRecords: wordRecordsForCache,
+            cacheRows: cachedRows,
+            assessmentRecords: cacheAssessmentRecords,
+            userId,
+            level: effectiveLevel,
+            limit: requiredQuestionCount,
+            now: Date.now(),
+            minAgeMs: WORD_QUIZ_COOLDOWN_MS,
+        });
+        const cachedQuestions = selectCachedQuestionsForWordQueue({
+            cacheRows: cachedRows,
+            queue: queuedRecordIds,
+            userId,
+            level: effectiveLevel,
+            roundType: 'primary',
+        });
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
         diagnostics.readyCount = cacheAnalysis.poolCount;
         diagnostics.cachePoolCount = cacheAnalysis.poolCount;
         diagnostics.cacheFrontierCount = cacheAnalysis.frontierCount;
         diagnostics.cacheMinUsed = cacheAnalysis.minUsed;
-        diagnostics.cacheExhausted = cacheAnalysis.exhausted;
+        diagnostics.cacheExhausted = queuedRecordIds.length < requiredQuestionCount;
+        diagnostics.cacheQueueCount = queuedRecordIds.length;
         markTiming('question-cache-read');
-        if (cacheAnalysis.exhausted) {
+        if (queuedRecordIds.length < requiredQuestionCount) {
             return {
                 error: 'Question pool exhausted for this level. Please review, rest, wait for new cache, or add new words.',
                 code: 'QUESTION_POOL_EXHAUSTED',
@@ -1034,7 +1057,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                     ...diagnostics,
                     fallbackUsed: false,
                 },
-                readyCount: cacheAnalysis.poolCount,
+                readyCount: queuedRecordIds.length,
                 requiredCount: requiredQuestionCount,
             };
         }
