@@ -44,6 +44,7 @@ const {
     validateLearningLevelChange,
 } = require('./user-learning-settings');
 const {
+    analyzeReadyCachedQuestions,
     buildCacheRowsForRecord,
     buildCacheQuestionFields,
     getCacheQuestionReadinessIssues,

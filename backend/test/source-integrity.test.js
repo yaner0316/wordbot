@@ -646,6 +646,17 @@ test('cached quiz selection excludes recent quiz words before randomizing', () =
     assert.ok(mergedExclusions > recentRead && mergedExclusions < cacheSelect, 'cache path should merge recent and cooldown exclusions before selection');
     assert.ok(excluded > cacheSelect && excluded < randomize, 'cache selection should exclude recently used record ids');
 });
+
+test('cached quiz selection imports the frontier analyzer it calls', () => {
+    const importStart = feishuSource.indexOf('const {');
+    const quizStart = feishuSource.indexOf('async function generateQuiz');
+    assert.ok(importStart >= 0 && quizStart > importStart, 'feishu import block should be findable');
+    const importSource = feishuSource.slice(importStart, quizStart);
+    assert.ok(
+        importSource.includes('analyzeReadyCachedQuestions'),
+        'quiz generation should import analyzeReadyCachedQuestions before using it'
+    );
+});
 test('review meaning recall keeps contextual meanings across review rounds', () => {
     const configStart = feishuSource.indexOf('const reviewService = createReviewService({');
     const configEnd = feishuSource.indexOf('async function createReviewRound', configStart);
