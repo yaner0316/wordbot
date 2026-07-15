@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 
 const {
     QUESTION_CACHE_STATUS,
@@ -215,6 +216,37 @@ test('traversal relaxes type quotas within the current frontier only', () => {
     assert.equal(selected.length, 10);
     assert.deepEqual([...new Set(selected.map(item => item.type))], [1]);
     assert.ok(selected.every(item => item.cacheUsedCount === 0));
+});
+
+test('traversal randomizes selection within the same used-count frontier only', () => {
+    const originalRandomInt = crypto.randomInt;
+    const rows = [
+        ...makeTraversalRows(15, 0, { level: JUNIOR_HIGH, question_type: 1 }),
+        ...makeTraversalRows(15, 1, { level: JUNIOR_HIGH, question_type: 1 }),
+    ];
+    let callIndex = 0;
+
+    try {
+        crypto.randomInt = (min, max) => {
+            const value = callIndex % 2 === 0 ? min : max - 1;
+            callIndex += 1;
+            return value;
+        };
+        const first = selectReadyCachedQuestions({ rows, userId: 'qiuqiu', level: JUNIOR_HIGH, roundType: 'primary', limit: 10 });
+        crypto.randomInt = (_min, max) => max - 1;
+        const second = selectReadyCachedQuestions({ rows, userId: 'qiuqiu', level: JUNIOR_HIGH, roundType: 'primary', limit: 10 });
+
+        assert.equal(first.length, 10);
+        assert.equal(second.length, 10);
+        assert.ok(first.every(item => item.cacheUsedCount === 0));
+        assert.ok(second.every(item => item.cacheUsedCount === 0));
+        assert.notDeepEqual(
+            first.map(item => item.cacheRecordId).sort(),
+            second.map(item => item.cacheRecordId).sort()
+        );
+    } finally {
+        crypto.randomInt = originalRandomInt;
+    }
 });
 test('selects cached questions case-insensitively by user', () => {
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
@@ -549,5 +581,7 @@ test('selects at most one cached primary question per word record', () => {
         limit: 2,
     });
 
-    assert.deepEqual(selected.map(item => item.record_id), ['rec-cotton', 'rec-linen']);
+    // Order within the same used_count tier is now randomized, so assert the
+    // dedup semantics (one question per word record) rather than a fixed order.
+    assert.deepEqual(selected.map(item => item.record_id).sort(), ['rec-cotton', 'rec-linen']);
 });

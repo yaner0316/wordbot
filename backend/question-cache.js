@@ -215,9 +215,8 @@ function buildSelectableCachePool({ rows, userId, level, roundType = 'primary', 
         .filter(row => userKey(row.user) === targetUserKey && row.level === level && row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
         .filter(row => isCacheQuestionReady(row))
-        .filter(row => !normalizedExcluded.has(String(row.wordRecordId || '').trim()))
-        .sort((a, b) => a.usedCount - b.usedCount || b.generatedAt - a.generatedAt || a.word.localeCompare(b.word));
-    return dedupeSelectableRows(eligible);
+        .filter(row => !normalizedExcluded.has(String(row.wordRecordId || '').trim()));
+    return dedupeSelectableRows(shuffleWithinUsedCount(eligible));
 }
 
 function selectRowsFromFrontier(frontier, { level, limit }) {
