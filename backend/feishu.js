@@ -1028,7 +1028,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             assessmentRecords: cacheAssessmentRecords,
             userId,
             level: effectiveLevel,
-            limit: requiredQuestionCount,
+            limit: wordRecordsForCache.length || requiredQuestionCount,
             now: Date.now(),
             minAgeMs: WORD_QUIZ_COOLDOWN_MS,
         });
@@ -1038,9 +1038,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             userId,
             level: effectiveLevel,
             roundType: 'primary',
+            limit: requiredQuestionCount,
         });
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;
-        diagnostics.readyCount = cacheAnalysis.poolCount;
+        diagnostics.readyCount = cachedQuestions.length;
         diagnostics.cachePoolCount = cacheAnalysis.poolCount;
         diagnostics.cacheFrontierCount = cacheAnalysis.frontierCount;
         diagnostics.cacheMinUsed = cacheAnalysis.minUsed;

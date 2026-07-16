@@ -137,6 +137,7 @@ function selectCachedQuestionsForWordQueue({
     userId,
     level,
     roundType = 'primary',
+    limit = 10,
 }) {
     const targetUser = userKey(userId);
     const normalizedRows = (cacheRows || [])
@@ -155,6 +156,7 @@ function selectCachedQuestionsForWordQueue({
     return (queue || [])
         .map(recordId => byRecordId.get(recordId))
         .filter(Boolean)
+        .slice(0, limit)
         .map(row => ({
             ...row.question,
             cacheRecordId: row.recordId,

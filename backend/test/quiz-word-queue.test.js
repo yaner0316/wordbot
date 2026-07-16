@@ -1,7 +1,7 @@
 ﻿const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildQuizWordQueue } = require('../quiz-word-queue');
+const { buildQuizWordQueue, selectCachedQuestionsForWordQueue } = require('../quiz-word-queue');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse('2026-07-15T04:00:00.000Z');
@@ -135,4 +135,24 @@ test('word queue is based on words even before ready cache rows exist', () => {
     });
 
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
+});
+
+
+test('cached question selection fills from later ready rows in word queue order', () => {
+    const queue = Array.from({ length: 14 }, (_, index) => `rec-${index + 1}`);
+    const cacheRows = [1, 2, 5, 7, 8, 9, 10, 11, 12, 13, 14].map(index => cache(index));
+
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows,
+        queue,
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.deepEqual(
+        selected.map(question => question.cacheRecordId),
+        ['cache-1', 'cache-2', 'cache-5', 'cache-7', 'cache-8', 'cache-9', 'cache-10', 'cache-11', 'cache-12', 'cache-13']
+    );
 });
