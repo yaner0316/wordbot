@@ -445,6 +445,35 @@ test('elementary fill-in rejects hard animal nursery context even with clean opt
     assert.ok(issues.includes('not_elementary_context'), 'issues=' + issues.join(','));
 });
 
+test('elementary fill-in rejects weak same-category animal contexts', () => {
+    const cases = [
+        {
+            word: 'foal',
+            context: 'The young _____ ran beside its mother today.',
+            options: ['A. cub', 'B. calf', 'C. lamb', 'D. foal'],
+            answer: 'D',
+        },
+        {
+            word: 'puppy',
+            context: 'The happy _____ wagged its tail at home.',
+            options: ['A. puppy', 'B. duck', 'C. kitten', 'D. rabbit'],
+            answer: 'A',
+        },
+    ];
+
+    for (const sample of cases) {
+        const question = {
+            type: 1,
+            level: ELEMENTARY,
+            correctMeaning: 'elementary meaning',
+            ...sample,
+        };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, sample.word);
+        assert.ok(issues.includes('ambiguous_elementary_context'), sample.word + ' issues=' + issues.join(','));
+    }
+});
+
 test('elementary fill-in rejects screenshot sample with phrase distractor', () => {
     const question = {
         type: 1,
@@ -570,6 +599,21 @@ test('fill-in rejects ambiguous same-category sound adjective contexts across le
         correctMeaning: String.fromCharCode(0x5947, 0x602a, 0x7684),
         options: ['A. quiet', 'B. sudden', 'C. distant', 'D. strange'],
         answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
+test('fill-in rejects same-category ocean route contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: SENIOR_HIGH,
+        word: 'pacific',
+        context: 'The ship sailed across the _____, heading from New York to London.',
+        correctMeaning: String.fromCharCode(0x592a, 0x5e73, 0x6d0b),
+        options: ['A. atlantic', 'B. indian', 'C. pacific', 'D. arctic'],
+        answer: 'C',
     };
 
     const issues = getQuestionQualityIssues(question);

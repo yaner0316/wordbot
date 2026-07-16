@@ -253,6 +253,17 @@ function hasAmbiguousElementaryContext(question) {
         return true;
     }
 
+    const animalCount = optionWords.filter(item => ELEMENTARY_ANIMAL_WORDS.has(item)).length;
+    const hasWeakAnimalContext = [
+        /\byoung\s+_____\b.*\bmother\b/,
+        /\bmother\b.*\byoung\s+_____\b/,
+        /\b(?:happy|little|small|young)\s+_____\s+(?:wagged|wags|wagging|wag)\s+(?:its|his|her)\s+tail\b/,
+        /\b_____\s+(?:ran|walked|played|jumped)\s+beside\s+(?:its|his|her)\s+mother\b/,
+    ].some(pattern => pattern.test(context));
+    if (animalCount >= 3 && hasWeakAnimalContext) {
+        return true;
+    }
+
     return false;
 }
 const FOOD_CATEGORY_WORDS = new Set([
@@ -277,12 +288,23 @@ const SOUND_ADJECTIVE_WORDS = new Set([
     'sharp', 'muffled', 'weird', 'odd', 'unusual', 'clear', 'low', 'high',
 ]);
 
+const OCEAN_ROUTE_WORDS = new Set([
+    'atlantic', 'pacific', 'indian', 'arctic', 'southern', 'antarctic',
+    'ocean', 'sea', 'mediterranean', 'caribbean', 'baltic', 'black', 'red',
+]);
+
 const PLAYGROUND_ACTION_WORDS = new Set([
     'swing', 'jump', 'climb', 'slide', 'run', 'walk',
 ]);
 
 const SEASONING_WORDS = new Set([
     'pepper', 'salt', 'sugar', 'butter',
+]);
+
+const ELEMENTARY_ANIMAL_WORDS = new Set([
+    'cub', 'calf', 'lamb', 'foal', 'puppy', 'kitten', 'chick', 'duckling',
+    'duck', 'rabbit', 'bunny', 'dog', 'cat', 'horse', 'cow', 'sheep', 'goat',
+    'piglet', 'fawn', 'colt', 'pony', 'bird', 'hen', 'rooster',
 ]);
 
 function hasAmbiguousFillInContext(question) {
@@ -322,6 +344,16 @@ function hasAmbiguousFillInContext(question) {
         /\b_____\s+(?:noise|sound|voice)\b.*\b(?:made|makes|making|heard|hear|wonder|wondered)\b/,
     ].some(pattern => pattern.test(context));
     if (soundAdjectiveCount >= 3 && hasAmbiguousSoundContext) {
+        return true;
+    }
+
+    const oceanRouteCount = optionWords.filter(word => OCEAN_ROUTE_WORDS.has(word)).length;
+    const hasOceanRouteContext = [
+        /\b(?:ship|boat|vessel|sailor|captain|crew)\b.*\b(?:sailed|sail|crossed|across|heading|voyage)\b.*\b_____/,
+        /\b_____.+\b(?:from|between)\b.+\b(?:london|new york|america|europe|asia|africa|australia)\b/,
+        /\b(?:sailed|crossed|voyage|route)\b.*\b(?:from|between)\b.*\b(?:to|and)\b/,
+    ].some(pattern => pattern.test(context));
+    if (oceanRouteCount >= 3 && hasOceanRouteContext) {
         return true;
     }
     return false;
