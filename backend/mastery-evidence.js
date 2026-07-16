@@ -6,6 +6,9 @@ const ANSWER_CONFIDENCE = Object.freeze({
 });
 
 function normalizeConfidence(confidence) {
+    if (confidence === undefined || confidence === null || confidence === '') {
+        return ANSWER_CONFIDENCE.SURE;
+    }
     if (!Object.values(ANSWER_CONFIDENCE).includes(confidence)) {
         throw new Error('ANSWER_CONFIDENCE_REQUIRED');
     }
@@ -72,42 +75,37 @@ function evaluateMeaningMastery(records, isCorrectValue) {
     const correctAttempts = attempts.slice(lastWrongIndex + 1).filter(record =>
         isCorrectValue(record.fields?.is_correct)
     );
-    const evidence = correctAttempts.filter(record => {
-        const stored = parseStoredAnswer(fieldValue(record.fields?.your_answer));
-        return stored.confidence === ANSWER_CONFIDENCE.SURE;
-    });
     const uncertainCorrect = correctAttempts.filter(record => {
         const stored = parseStoredAnswer(fieldValue(record.fields?.your_answer));
         return stored.confidence === ANSWER_CONFIDENCE.GUESS;
     });
     const distinctDays = new Set(
-        evidence.map(record => learningDay(record.fields?.test_time))
+        correctAttempts.map(record => learningDay(record.fields?.test_time))
     ).size;
     const distinctTypes = new Set(
-        evidence.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)
+        correctAttempts.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)
     ).size;
 
-    const mastered = (evidence.length >= 2 && distinctDays >= 2) || uncertainCorrect.length >= 3;
     const correctAfterLastWrongCount = correctAttempts.length;
-    const stage = mastered
-        ? 'mastered'
-        : correctAfterLastWrongCount >= 2
-            ? 'consolidating'
+    const mastered = correctAfterLastWrongCount >= 2 && distinctDays >= 2;
+    const stage = attempts.length === 0
+        ? 'unseen'
+        : mastered
+            ? 'mastered'
             : correctAfterLastWrongCount >= 1
-                ? 'recognized'
-                : 'unseen';
+                ? 'consolidating'
+                : 'recognized';
 
     return {
         mastered,
         stage,
-        evidenceCount: evidence.length,
+        evidenceCount: correctAttempts.length,
         uncertainCorrectCount: uncertainCorrect.length,
         correctAfterLastWrongCount,
         distinctDays,
         distinctTypes,
     };
 }
-
 function strongestStage(stages) {
     if (stages.includes('mastered')) return 'mastered';
     if (stages.includes('consolidating')) return 'consolidating';

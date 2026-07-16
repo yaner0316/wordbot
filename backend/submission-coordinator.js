@@ -25,21 +25,25 @@ function fieldValue(value) {
     return String(value);
 }
 
-function validateAnswers(answers, questionCount) {
+function normalizeAnswers(answers, questionCount) {
     if (!Array.isArray(answers)) {
         throw new Error('答案必须是数组');
     }
     if (answers.length !== questionCount) {
         throw new Error('答案数量必须与题目数量一致');
     }
-    for (const answer of answers) {
+    return answers.map(answer => {
         const normalized = normalizeSubmittedAnswer(answer);
         if (!Number.isInteger(normalized.option) || normalized.option < 0 || normalized.option > 3) {
             throw new Error('答案只能是 0 到 3 的整数');
         }
-    }
+        return normalized;
+    });
 }
 
+function validateAnswers(answers, questionCount) {
+    normalizeAnswers(answers, questionCount);
+}
 function rebuildSubmittedResult(records, isCorrectValue) {
     const results = records.map((record, index) => {
         const fields = record.fields || {};
@@ -104,7 +108,7 @@ function createSubmissionCoordinator({
             throw new Error('考试不属于当前用户');
         }
 
-        validateAnswers(answers, records.length);
+        const normalizedAnswers = normalizeAnswers(answers, records.length);
 
         const submittedCount = records.filter(isSubmitted).length;
         if (submittedCount === records.length) {
@@ -114,7 +118,7 @@ function createSubmissionCoordinator({
             throw new Error('考试提交状态不完整，请联系管理员');
         }
 
-        return settle(records, answers, userId, testId);
+        return settle(records, normalizedAnswers, userId, testId);
     }
 
     async function submit(userId, testId, answers) {

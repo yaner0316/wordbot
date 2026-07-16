@@ -42,16 +42,17 @@ test('stored answers preserve option and confidence without a new field', () => 
     });
 });
 
-test('one certain correct answer is not enough for mastery', () => {
+test('one correct answer enters consolidation but is not enough for mastery', () => {
     const result = evaluateMeaningMastery([
         attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
     ], isCorrect);
 
     assert.equal(result.mastered, false);
+    assert.equal(result.stage, 'consolidating');
     assert.equal(result.evidenceCount, 1);
 });
 
-test('two certain correct answers on different days master a meaning', () => {
+test('two correct answers on different days master a meaning', () => {
     const result = evaluateMeaningMastery([
         attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
         attempt({ time: Date.UTC(2026, 5, 2), type: 1 }),
@@ -62,7 +63,7 @@ test('two certain correct answers on different days master a meaning', () => {
     assert.equal(result.distinctTypes, 1);
 });
 
-test('three correct uncertain answers master a meaning', () => {
+test('confidence does not affect mastery when correct answers span different days', () => {
     const result = evaluateMeaningMastery([
         attempt({ time: Date.UTC(2026, 5, 1), type: 1, confidence: ANSWER_CONFIDENCE.GUESS }),
         attempt({ time: Date.UTC(2026, 5, 2), type: 2, confidence: ANSWER_CONFIDENCE.GUESS }),
@@ -70,17 +71,17 @@ test('three correct uncertain answers master a meaning', () => {
     ], isCorrect);
 
     assert.equal(result.mastered, true);
-    assert.equal(result.uncertainCorrectCount, 3);
+    assert.equal(result.distinctDays, 3);
 });
 
-test('two correct uncertain answers are not enough for mastery', () => {
+test('two correct answers master a meaning even when submitted as guesses', () => {
     const result = evaluateMeaningMastery([
         attempt({ time: Date.UTC(2026, 5, 1), type: 1, confidence: ANSWER_CONFIDENCE.GUESS }),
         attempt({ time: Date.UTC(2026, 5, 2), type: 2, confidence: ANSWER_CONFIDENCE.GUESS }),
     ], isCorrect);
 
-    assert.equal(result.mastered, false);
-    assert.equal(result.uncertainCorrectCount, 2);
+    assert.equal(result.mastered, true);
+    assert.equal(result.distinctDays, 2);
 });
 
 test('two correct answers on the same day are not enough', () => {
@@ -90,6 +91,7 @@ test('two correct answers on the same day are not enough', () => {
     ], isCorrect);
 
     assert.equal(result.mastered, false);
+    assert.equal(result.stage, 'consolidating');
     assert.equal(result.distinctDays, 1);
 });
 
@@ -127,6 +129,7 @@ test('a wrong answer resets earlier mastery evidence', () => {
     ], isCorrect);
 
     assert.equal(result.mastered, false);
+    assert.equal(result.stage, 'consolidating');
     assert.equal(result.evidenceCount, 1);
 });
 
@@ -145,6 +148,17 @@ test('no real correct attempts remain unseen', () => {
 
     assert.equal(result.mastered, false);
     assert.equal(result.stage, 'unseen');
+    assert.equal(result.correctAfterLastWrongCount, 0);
+});
+
+test('attempted but never correct is recognized as initial exposure', () => {
+    const result = evaluateMeaningMastery([
+        attempt({ time: Date.UTC(2026, 5, 1), type: 1, correct: false }),
+        attempt({ time: Date.UTC(2026, 5, 2), type: 2, correct: false }),
+    ], isCorrect);
+
+    assert.equal(result.mastered, false);
+    assert.equal(result.stage, 'recognized');
     assert.equal(result.correctAfterLastWrongCount, 0);
 });
 
@@ -179,7 +193,7 @@ test('a word with partial progress reports the strongest non-mastered stage', ()
     );
 
     assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'recognized');
+    assert.equal(result.stage, 'consolidating');
 });
 test('all meanings mastered marks the whole multi-definition word mastered', () => {
     const records = [];

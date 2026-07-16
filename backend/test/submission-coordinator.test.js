@@ -28,10 +28,12 @@ test('validateAnswers rejects option indexes outside A-D', () => {
     );
 });
 
-test('validateAnswers requires a confidence choice for every answer', () => {
-    assert.throws(
-        () => validateAnswers([{ option: 0, confidence: null }], 1),
-        /ANSWER_CONFIDENCE_REQUIRED/
+test('validateAnswers defaults missing confidence to sure', () => {
+    assert.doesNotThrow(
+        () => validateAnswers([{ option: 0, confidence: null }], 1)
+    );
+    assert.doesNotThrow(
+        () => validateAnswers([{ option: 0 }], 1)
     );
 });
 
@@ -202,7 +204,7 @@ test('coordinator passes quiz context to the settlement function', async () => {
 
     await coordinator.submit('student', 'quiz-1', [2]);
 
-    assert.deepEqual(received, [records, [2], 'student', 'quiz-1']);
+    assert.deepEqual(received, [records, [{ option: 2, confidence: 'sure' }], 'student', 'quiz-1']);
 });
 
 test('coordinator refuses to settle a partially submitted quiz', async () => {
