@@ -8,8 +8,10 @@
     "check:env": "node check-env.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "pg": "^8.22.0"
   }
 }

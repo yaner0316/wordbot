@@ -28,6 +28,7 @@ function clearBackendModules() {
 function loadServerWithFeishu(fakeFeishu) {
     clearBackendModules();
     Object.assign(process.env, {
+        DATA_SOURCE: 'feishu',
         FEISHU_APP_ID: 'test-app-id',
         FEISHU_APP_SECRET: 'test-app-secret',
         FEISHU_WORD_APP_TOKEN: 'word-app',
