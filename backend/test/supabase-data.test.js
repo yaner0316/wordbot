@@ -205,3 +205,23 @@ test('addWord inserts a word and ordered parts of speech junction rows', async (
         { word_id: row.id, part_of_speech_id: 2, position: 2 },
     ]);
 });
+
+test('addWords inserts multiple words through Supabase addWord path', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.addWords('qiuqiu', [
+        { word: 'orange', meaning: 'a citrus fruit', level: MIDDLE, POS: ['noun'] },
+        { Word: 'brisk', Meaning: 'quick and active', Level: MIDDLE, POS: 'adj.' },
+    ]);
+
+    assert.equal(result.success, true);
+    assert.equal(result.count, 2);
+    assert.deepEqual(result.errors, []);
+    assert.equal(client.db.words.at(-2).word, 'orange');
+    assert.equal(client.db.words.at(-1).word, 'brisk');
+    assert.deepEqual(client.db.word_parts_of_speech.slice(-2), [
+        { word_id: client.db.words.at(-2).id, part_of_speech_id: 1, position: 1 },
+        { word_id: client.db.words.at(-1).id, part_of_speech_id: 2, position: 1 },
+    ]);
+});

@@ -254,6 +254,7 @@ function loadSupabaseDataSource() {
         generateQuiz,
         submitAnswers,
         addWord,
+        addWords: supabaseData.addWords,
     };
 }
 

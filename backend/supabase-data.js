@@ -90,6 +90,37 @@ function normalizePartsOfSpeech(value) {
         .map(part => abbreviations.get(part) || part);
 }
 
+function normalizeWordInput(input) {
+    if (typeof input === 'string') {
+        const [wordPart, ...meaningParts] = input.split('|');
+        const meaning = meaningParts.join('|').trim();
+        return {
+            word: String(wordPart || '').trim().toLowerCase(),
+            meaning: meaning || String(wordPart || '').trim().toLowerCase(),
+            meaningZh: meaning || null,
+            raw: input,
+        };
+    }
+    const word = String(input?.word || input?.Word || '').trim().toLowerCase();
+    const meaning = String(input?.meaning || input?.Meaning || input?.meaningEn || input?.Meaning_EN || '').trim();
+    const meaningZh = String(input?.meaningZh || input?.cnMeaning || input?.CN_Meaning || '').trim();
+    return {
+        word,
+        meaning: meaning || meaningZh || word,
+        meaningZh: meaningZh || null,
+        context: input?.context || input?.Context || input?.contextEn,
+        contextZh: input?.contextZh || input?.Context_CN,
+        level: input?.level || input?.Level,
+        partsOfSpeech: input?.partsOfSpeech || input?.pos || input?.POS,
+        recordTime: input?.recordTime || input?.record_time,
+        raw: input,
+    };
+}
+
+function normalizeWordInputs(words) {
+    return (words || []).map(normalizeWordInput).filter(entry => entry.word);
+}
+
 async function fetchAllRows(buildQuery, label) {
     const rows = [];
     for (let from = 0; ; from += PAGE_SIZE) {
@@ -496,6 +527,41 @@ async function addWordWithClient(client, input) {
     return data;
 }
 
+async function addWordsWithClient(client, targetUser, words, options = {}) {
+    const entries = normalizeWordInputs(words);
+    const duplicateInputWords = new Set();
+    const seen = new Set();
+    for (const entry of entries) {
+        if (seen.has(entry.word)) duplicateInputWords.add(entry.word);
+        seen.add(entry.word);
+    }
+    const entriesToAdd = options.skipDuplicateWords
+        ? entries.filter(entry => !duplicateInputWords.has(entry.word))
+        : entries;
+    const errors = [];
+    let count = 0;
+
+    for (const entry of entriesToAdd) {
+        try {
+            await addWordWithClient(client, {
+                username: targetUser,
+                ...entry,
+            });
+            count++;
+        } catch (error) {
+            errors.push(`${entry.word}: ${error.message}`);
+        }
+    }
+
+    return {
+        count,
+        success: errors.length === 0,
+        errors,
+        ...(errors.length ? { error: `Some words failed to add: ${errors.join('; ')}` } : {}),
+        skippedDuplicateWords: options.skipDuplicateWords ? [...duplicateInputWords] : [],
+    };
+}
+
 function createSupabaseDataAdapter(client = supabase) {
     return {
         name: 'supabase',
@@ -509,6 +575,7 @@ function createSupabaseDataAdapter(client = supabase) {
             updateWordMasteryWithClient(client, username, word, newMasteryStatus, options),
         incrementCacheUsedCount: cacheId => incrementCacheUsedCountWithClient(client, cacheId),
         addWord: input => addWordWithClient(client, input),
+        addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
     };
 }
 
@@ -526,4 +593,5 @@ module.exports = {
     updateWordMastery: defaultAdapter.updateWordMastery,
     incrementCacheUsedCount: defaultAdapter.incrementCacheUsedCount,
     addWord: defaultAdapter.addWord,
+    addWords: defaultAdapter.addWords,
 };

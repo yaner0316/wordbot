@@ -87,6 +87,25 @@ test('defaults DATA_SOURCE to supabase and exposes the unified interface', async
     assert.equal((await dataSource.addWord({ username: 'qiuqiu', word: 'apple', meaning: 'fruit' })).source, 'supabase');
 });
 
+test('DATA_SOURCE=supabase routes addWords to supabase adapter instead of Feishu fallback', async () => {
+    const dataSource = loadDataSource({
+        envValue: 'supabase',
+        supabaseExports: {
+            addWords: async (...args) => ({ source: 'supabase-addWords', args }),
+        },
+        feishuExports: {
+            addWords: async (...args) => ({ source: 'feishu-addWords', args }),
+        },
+    });
+
+    const result = await dataSource.addWords('qiuqiu', [{ word: 'apple', meaning: 'fruit' }], {
+        skipDuplicateWords: true,
+    });
+
+    assert.equal(result.source, 'supabase-addWords');
+    assert.deepEqual(result.args, ['qiuqiu', [{ word: 'apple', meaning: 'fruit' }], { skipDuplicateWords: true }]);
+});
+
 test('DATA_SOURCE=feishu routes high-level quiz and submit functions to feishu.js', async () => {
     const dataSource = loadDataSource({ envValue: 'feishu' });
 

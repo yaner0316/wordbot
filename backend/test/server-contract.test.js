@@ -227,6 +227,42 @@ test('parent addWords endpoint preserves payload contract', async () => {
     });
 });
 
+test('parent addWord endpoint forwards level and parts of speech payload', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWord: async (...args) => {
+            calls.push(args);
+            return { success: true };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/addWord`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                targetUser: 'student',
+                word: 'orange',
+                meaning: 'a citrus fruit',
+                level: '中学',
+                POS: ['noun'],
+            }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, [[
+            'student',
+            {
+                Word: 'orange',
+                Meaning: 'a citrus fruit',
+                POS: ['noun'],
+                Context: undefined,
+                Level: '中学',
+            },
+        ]]);
+    });
+});
+
 test('word update endpoint preserves status and field update payload', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

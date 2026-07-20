@@ -343,11 +343,17 @@ app.get('/api/admin/questionCache/diagnostics', async (req, res) => {
 
 app.post('/api/admin/addWord', async (req, res) => {
     try {
-        const { targetUser, word, meaning, pos, context } = req.body;
+        const { targetUser, word, meaning, pos, POS, partsOfSpeech, context, level } = req.body;
         if (!targetUser || !word || !meaning) {
             return res.status(400).json({ error: '缺少参数' });
         }
-        const result = await addWord(targetUser, { Word: word, Meaning: meaning, POS: pos, Context: context });
+        const result = await addWord(targetUser, {
+            Word: word,
+            Meaning: meaning,
+            POS: partsOfSpeech || POS || pos,
+            Context: context,
+            Level: level,
+        });
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
