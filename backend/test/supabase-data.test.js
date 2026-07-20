@@ -11,6 +11,7 @@ function createFakeSupabase(seed = {}) {
         words: [],
         assessments: [],
         question_cache: [],
+        quiz_sessions: [],
         parts_of_speech: [],
         word_parts_of_speech: [],
         ...seed,
@@ -20,6 +21,8 @@ function createFakeSupabase(seed = {}) {
         return filters.every(filter => {
             if (filter.type === 'eq') return row[filter.column] === filter.value;
             if (filter.type === 'in') return filter.values.includes(row[filter.column]);
+            if (filter.type === 'gt') return row[filter.column] > filter.value;
+            if (filter.type === 'lt') return row[filter.column] < filter.value;
             return true;
         });
     }
@@ -39,9 +42,17 @@ function createFakeSupabase(seed = {}) {
         limit(count) { this.limitCount = count; return this; }
         eq(column, value) { this.filters.push({ type: 'eq', column, value }); return this; }
         in(column, values) { this.filters.push({ type: 'in', column, values }); return this; }
+        gt(column, value) { this.filters.push({ type: 'gt', column, value }); return this; }
+        lt(column, value) { this.filters.push({ type: 'lt', column, value }); return this; }
 
         insert(payload) {
             this.operation = 'insert';
+            this.payload = Array.isArray(payload) ? payload : [payload];
+            return this;
+        }
+
+        upsert(payload) {
+            this.operation = 'upsert';
             this.payload = Array.isArray(payload) ? payload : [payload];
             return this;
         }
@@ -75,11 +86,18 @@ function createFakeSupabase(seed = {}) {
             const tableRows = db[this.table];
             if (!tableRows) return { data: null, error: new Error(`unknown table ${this.table}`) };
 
-            if (this.operation === 'insert') {
+            if (this.operation === 'insert' || this.operation === 'upsert') {
                 const inserted = this.payload.map(row => {
                     const next = { ...row };
                     if (!next.id && ['words', 'assessments', 'question_cache'].includes(this.table)) {
                         next.id = `${this.table}-${tableRows.length + 1}`;
+                    }
+                    if (this.operation === 'upsert' && this.table === 'quiz_sessions') {
+                        const existing = tableRows.find(existingRow => existingRow.test_id === next.test_id);
+                        if (existing) {
+                            Object.assign(existing, next);
+                            return existing;
+                        }
                     }
                     tableRows.push(next);
                     return next;
@@ -336,4 +354,52 @@ test('updateUserLearningSettings updates Supabase user level and removes stale c
     assert.equal(client.db.users[0].learning_level, ELEMENTARY);
     assert.ok(client.db.users[0].level_changed_at);
     assert.equal(client.db.question_cache.length, 0);
+});
+
+test('quiz session persistence saves and restores unexpired Supabase sessions', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const questions = [{ word: 'Apple', answer: 'A', options: ['A. Apple', 'B. Pear'] }];
+
+    await adapter.saveQuizSession('qiuqiu', 'quiz-1', questions, {
+        now: () => '2026-07-20T00:00:00.000Z',
+    });
+    const session = await adapter.getQuizSession('qiuqiu', 'quiz-1', {
+        now: () => '2026-07-20T01:00:00.000Z',
+    });
+
+    assert.deepEqual(session.questions, questions);
+    assert.equal(session.user_id, 'user-1');
+    assert.equal(client.db.quiz_sessions[0].test_id, 'quiz-1');
+    assert.equal(client.db.quiz_sessions[0].expires_at, '2026-07-21T00:00:00.000Z');
+});
+
+test('quiz session persistence ignores expired sessions and deletes submitted sessions', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_sessions: [{
+            test_id: 'expired-quiz',
+            user_id: 'user-1',
+            questions: [{ word: 'Apple' }],
+            created_at: '2026-07-18T00:00:00.000Z',
+            expires_at: '2026-07-19T00:00:00.000Z',
+        }, {
+            test_id: 'fresh-quiz',
+            user_id: 'user-1',
+            questions: [{ word: 'Pear' }],
+            created_at: '2026-07-20T00:00:00.000Z',
+            expires_at: '2026-07-21T00:00:00.000Z',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    assert.equal(await adapter.getQuizSession('qiuqiu', 'expired-quiz', {
+        now: () => '2026-07-20T00:00:00.000Z',
+    }), null);
+    assert.deepEqual(await adapter.deleteQuizSession('qiuqiu', 'fresh-quiz'), { deleted: 1 });
+    assert.deepEqual(client.db.quiz_sessions.map(row => row.test_id), ['expired-quiz']);
+    assert.deepEqual(await adapter.cleanupExpiredQuizSessions({
+        now: () => '2026-07-20T00:00:00.000Z',
+    }), { deleted: 1 });
+    assert.deepEqual(client.db.quiz_sessions, []);
 });

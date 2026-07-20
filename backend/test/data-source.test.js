@@ -166,3 +166,107 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(result.correct, 10);
     assert.equal(result.total, 10);
 });
+
+test('supabase submitAnswers restores questions from persisted session when memory is empty', async () => {
+    const persistedQuestions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word${index + 1}`,
+        record_id: `rec-word-${index + 1}`,
+        level: 'middle',
+        context: `I learned word${index + 1} today.`,
+        options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
+        answer: 'A',
+        correctAnswer: 'A',
+        source: 'question_cache',
+    }));
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async (username, testId) => {
+                calls.push(['getQuizSession', username, testId]);
+                return { questions: persistedQuestions };
+            },
+            deleteQuizSession: async (username, testId) => {
+                calls.push(['deleteQuizSession', username, testId]);
+                return { deleted: 1 };
+            },
+            submitAssessment: async input => ({ id: 'assessment-1', ...input }),
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+
+    const result = await dataSource.submitAnswers(
+        'Qiu Qiu',
+        'quiz-after-restart',
+        persistedQuestions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(result.correct, 10);
+    assert.equal(result.total, 10);
+    assert.deepEqual(calls, [
+        ['getQuizSession', 'Qiu Qiu', 'quiz-after-restart'],
+        ['deleteQuizSession', 'Qiu Qiu', 'quiz-after-restart'],
+    ]);
+});
+
+test('supabase quiz session survives data-source module reload smoke path', async () => {
+    const sessionStore = new Map();
+    const quizRows = {
+        getUserByUsername: async username => ({ username }),
+        getWordsForUser: async () => Array.from({ length: 10 }, (_, index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            word: `word${index + 1}`,
+            meaning_en: `meaning ${index + 1}`,
+            level: 'middle',
+        })),
+        getAssessmentsForUser: async () => [],
+        getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
+            id: `cache-${index + 1}`,
+            feishu_record_id: `cache-rec-${index + 1}`,
+            source_word_record_id: `rec-word-${index + 1}`,
+            word: `word${index + 1}`,
+            level: 'middle',
+            round_type: 'primary',
+            quality_status: 'ready',
+            question_type: 1,
+            question_text: `I learned word${index + 1} today.`,
+            options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
+            answer: 'A',
+            option_meanings: ['meaning', 'fruit', 'furniture', 'furniture'],
+            correct_meaning: `meaning ${index + 1}`,
+            used_count: 0,
+        })),
+        saveQuizSession: async (username, testId, questions) => {
+            sessionStore.set(`${username}:${testId}`, { username, testId, questions });
+            return { test_id: testId, questions };
+        },
+        cleanupExpiredQuizSessions: async () => ({ deleted: 0 }),
+        submitAssessment: async input => ({ id: 'assessment-1', ...input }),
+        updateWordMastery: async () => [],
+        incrementCacheUsedCount: async () => ({}),
+    };
+    const firstProcess = loadDataSource({ supabaseExports: quizRows });
+
+    const quiz = await firstProcess.generateQuiz('qiuqiu', 'middle', 'real');
+    const secondProcess = loadDataSource({
+        supabaseExports: {
+            ...quizRows,
+            getQuizSession: async (username, testId) => sessionStore.get(`${username}:${testId}`) || null,
+            deleteQuizSession: async (username, testId) => {
+                const deleted = sessionStore.delete(`${username}:${testId}`) ? 1 : 0;
+                return { deleted };
+            },
+        },
+    });
+    const result = await secondProcess.submitAnswers(
+        'qiuqiu',
+        quiz.testId,
+        quiz.questions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(result.correct, 10);
+    assert.equal(result.total, 10);
+    assert.equal(sessionStore.has(`qiuqiu:${quiz.testId}`), false);
+});

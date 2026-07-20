@@ -29,7 +29,7 @@ function getRuntimeHealth({
         service: 'wordbot-backend',
         version,
         time: now(),
-        dataSource: env.WORDBOT_DATA_SOURCE || 'feishu',
+        dataSource: env.DATA_SOURCE || 'supabase',
         env: envStatus,
         questionCache,
         missing,

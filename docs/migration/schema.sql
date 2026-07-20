@@ -182,6 +182,17 @@ create table public.question_cache (
     constraint question_cache_used_count_nonnegative check (used_count >= 0)
 );
 
+create table public.quiz_sessions (
+    test_id text primary key,
+    user_id uuid not null references public.users(id) on delete cascade,
+    questions jsonb not null,
+    created_at timestamptz not null default now(),
+    expires_at timestamptz not null default (now() + interval '24 hours'),
+    constraint quiz_sessions_test_id_not_blank check (btrim(test_id) <> ''),
+    constraint quiz_sessions_questions_array check (jsonb_typeof(questions) = 'array'),
+    constraint quiz_sessions_expires_after_created check (expires_at > created_at)
+);
+
 -- Login: the unique username-key constraint supplies this index.
 
 -- Quiz word queue: user + level + not-mastered + FIFO by original entry time.
@@ -228,6 +239,32 @@ create index question_cache_source_word_record_idx
     on public.question_cache (source_word_record_id)
     where source_word_record_id is not null;
 
+create index quiz_sessions_user_test_idx
+    on public.quiz_sessions (user_id, test_id);
+
+create index quiz_sessions_expires_at_idx
+    on public.quiz_sessions (expires_at);
+
+create or replace function public.cleanup_expired_quiz_sessions()
+returns integer
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+    deleted_count integer;
+begin
+    delete from public.quiz_sessions
+    where expires_at < now();
+
+    get diagnostics deleted_count = row_count;
+    return deleted_count;
+end;
+$$;
+
+revoke all on function public.cleanup_expired_quiz_sessions() from public;
+grant execute on function public.cleanup_expired_quiz_sessions() to service_role;
+
 -- Supabase public-schema tables are deny-by-default until application policies are designed.
 alter table public.users enable row level security;
 alter table public.words enable row level security;
@@ -235,5 +272,9 @@ alter table public.parts_of_speech enable row level security;
 alter table public.word_parts_of_speech enable row level security;
 alter table public.assessments enable row level security;
 alter table public.question_cache enable row level security;
+alter table public.quiz_sessions enable row level security;
+
+revoke all on table public.quiz_sessions from anon, authenticated;
+grant all on table public.quiz_sessions to service_role;
 
 commit;

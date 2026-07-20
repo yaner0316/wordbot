@@ -8,6 +8,7 @@ const {
 
 const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
 const quizQuestionsByTestId = new Map();
+let lastQuizSessionCleanupAt = 0;
 
 function normalizeDataSource(value) {
     const normalized = String(value || '').trim().toLowerCase();
@@ -204,15 +205,25 @@ function loadSupabaseDataSource() {
         });
         if (!quiz.error && quiz.testId && Array.isArray(quiz.questions)) {
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${quiz.testId}`, quiz.questions);
+            if (typeof supabaseData.saveQuizSession === 'function') {
+                await supabaseData.saveQuizSession(user, quiz.testId, quiz.questions);
+            }
+            maybeCleanupExpiredQuizSessions(supabaseData);
         }
         return quiz;
     }
 
     async function submitAnswers(user, testId, answers) {
         const key = `${normalizeUserKey(user)}:${testId}`;
-        const questions = quizQuestionsByTestId.get(key);
+        let questions = quizQuestionsByTestId.get(key);
         if (!questions) {
-            throw new Error('QUIZ_SESSION_NOT_FOUND');
+            if (typeof supabaseData.getQuizSession === 'function') {
+                const session = await supabaseData.getQuizSession(user, testId);
+                questions = session?.questions;
+            }
+            if (!questions) {
+                throw new Error('QUIZ_SESSION_NOT_FOUND');
+            }
         }
         const result = await submitQuizWithDataSource({
             username: user,
@@ -222,6 +233,9 @@ function loadSupabaseDataSource() {
             dataSource: supabaseData,
         });
         quizQuestionsByTestId.delete(key);
+        if (typeof supabaseData.deleteQuizSession === 'function') {
+            await supabaseData.deleteQuizSession(user, testId);
+        }
         return result;
     }
 
@@ -264,6 +278,15 @@ function loadFeishuFallbackExports() {
     } catch (error) {
         return {};
     }
+}
+
+function maybeCleanupExpiredQuizSessions(supabaseData, now = Date.now()) {
+    if (typeof supabaseData.cleanupExpiredQuizSessions !== 'function') return;
+    if (now - lastQuizSessionCleanupAt < 60 * 60 * 1000) return;
+    lastQuizSessionCleanupAt = now;
+    supabaseData.cleanupExpiredQuizSessions().catch(error => {
+        console.warn(`[quiz_sessions] cleanup failed: ${error.message}`);
+    });
 }
 
 module.exports = DATA_SOURCE === 'feishu'

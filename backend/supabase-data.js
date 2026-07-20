@@ -25,6 +25,7 @@ const HIGH_LEVEL = String.fromCharCode(0x9ad8, 0x4e2d);
 const VALID_LEARNING_LEVELS = new Set([ELEMENTARY_LEVEL, JUNIOR_HIGH_LEVEL, HIGH_LEVEL, 'CET4_6_TOEFL']);
 const DEFAULT_LEARNING_LEVEL = JUNIOR_HIGH_LEVEL;
 const LEVEL_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
+const QUIZ_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 function canonicalUsernameKey(value) {
     return String(value || '').trim().replace(/\s+/g, '').toLowerCase();
@@ -906,6 +907,78 @@ async function addWordsWithClient(client, targetUser, words, options = {}) {
     };
 }
 
+function requireTestId(testId) {
+    const value = String(testId || '').trim();
+    if (!value) throw new Error('TEST_ID_REQUIRED');
+    return value;
+}
+
+function requireQuestions(questions) {
+    if (!Array.isArray(questions) || questions.length === 0) throw new Error('QUESTIONS_REQUIRED');
+    return questions;
+}
+
+async function saveQuizSessionWithClient(client, username, testId, questions, options = {}) {
+    const user = await requireUserByUsername(client, username);
+    const createdAt = toIsoString(options.now ? options.now() : Date.now());
+    const expiresAt = toIsoString(toMillis(createdAt) + QUIZ_SESSION_TTL_MS);
+    const row = {
+        test_id: requireTestId(testId),
+        user_id: user.id,
+        questions: requireQuestions(questions),
+        created_at: createdAt,
+        expires_at: expiresAt,
+    };
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .upsert(row, { onConflict: 'test_id' })
+        .select('*')
+        .single();
+    ensureNoError(error, 'saveQuizSession');
+    return data;
+}
+
+async function getQuizSessionWithClient(client, username, testId, options = {}) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .select('*')
+        .eq('test_id', requireTestId(testId))
+        .eq('user_id', user.id)
+        .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
+        .maybeSingle();
+    ensureNoError(error, 'getQuizSession');
+    if (!data) return null;
+    return {
+        ...data,
+        questions: Array.isArray(data.questions) ? data.questions : [],
+    };
+}
+
+async function deleteQuizSessionWithClient(client, username, testId) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return { deleted: 0 };
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .delete()
+        .eq('test_id', requireTestId(testId))
+        .eq('user_id', user.id)
+        .select('test_id');
+    ensureNoError(error, 'deleteQuizSession');
+    return { deleted: (data || []).length };
+}
+
+async function cleanupExpiredQuizSessionsWithClient(client, options = {}) {
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .delete()
+        .lt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
+        .select('test_id');
+    ensureNoError(error, 'cleanupExpiredQuizSessions');
+    return { deleted: (data || []).length };
+}
+
 function createSupabaseDataAdapter(client = supabase) {
     return {
         name: 'supabase',
@@ -927,6 +1000,14 @@ function createSupabaseDataAdapter(client = supabase) {
         rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
+        saveQuizSession: (username, testId, questions, options) =>
+            saveQuizSessionWithClient(client, username, testId, questions, options),
+        getQuizSession: (username, testId, options) =>
+            getQuizSessionWithClient(client, username, testId, options),
+        deleteQuizSession: (username, testId) =>
+            deleteQuizSessionWithClient(client, username, testId),
+        cleanupExpiredQuizSessions: options =>
+            cleanupExpiredQuizSessionsWithClient(client, options),
     };
 }
 
@@ -951,4 +1032,8 @@ module.exports = {
     rebuildQuestionCacheForUser: defaultAdapter.rebuildQuestionCacheForUser,
     addWord: defaultAdapter.addWord,
     addWords: defaultAdapter.addWords,
+    saveQuizSession: defaultAdapter.saveQuizSession,
+    getQuizSession: defaultAdapter.getQuizSession,
+    deleteQuizSession: defaultAdapter.deleteQuizSession,
+    cleanupExpiredQuizSessions: defaultAdapter.cleanupExpiredQuizSessions,
 };

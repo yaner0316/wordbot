@@ -44,3 +44,20 @@ test('runtime health reports question cache configuration booleans without secre
     });
     assert.doesNotMatch(JSON.stringify(health), /secret-app-token|secret-table-id/);
 });
+
+test('runtime health reports DATA_SOURCE used by runtime data-source module', () => {
+    const health = getRuntimeHealth({
+        env: {
+            DATA_SOURCE: 'supabase',
+            WORDBOT_DATA_SOURCE: 'feishu',
+        },
+    });
+
+    assert.equal(health.dataSource, 'supabase');
+});
+
+test('runtime health defaults dataSource to supabase like data-source module', () => {
+    const health = getRuntimeHealth({ env: {} });
+
+    assert.equal(health.dataSource, 'supabase');
+});

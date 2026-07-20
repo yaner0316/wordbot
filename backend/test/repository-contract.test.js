@@ -122,13 +122,14 @@ test('repository factory defaults to Feishu and validates the repository shape',
 test('runtime health reports the selected data source without changing env checks', () => {
     const health = getRuntimeHealth({
         env: {
-            WORDBOT_DATA_SOURCE: 'dual_write',
+            DATA_SOURCE: 'supabase',
+            WORDBOT_DATA_SOURCE: 'feishu',
             FEISHU_APP_ID: 'app',
         },
         now: () => '2026-06-21T00:00:00.000Z',
     });
 
-    assert.equal(health.dataSource, 'dual_write');
+    assert.equal(health.dataSource, 'supabase');
     assert.equal(health.env.FEISHU_APP_ID, true);
     assert.equal(health.env.FEISHU_APP_SECRET, false);
 });
