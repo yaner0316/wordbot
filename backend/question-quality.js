@@ -253,6 +253,16 @@ function hasAmbiguousElementaryContext(question) {
         return true;
     }
 
+    const clothingCount = optionWords.filter(item => ELEMENTARY_CLOTHING_WORDS.has(item)).length;
+    const hasWeakClothingContext = [
+        /\b(?:put\s+on|puts\s+on|wear|wore|wears|wearing)\b.*\b(?:blue|red|green|yellow|black|white|warm|new|clean|school)\s+_____\b/,
+        /\b(?:blue|red|green|yellow|black|white|warm|new|clean|school)\s+_____\b.*\b(?:school|home|morning|before\s+going|on\s+(?:his|her|their)\s+(?:legs|feet|body))\b/,
+        /\b_____\b.*\b(?:before\s+going\s+to\s+school|to\s+school|at\s+school|on\s+(?:his|her|their)\s+(?:legs|feet|body))\b/,
+    ].some(pattern => pattern.test(context));
+    if (clothingCount >= 3 && hasWeakClothingContext) {
+        return true;
+    }
+
     const animalCount = optionWords.filter(item => ELEMENTARY_ANIMAL_WORDS.has(item)).length;
     const hasWeakAnimalContext = [
         /\byoung\s+_____\b.*\bmother\b/,
@@ -299,6 +309,11 @@ const PLAYGROUND_ACTION_WORDS = new Set([
 
 const SEASONING_WORDS = new Set([
     'pepper', 'salt', 'sugar', 'butter',
+]);
+
+const ELEMENTARY_CLOTHING_WORDS = new Set([
+    'shirt', 'jacket', 'pants', 'dress', 'coat', 'sweater', 'skirt', 'shorts',
+    'shoes', 'socks', 'uniform', 'jeans', 't-shirt', 'tshirt', 'hat', 'cap',
 ]);
 
 const ELEMENTARY_ANIMAL_WORDS = new Set([

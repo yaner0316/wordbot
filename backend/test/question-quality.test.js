@@ -546,6 +546,18 @@ test('elementary fill-in rejects ambiguous same-category clothing and hair conte
             options: ['A. pants', 'B. shirt', 'C. shoes', 'D. socks'],
             answer: 'A',
         },
+        {
+            word: 'shirt',
+            context: 'The boy put on his blue _____ before going to school.',
+            options: ['A. dress', 'B. pants', 'C. jacket', 'D. shirt'],
+            answer: 'D',
+        },
+        {
+            word: 'pants',
+            context: 'Tom wore blue _____ on his legs to school this morning.',
+            options: ['A. shirt', 'B. socks', 'C. pants', 'D. shoes'],
+            answer: 'C',
+        },
     ];
 
     for (const sample of cases) {
