@@ -137,6 +137,56 @@ test('word queue is based on words even before ready cache rows exist', () => {
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
+test('word queue only includes words from the requested level', () => {
+    const wordRecords = [
+        ...Array.from({ length: 12 }, (_, index) => {
+            const record = word(index + 1);
+            record.fields.Level = 'other';
+            return record;
+        }),
+        ...Array.from({ length: 10 }, (_, index) => {
+            const record = word(index + 13);
+            record.fields.Level = LEVEL;
+            return record;
+        }),
+    ];
+
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows: [],
+        assessmentRecords: [],
+        userId: 'student',
+        level: LEVEL,
+        limit: 10,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20', 'rec-21', 'rec-22']);
+});
+
+test('word queue accepts a mismatched word level when ready cache exists for the requested level', () => {
+    const wordRecords = Array.from({ length: 10 }, (_, index) => {
+        const record = word(index + 1);
+        record.fields.Level = 'other';
+        return record;
+    });
+    const cacheRows = Array.from({ length: 10 }, (_, index) => cache(index + 1));
+
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows,
+        assessmentRecords: [],
+        userId: 'student',
+        level: LEVEL,
+        limit: 10,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
+});
+
 
 test('cached question selection fills from later ready rows in word queue order', () => {
     const queue = Array.from({ length: 14 }, (_, index) => `rec-${index + 1}`);

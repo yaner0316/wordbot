@@ -52,6 +52,11 @@ function createFakeSupabase(seed = {}) {
             return this;
         }
 
+        delete() {
+            this.operation = 'delete';
+            return this;
+        }
+
         maybeSingle() {
             const { data, error } = this._result();
             return Promise.resolve({ data: data[0] || null, error });
@@ -83,6 +88,12 @@ function createFakeSupabase(seed = {}) {
             }
 
             let rows = tableRows.filter(row => matches(row, this.filters));
+            if (this.operation === 'delete') {
+                for (let index = tableRows.length - 1; index >= 0; index--) {
+                    if (matches(tableRows[index], this.filters)) tableRows.splice(index, 1);
+                }
+                return { data: rows, error: null };
+            }
             if (this.operation === 'update') {
                 rows = rows.map(row => {
                     Object.assign(row, this.payload);
@@ -224,4 +235,105 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
         { word_id: client.db.words.at(-2).id, part_of_speech_id: 1, position: 1 },
         { word_id: client.db.words.at(-1).id, part_of_speech_id: 2, position: 1 },
     ]);
+});
+
+test('question cache status summarizes Supabase rows by level', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    client.db.question_cache[0] = {
+        ...client.db.question_cache[0],
+        level: MIDDLE,
+        round_type: 'primary',
+        quality_status: 'ready',
+        question_type: 1,
+        question_text: 'I ate an _____ after lunch.',
+        options: ['A. apple', 'B. pear', 'C. chair', 'D. desk'],
+        answer: 'A',
+        option_meanings: ['fruit', 'fruit', 'seat', 'furniture'],
+        correct_meaning: 'a fruit',
+        generated_at: '2026-07-19T12:00:00.000Z',
+    };
+
+    const status = await adapter.getQuestionCacheStatus('qiuqiu');
+
+    assert.equal(status.configured, true);
+    assert.equal(status.total, 1);
+    assert.equal(status.ready, 1);
+    assert.equal(status.byLevel[MIDDLE].ready, 1);
+});
+
+test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase', async () => {
+    const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: ELEMENTARY }],
+        words: [
+            ['corn', 'A yellow food that grows on a tall plant.'],
+            ['cheek', 'The soft side of your face.'],
+            ['roll', 'To move by turning over and over.'],
+            ['puppy', 'A young dog.'],
+            ['kitten', 'A young cat.'],
+            ['chick', 'A baby bird.'],
+            ['climb', 'To go up something.'],
+            ['sweater', 'Warm clothes for the top of your body.'],
+            ['clap', 'To hit your hands together to make a sound.'],
+            ['swing', 'A seat that moves back and forth.'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: meaning,
+            meaning_zh: meaning,
+            level: ELEMENTARY,
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.configured, true);
+    assert.equal(result.level, ELEMENTARY);
+    assert.equal(result.count, 20);
+    assert.equal(client.db.question_cache.filter(row =>
+        row.user_id === 'user-1' &&
+        row.level === ELEMENTARY &&
+        row.round_type === 'primary' &&
+        row.quality_status === 'ready'
+    ).length, 10);
+});
+
+test('updateUserLearningSettings updates Supabase user level and removes stale cache', async () => {
+    const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+    const HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-1',
+            username: 'qiuqiu',
+            username_key: 'qiuqiu',
+            learning_level: HIGH,
+            level_changed_at: null,
+        }],
+        words: [],
+        assessments: [],
+        question_cache: [{
+            id: 'cache-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            level: HIGH,
+            quality_status: 'ready',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.updateUserLearningSettings('qiuqiu', ELEMENTARY);
+
+    assert.equal(result.success, true);
+    assert.equal(result.settings.learningLevel, ELEMENTARY);
+    assert.equal(client.db.users[0].learning_level, ELEMENTARY);
+    assert.ok(client.db.users[0].level_changed_at);
+    assert.equal(client.db.question_cache.length, 0);
 });

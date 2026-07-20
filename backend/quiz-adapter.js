@@ -207,6 +207,7 @@ async function generateQuizWithDataSource({
 
     const queue = buildQuizWordQueue({
         wordRecords,
+        cacheRows: questionCacheRows,
         assessmentRecords,
         userId: canonicalUsername,
         level,

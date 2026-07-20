@@ -1,15 +1,30 @@
 const path = require('path');
+const crypto = require('crypto');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const supabase = require('./supabase-client');
 const { isRealAssessment } = require('./assessment-mode');
+const {
+    getCacheQuestionReadinessIssues,
+    summarizeCacheStatus,
+} = require('./question-cache');
+const {
+    generateElementaryDistractors,
+    generateElementaryTemplateContext,
+} = require('./elementary-context');
 
 const PAGE_SIZE = 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VALID_CORRECTNESS = new Set(['correct', 'wrong']);
 const VALID_CONFIDENCE = new Set(['sure', 'guess']);
 const VALID_MASTERY_STATUS = new Set(['pending', 'recognized', 'consolidating', 'mastered']);
+const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
+const JUNIOR_HIGH_LEVEL = String.fromCharCode(0x4e2d, 0x5b66);
+const HIGH_LEVEL = String.fromCharCode(0x9ad8, 0x4e2d);
+const VALID_LEARNING_LEVELS = new Set([ELEMENTARY_LEVEL, JUNIOR_HIGH_LEVEL, HIGH_LEVEL, 'CET4_6_TOEFL']);
+const DEFAULT_LEARNING_LEVEL = JUNIOR_HIGH_LEVEL;
+const LEVEL_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 
 function canonicalUsernameKey(value) {
     return String(value || '').trim().replace(/\s+/g, '').toLowerCase();
@@ -39,6 +54,15 @@ function toIsoString(value = Date.now()) {
     const parsed = Date.parse(value);
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
     return new Date().toISOString();
+}
+
+function toMillis(value = Date.now()) {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 function learningDay(value) {
@@ -74,6 +98,27 @@ function normalizeMasteryStatus(value) {
     return text;
 }
 
+function normalizeLearningLevel(value) {
+    const text = String(value || '').trim() || DEFAULT_LEARNING_LEVEL;
+    const normalized = text === 'CET/TOEFL' ? 'CET4_6_TOEFL' : text;
+    if (!VALID_LEARNING_LEVELS.has(normalized)) throw new Error(`invalid learning level: ${text}`);
+    return normalized;
+}
+
+function buildLearningSettingsFromUser(user, { now = Date.now() } = {}) {
+    const learningLevel = normalizeLearningLevel(user?.learning_level || DEFAULT_LEARNING_LEVEL);
+    const levelChangedAt = user?.level_changed_at ? toMillis(user.level_changed_at) : 0;
+    const nextLevelChangeAt = levelChangedAt ? levelChangedAt + LEVEL_CHANGE_COOLDOWN_MS : now;
+    return {
+        userId: user?.username || '',
+        learningLevel,
+        levelChangedAt: levelChangedAt || null,
+        nextLevelChangeAt,
+        canChangeLevel: !levelChangedAt || now >= nextLevelChangeAt,
+        questionCacheStatus: 'not_started',
+    };
+}
+
 function normalizePartsOfSpeech(value) {
     const raw = Array.isArray(value) ? value.join(',') : String(value || '');
     if (!raw.trim()) return [];
@@ -88,6 +133,43 @@ function normalizePartsOfSpeech(value) {
         .map(part => part.trim().toLowerCase())
         .filter(Boolean)
         .map(part => abbreviations.get(part) || part);
+}
+
+function escapeRegExp(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasWholeWord(context, word) {
+    const key = String(word || '').trim();
+    if (!key || !/^[a-z]+$/i.test(key)) return false;
+    return new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(String(context || ''));
+}
+
+function blankWordInContext(context, word) {
+    return String(context || '').replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i'), '_____');
+}
+
+function shuffled(values) {
+    const result = [...values];
+    for (let index = result.length - 1; index > 0; index--) {
+        const swapIndex = crypto.randomInt(0, index + 1);
+        [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+    }
+    return result;
+}
+
+function uniqueWords(values, correctWord) {
+    const correct = String(correctWord || '').trim().toLowerCase();
+    const seen = new Set();
+    const result = [];
+    for (const value of values || []) {
+        const word = String(value || '').trim().toLowerCase();
+        if (!word || word === correct || seen.has(word)) continue;
+        if (!/^[a-z]+(?:'[a-z]+)?$/i.test(word)) continue;
+        seen.add(word);
+        result.push(word);
+    }
+    return result;
 }
 
 function normalizeWordInput(input) {
@@ -271,6 +353,174 @@ async function getWordsByIdWithClient(client, wordIds) {
     return new Map(rows.map((row) => [row.id, row]));
 }
 
+function toQuestionCacheStatusRecord(row, { user, word }) {
+    const sourceWordRecordId = row.source_word_record_id || word?.feishu_record_id || row.word_id || '';
+    return {
+        record_id: row.feishu_record_id || row.id || '',
+        fields: {
+            user: user?.username || '',
+            word_record_id: sourceWordRecordId,
+            word: word?.word || row.word || '',
+            level: row.level || '',
+            round_type: row.round_type || 'primary',
+            quality_status: row.quality_status || 'pending',
+            question_type: row.question_type || '',
+            question_text: row.question_text || '',
+            context_cn: row.context_zh || '',
+            suffix: row.suffix || '',
+            options: JSON.stringify(row.options || []),
+            answer: row.answer || '',
+            option_meanings: JSON.stringify(row.option_meanings || []),
+            correct_meaning: row.correct_meaning || '',
+            used_count: Number(row.used_count || 0),
+            generated_at: toMillis(row.generated_at || row.created_at),
+        },
+    };
+}
+
+async function toQuestionCacheStatusRecordsWithClient(client, user, rows) {
+    const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
+    return rows.map(row => toQuestionCacheStatusRecord(row, {
+        user,
+        word: wordsById.get(row.word_id),
+    }));
+}
+
+async function getQuestionCacheStatusWithClient(client, username) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return { configured: true, total: 0, ready: 0, byLevel: {}, byRoundType: {} };
+    const rows = await fetchAllRows(
+        () => client
+            .from('question_cache')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('generated_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getQuestionCacheStatus'
+    );
+    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    return {
+        configured: true,
+        ...summarizeCacheStatus(statusRows),
+    };
+}
+
+async function getUserLearningSettingsWithClient(client, username) {
+    const user = await requireUserByUsername(client, username);
+    const settings = buildLearningSettingsFromUser(user);
+    const status = await getQuestionCacheStatusWithClient(client, username);
+    const readyForLevel = Number(status?.byLevel?.[settings.learningLevel]?.ready || 0);
+    return {
+        ...settings,
+        questionCacheStatus: readyForLevel >= 10 ? 'ready' : (readyForLevel > 0 ? 'partial' : 'not_started'),
+    };
+}
+
+async function updateUserLearningSettingsWithClient(client, username, requestedLevel) {
+    const user = await requireUserByUsername(client, username);
+    const now = Date.now();
+    const currentLevel = normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL);
+    const nextLevel = normalizeLearningLevel(requestedLevel);
+    const levelChangedAt = user.level_changed_at ? toMillis(user.level_changed_at) : 0;
+    const nextAllowedAt = levelChangedAt ? levelChangedAt + LEVEL_CHANGE_COOLDOWN_MS : now;
+    if (nextLevel !== currentLevel && levelChangedAt && now < nextAllowedAt) {
+        return {
+            success: false,
+            error: 'cooldown',
+            settings: {
+                ...buildLearningSettingsFromUser(user, { now }),
+                nextLevelChangeAt: nextAllowedAt,
+                canChangeLevel: false,
+            },
+        };
+    }
+    const changed = nextLevel !== currentLevel;
+    const payload = {
+        learning_level: nextLevel,
+        ...(changed ? { level_changed_at: new Date(now).toISOString() } : {}),
+    };
+    const { data, error } = await client
+        .from('users')
+        .update(payload)
+        .eq('id', user.id)
+        .select('id, username, username_key, learning_level, level_changed_at')
+        .single();
+    ensureNoError(error, 'updateUserLearningSettings');
+    if (changed) {
+        await deleteQuestionCacheRowsWithClient(client, data.username, null);
+    }
+    return {
+        success: true,
+        settings: {
+            ...buildLearningSettingsFromUser(data, { now }),
+            questionCacheStatus: changed ? 'building' : 'not_started',
+        },
+    };
+}
+
+async function getQuestionCacheDiagnosticsWithClient(client, username) {
+    const user = username ? await getUserByUsernameWithClient(client, username) : null;
+    const rows = await fetchAllRows(
+        () => {
+            let query = client
+                .from('question_cache')
+                .select('*')
+                .order('generated_at', { ascending: true })
+                .order('id', { ascending: true });
+            if (user) query = query.eq('user_id', user.id);
+            return query;
+        },
+        'getQuestionCacheDiagnostics'
+    );
+    const userRows = user ? [user] : await fetchAllRows(
+        () => client.from('users').select('id, username, username_key, learning_level'),
+        'getQuestionCacheDiagnostics.users'
+    );
+    const usersById = new Map(userRows.map(row => [row.id, row]));
+    const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
+    const groups = new Map();
+    for (const row of rows) {
+        const rowUser = usersById.get(row.user_id);
+        const statusRecord = toQuestionCacheStatusRecord(row, {
+            user: rowUser,
+            word: wordsById.get(row.word_id),
+        });
+        const fields = statusRecord.fields;
+        const key = `${String(fields.user || '').trim().toLowerCase()}::${fields.level}::${fields.round_type}`;
+        if (!groups.has(key)) {
+            groups.set(key, {
+                userId: fields.user,
+                level: fields.level,
+                roundType: fields.round_type,
+                type1Ready: 0,
+                type2Ready: 0,
+                type3Ready: 0,
+                totalReady: 0,
+            });
+        }
+        if (getCacheQuestionReadinessIssues(statusRecord).length) continue;
+        const group = groups.get(key);
+        const type = Number(fields.question_type);
+        if (type === 1) group.type1Ready += 1;
+        if (type === 2) group.type2Ready += 1;
+        if (type === 3) group.type3Ready += 1;
+        group.totalReady += 1;
+    }
+    const results = [...groups.values()]
+        .map(group => ({
+            ...group,
+            selectedReady: Math.min(group.totalReady, 10),
+            quotaCanBeMet: group.totalReady >= 10,
+            willUseFallback: group.totalReady < 10,
+        }))
+        .sort((a, b) =>
+            String(a.userId).localeCompare(String(b.userId)) ||
+            String(a.level).localeCompare(String(b.level)) ||
+            String(a.roundType).localeCompare(String(b.roundType))
+        );
+    return { configured: true, results };
+}
+
 async function getQuestionCache(username, level, roundType) {
     return getQuestionCacheWithClient(supabase, username, level, roundType);
 }
@@ -306,6 +556,100 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
             source_word_record_id: row.source_word_record_id || word?.feishu_record_id || row.word_id,
         };
     });
+}
+
+function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now() }) {
+    const wordText = String(word.word || '').trim().toLowerCase();
+    if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
+    const meaning = word.meaning_zh || word.meaning_en || wordText;
+    const templateContext = level === ELEMENTARY_LEVEL
+        ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
+        : '';
+    const sourceContext = templateContext || word.context_en || '';
+    if (!hasWholeWord(sourceContext, wordText)) return [];
+    const context = blankWordInContext(sourceContext, wordText);
+    const fallbackDistractors = level === ELEMENTARY_LEVEL ? generateElementaryDistractors(wordText) : [];
+    const distractors = uniqueWords([
+        ...fallbackDistractors,
+        ...(word.distractors || []),
+        ...(word.old_distractors || []),
+    ], wordText).slice(0, 3);
+    if (distractors.length < 3) return [];
+    const optionWords = shuffled([wordText, ...distractors]);
+    const letters = ['A', 'B', 'C', 'D'];
+    const answer = letters[optionWords.indexOf(wordText)];
+    const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
+    const optionMeanings = optionWords.map(option => option === wordText ? String(meaning || wordText) : option);
+    const base = {
+        user_id: user.id,
+        word_id: word.id,
+        source_word_record_id: word.feishu_record_id || word.id,
+        level,
+        quality_status: 'ready',
+        question_type: '1',
+        question_text: context,
+        context_zh: word.context_zh || null,
+        suffix: null,
+        options,
+        answer,
+        option_meanings: optionMeanings,
+        correct_meaning: String(meaning || ''),
+        ai_audit_status: 'skipped',
+        source_version: 'supabase-rebuild-v1',
+        used_count: 0,
+        generated_at: toIsoString(now),
+        last_used_at: null,
+    };
+    const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
+    return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+}
+
+async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return { deleted: 0 };
+    let query = client
+        .from('question_cache')
+        .delete()
+        .eq('user_id', user.id);
+    if (type !== null && type !== undefined) query = query.eq('question_type', String(type));
+    const { data, error } = await query.select('id');
+    ensureNoError(error, 'deleteQuestionCacheRows');
+    return { deleted: (data || []).length };
+}
+
+async function rebuildQuestionCacheForUserWithClient(client, username) {
+    const user = await requireUserByUsername(client, username);
+    const level = user.learning_level || null;
+    if (!level) return { configured: true, skipped: true, level: null, count: 0 };
+    const words = await getWordsForUserWithClient(client, username, level);
+    const candidateWords = words
+        .filter(row => row.mastery_status !== 'mastered')
+        .sort((left, right) => toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at));
+    let deleteQuery = client
+        .from('question_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('level', level);
+    const { error: deleteError } = await deleteQuery.select('id');
+    ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
+    const rows = [];
+    for (const word of candidateWords) {
+        rows.push(...buildCacheQuestionRowsForWord({ user, word, level }));
+    }
+    if (rows.length) {
+        const { error } = await client
+            .from('question_cache')
+            .insert(rows)
+            .select('id');
+        ensureNoError(error, 'rebuildQuestionCache.insert');
+    }
+    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    return {
+        configured: true,
+        level,
+        count: rows.length,
+        status: summarizeCacheStatus(statusRows),
+    };
 }
 
 async function resolveWordRows(client, userId, word, options = {}) {
@@ -567,6 +911,9 @@ function createSupabaseDataAdapter(client = supabase) {
         name: 'supabase',
         canonicalUsernameKey,
         getUserByUsername: username => getUserByUsernameWithClient(client, username),
+        getUserLearningSettings: username => getUserLearningSettingsWithClient(client, username),
+        updateUserLearningSettings: (username, requestedLevel) =>
+            updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
         getQuestionCache: (username, level, roundType) => getQuestionCacheWithClient(client, username, level, roundType),
@@ -574,6 +921,10 @@ function createSupabaseDataAdapter(client = supabase) {
         updateWordMastery: (username, word, newMasteryStatus, options) =>
             updateWordMasteryWithClient(client, username, word, newMasteryStatus, options),
         incrementCacheUsedCount: cacheId => incrementCacheUsedCountWithClient(client, cacheId),
+        getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
+        getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
+        deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
+        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
     };
@@ -586,12 +937,18 @@ module.exports = {
     canonicalUsernameKey,
     createSupabaseDataAdapter,
     getUserByUsername: defaultAdapter.getUserByUsername,
+    getUserLearningSettings: defaultAdapter.getUserLearningSettings,
+    updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
     getQuestionCache: defaultAdapter.getQuestionCache,
     submitAssessment: defaultAdapter.submitAssessment,
     updateWordMastery: defaultAdapter.updateWordMastery,
     incrementCacheUsedCount: defaultAdapter.incrementCacheUsedCount,
+    getQuestionCacheStatus: defaultAdapter.getQuestionCacheStatus,
+    getQuestionCacheDiagnostics: defaultAdapter.getQuestionCacheDiagnostics,
+    deleteQuestionCacheRows: defaultAdapter.deleteQuestionCacheRows,
+    rebuildQuestionCacheForUser: defaultAdapter.rebuildQuestionCacheForUser,
     addWord: defaultAdapter.addWord,
     addWords: defaultAdapter.addWords,
 };

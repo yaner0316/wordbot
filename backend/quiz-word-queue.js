@@ -108,6 +108,7 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
 
 function buildQuizWordQueue({
     wordRecords,
+    cacheRows = [],
     assessmentRecords = [],
     userId,
     level = '',
@@ -117,10 +118,18 @@ function buildQuizWordQueue({
 }) {
     const assessmentSummary = buildAssessmentSummary(assessmentRecords, { userId, now });
     const masteryByRecordId = buildMasteryByRecordId(wordRecords, assessmentRecords);
+    const readyCacheRecordIds = level
+        ? buildReadyCacheRecordIds(cacheRows, { userId, level, roundType: 'primary' })
+        : new Set();
     const targetUser = userKey(userId);
 
     const eligible = (wordRecords || [])
         .filter(record => userKey(record.fields?.user) === targetUser)
+        .filter(record => {
+            if (!level) return true;
+            const recordLevel = fieldValue(record.fields?.Level).trim();
+            return !recordLevel || recordLevel === level || readyCacheRecordIds.has(record.record_id);
+        })
         .filter(record => isPastCooldown(record, { now, minAgeMs }))
         .sort((left, right) => recordTimestamp(left) - recordTimestamp(right))
         .filter(record => !masteryByRecordId.get(record.record_id)?.mastered)
