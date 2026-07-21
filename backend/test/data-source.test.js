@@ -322,3 +322,91 @@ test('supabase quiz session survives data-source module reload smoke path', asyn
     assert.equal(result.total, 10);
     assert.equal(sessionStore.has(`qiuqiu:${quiz.testId}`), false);
 });
+test('repeated submit after the first request deletes the session returns the stored result without new assessments', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word${index + 1}`,
+        record_id: `rec-word-${index + 1}`,
+        context: `Context ${index + 1}`,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    }));
+    let sessionAvailable = true;
+    const assessments = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => sessionAvailable ? { questions } : null,
+            getAssessmentsForUser: async () => assessments,
+            submitAssessment: async input => {
+                const record = {
+                    id: `assessment-${assessments.length + 1}`,
+                    test_id: input.testId,
+                    word_snapshot: input.word,
+                    source_word_record_id: input.sourceWordRecordId,
+                    submitted_answer: input.yourAnswer,
+                    answer_confidence: input.confidence,
+                    correct_answer: input.correctAnswer,
+                    is_correct: input.correctness,
+                    assessed_at: new Date().toISOString(),
+                };
+                assessments.push(record);
+                return record;
+            },
+            deleteQuizSession: async () => {
+                sessionAvailable = false;
+                return { deleted: 1 };
+            },
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+    const answers = questions.map(() => ({ option: 0, confidence: 'sure' }));
+
+    const firstResult = await dataSource.submitAnswers('qiuqiu', 'real-repeat-submit', answers);
+    const secondResult = await dataSource.submitAnswers('qiuqiu', 'real-repeat-submit', answers);
+
+    assert.equal(firstResult.alreadySubmitted, false);
+    assert.equal(secondResult.alreadySubmitted, true);
+    assert.equal(secondResult.total, 10);
+    assert.equal(secondResult.correct, 10);
+    assert.equal(assessments.length, 10);
+});
+
+test('partial persisted assessment does not become a false quiz session not found error', async () => {
+    const partial = [{
+        id: 'assessment-1',
+        test_id: 'real-partial-submit',
+        word_snapshot: 'word1',
+        source_word_record_id: 'rec-word-1',
+        submitted_answer: 'A',
+        answer_confidence: 'sure',
+        correct_answer: 'A',
+        is_correct: 'correct',
+    }];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForUser: async () => partial,
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-partial-submit', [{ option: 0 }]),
+        error => error.message === 'QUIZ_SUBMISSION_INCOMPLETE'
+    );
+});
+
+test('missing session with no persisted assessments still returns QUIZ_SESSION_NOT_FOUND', async () => {
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForUser: async () => [],
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-missing-session', []),
+        error => error.message === 'QUIZ_SESSION_NOT_FOUND'
+    );
+});

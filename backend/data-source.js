@@ -5,10 +5,13 @@ const {
     toFeishuAssessmentRecord,
     toFeishuCacheRow,
 } = require('./quiz-adapter');
+const { rebuildSubmittedResult } = require('./submission-coordinator');
 
 const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
 const quizQuestionsByTestId = new Map();
+const quizSubmitLocks = new Map();
 let lastQuizSessionCleanupAt = 0;
+const QUIZ_QUESTION_COUNT = 10;
 
 function normalizeDataSource(value) {
     const normalized = String(value || '').trim().toLowerCase();
@@ -211,7 +214,31 @@ function loadSupabaseDataSource() {
         return quiz;
     }
 
-    async function submitAnswers(user, testId, answers) {
+    function assessmentTestId(row) {
+        return String(row?.test_id || row?.fields?.test_id || '').trim();
+    }
+
+    function rebuildSupabaseQuizResult(testId, assessments, expectedCount) {
+        const records = assessments
+            .filter(row => assessmentTestId(row) === testId)
+            .slice(0, expectedCount);
+        if (records.length < expectedCount) {
+            if (records.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
+            return null;
+        }
+        return rebuildSubmittedResult(
+            records.map(row => toFeishuAssessmentRecord(row, { username: '' })),
+            value => String(value || '').trim().toLowerCase() === 'correct'
+        );
+    }
+
+    async function getExistingSupabaseQuizResult(user, testId, expectedCount) {
+        if (typeof supabaseData.getAssessmentsForUser !== 'function') return null;
+        const assessments = await supabaseData.getAssessmentsForUser(user);
+        return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
+    }
+
+    async function submitAnswersOnce(user, testId, answers) {
         const key = `${normalizeUserKey(user)}:${testId}`;
         let questions = quizQuestionsByTestId.get(key);
         if (!questions) {
@@ -220,9 +247,13 @@ function loadSupabaseDataSource() {
                 questions = session?.questions;
             }
             if (!questions) {
+                const existingResult = await getExistingSupabaseQuizResult(user, testId, QUIZ_QUESTION_COUNT);
+                if (existingResult) return existingResult;
                 throw new Error('QUIZ_SESSION_NOT_FOUND');
             }
         }
+        const existingResult = await getExistingSupabaseQuizResult(user, testId, questions.length);
+        if (existingResult) return existingResult;
         const result = await submitQuizWithDataSource({
             username: user,
             testId,
@@ -235,6 +266,20 @@ function loadSupabaseDataSource() {
             await supabaseData.deleteQuizSession(user, testId);
         }
         return result;
+    }
+
+    async function submitAnswers(user, testId, answers) {
+        const key = `${normalizeUserKey(user)}:${testId}`;
+        const previous = quizSubmitLocks.get(key) || Promise.resolve();
+        const task = previous
+            .catch(() => {})
+            .then(() => submitAnswersOnce(user, testId, answers));
+        quizSubmitLocks.set(key, task);
+        try {
+            return await task;
+        } finally {
+            if (quizSubmitLocks.get(key) === task) quizSubmitLocks.delete(key);
+        }
     }
 
     async function addWord(...args) {
