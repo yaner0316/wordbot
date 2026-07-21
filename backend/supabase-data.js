@@ -633,7 +633,7 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
     });
 }
 
-function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now() }) {
+function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
     const meaning = word.meaning_zh || word.meaning_en || wordText;
@@ -643,9 +643,9 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const sourceContext = templateContext || word.context_en || '';
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
-    const fallbackDistractors = level === ELEMENTARY_LEVEL ? generateElementaryDistractors(wordText) : [];
+    const levelFallbackDistractors = level === ELEMENTARY_LEVEL ? generateElementaryDistractors(wordText) : fallbackDistractors;
     const distractors = uniqueWords([
-        ...fallbackDistractors,
+        ...levelFallbackDistractors,
         ...(word.distractors || []),
         ...(word.old_distractors || []),
     ], wordText).slice(0, 3);
@@ -712,8 +712,9 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
+    const fallbackDistractors = candidateWords.map(row => row.word);
     for (const word of candidateWords) {
-        rows.push(...buildCacheQuestionRowsForWord({ user, word, level }));
+        rows.push(...buildCacheQuestionRowsForWord({ user, word, level, fallbackDistractors }));
     }
     if (rows.length) {
         const { error } = await client

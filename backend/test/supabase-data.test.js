@@ -554,7 +554,7 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
     assert.equal(client.db.assessments[0].review_status, 'complete');
 });
 
-test('rebuildQuestionCacheForUser inherits the selected level for unassigned words', async () => {
+test('rebuildQuestionCacheForUser inherits level and fallback distractors for unassigned words', async () => {
     const JUNIOR_HIGH = String.fromCharCode(0x4e2d, 0x5b66);
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: JUNIOR_HIGH }],
@@ -567,7 +567,7 @@ test('rebuildQuestionCacheForUser inherits the selected level for unassigned wor
             meaning_zh: `Meaning ${index + 1}`,
             level: null,
             context_en: `This sentence contains ${word}.`,
-            distractors: ['alpha', 'bravo', 'charlie'],
+            distractors: [],
             old_distractors: [],
             mastery_status: 'pending',
             entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
