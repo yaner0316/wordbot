@@ -566,7 +566,7 @@ test('rebuildQuestionCacheForUser inherits level and fallback distractors for un
             meaning_en: `Meaning ${index + 1}`,
             meaning_zh: `Meaning ${index + 1}`,
             level: null,
-            context_en: `This sentence contains ${word}.`,
+            context_en: index < 8 ? `This sentence contains ${word}.` : null,
             distractors: [],
             old_distractors: [],
             mastery_status: 'pending',

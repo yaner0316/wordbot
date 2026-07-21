@@ -640,7 +640,8 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const templateContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
         : '';
-    const sourceContext = templateContext || word.context_en || '';
+    const fallbackContext = level === ELEMENTARY_LEVEL ? '' : 'The student wrote ' + wordText + ' in the sentence.';
+    const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
     const levelFallbackDistractors = level === ELEMENTARY_LEVEL ? generateElementaryDistractors(wordText) : fallbackDistractors;
