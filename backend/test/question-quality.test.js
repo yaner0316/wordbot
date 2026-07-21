@@ -152,18 +152,31 @@ test('elementary fill-in rejects weak distractor shape', () => {
 });
 
 test('elementary fill-in rejects ambiguous hair-color contexts', () => {
-    const question = {
-        type: 1,
-        level: String.fromCharCode(0x5c0f, 0x5b66),
-        word: 'blond',
-        context: 'The boy has _____ hair in the picture.',
-        correctMeaning: 'having light yellow hair',
-        options: ['A. red', 'B. blond', 'C. black', 'D. brown'],
-        answer: 'B',
-    };
-    const issues = getQuestionQualityIssues(question);
-    assert.equal(isQuestionQualityAcceptable(question), false);
-    assert.ok(issues.includes('ambiguous_elementary_context'), issues.join(','));
+    const samples = [
+        {
+            type: 1,
+            level: String.fromCharCode(0x5c0f, 0x5b66),
+            word: 'blond',
+            context: 'The boy has _____ hair in the picture.',
+            correctMeaning: 'having light yellow hair',
+            options: ['A. red', 'B. blond', 'C. black', 'D. brown'],
+            answer: 'B',
+        },
+        {
+            type: 1,
+            level: String.fromCharCode(0x5c0f, 0x5b66),
+            word: 'blond',
+            context: 'In class, the word _____ means A pale yellowish color, especially said of hair color.',
+            correctMeaning: 'having light yellow hair',
+            options: ['A. blond', 'B. black', 'C. brown', 'D. red'],
+            answer: 'A',
+        },
+    ];
+    for (const question of samples) {
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false);
+        assert.ok(issues.includes('ambiguous_elementary_context'), issues.join(','));
+    }
 });
 
 test('elementary definition questions are always rejected', () => {

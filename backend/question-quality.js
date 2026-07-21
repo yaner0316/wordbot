@@ -254,7 +254,7 @@ function hasAmbiguousElementaryContext(question) {
     }
 
     const hairColorCount = optionWords.filter(item => ELEMENTARY_HAIR_COLOR_WORDS.has(item)).length;
-    if (hairColorCount >= 3 && /has _____ hair/.test(context)) return true;
+    if (hairColorCount >= 3) return true;
 
     const clothingCount = optionWords.filter(item => ELEMENTARY_CLOTHING_WORDS.has(item)).length;
     const hasWeakClothingContext = [
