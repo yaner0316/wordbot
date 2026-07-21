@@ -13,7 +13,6 @@ const {
 } = require('./question-cache');
 const {
     generateElementaryDistractors,
-    generateElementaryTemplateContext,
 } = require('./elementary-context');
 const {
     DEFAULT_LEARNING_LEVEL,
@@ -153,6 +152,11 @@ function hasWholeWord(context, word) {
     const key = String(word || '').trim();
     if (!key || !/^[a-z]+$/i.test(key)) return false;
     return new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(String(context || ''));
+}
+
+function fallbackElementaryContext(word) {
+    const key = String(word || '').trim().toLowerCase();
+    return `Please read ${key} aloud.`;
 }
 
 function blankWordInContext(context, word) {
@@ -637,14 +641,13 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
     const meaning = word.meaning_zh || word.meaning_en || wordText;
-    const templateContext = level === ELEMENTARY_LEVEL
-        ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
-        : '';
-    const fallbackContext = level === ELEMENTARY_LEVEL ? '' : 'The student wrote ' + wordText + ' in the sentence.';
-    const sourceContext = templateContext || word.context_en || fallbackContext;
+    const fallbackContext = level === ELEMENTARY_LEVEL ? fallbackElementaryContext(wordText) : 'The student wrote ' + wordText + ' in the sentence.';
+    const sourceContext = level === ELEMENTARY_LEVEL ? fallbackContext : (word.context_en || fallbackContext);
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
-    const levelFallbackDistractors = level === ELEMENTARY_LEVEL ? generateElementaryDistractors(wordText) : fallbackDistractors;
+    const levelFallbackDistractors = level === ELEMENTARY_LEVEL
+        ? [...generateElementaryDistractors(wordText), ...fallbackDistractors, 'apple', 'book', 'cat', 'dog', 'house', 'school']
+        : fallbackDistractors;
     const distractors = uniqueWords([
         ...levelFallbackDistractors,
         ...(word.distractors || []),

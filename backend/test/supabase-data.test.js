@@ -584,3 +584,34 @@ test('rebuildQuestionCacheForUser inherits level and fallback distractors for un
     assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'primary').length, 10);
     assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'review').length, 10);
 });
+
+test('rebuildQuestionCacheForUser falls back for an unknown elementary word', async () => {
+    const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+    const words = ['corn', 'cheek', 'roll', 'puppy', 'kitten', 'chick', 'climb', 'sweater', 'clap', 'abstract'];
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'Draggy', username_key: 'draggy', learning_level: ELEMENTARY }],
+        words: words.map((word, index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning of ${word}`,
+            meaning_zh: `Meaning of ${word}`,
+            level: null,
+            context_en: word === 'abstract' ? null : '',
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('Draggy');
+
+    assert.equal(result.level, ELEMENTARY);
+    assert.equal(result.count, 20);
+    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 10);
+});
