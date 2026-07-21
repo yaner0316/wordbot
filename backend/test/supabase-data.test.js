@@ -354,6 +354,10 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
     assert.equal(result.configured, true);
     assert.equal(result.level, ELEMENTARY);
     assert.equal(result.count, 20);
+    const cornQuestion = client.db.question_cache.find(row =>
+        row.word_id === 'word-1' && row.round_type === 'primary'
+    );
+    assert.match(cornQuestion.question_text, /dinner today/);
     assert.equal(client.db.question_cache.filter(row =>
         row.user_id === 'user-1' &&
         row.level === ELEMENTARY &&

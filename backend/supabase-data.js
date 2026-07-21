@@ -13,6 +13,7 @@ const {
 } = require('./question-cache');
 const {
     generateElementaryDistractors,
+    generateElementaryTemplateContext,
 } = require('./elementary-context');
 const {
     DEFAULT_LEARNING_LEVEL,
@@ -641,8 +642,11 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
     const meaning = word.meaning_zh || word.meaning_en || wordText;
+    const templateContext = level === ELEMENTARY_LEVEL
+        ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
+        : '';
     const fallbackContext = level === ELEMENTARY_LEVEL ? fallbackElementaryContext(wordText) : 'The student wrote ' + wordText + ' in the sentence.';
-    const sourceContext = level === ELEMENTARY_LEVEL ? fallbackContext : (word.context_en || fallbackContext);
+    const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
     const levelFallbackDistractors = level === ELEMENTARY_LEVEL
@@ -680,7 +684,13 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
         last_used_at: null,
     };
     const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
-    return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+    const readyRows = rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+    if (readyRows.length || level !== ELEMENTARY_LEVEL || sourceContext === fallbackContext) return readyRows;
+    const fallbackRows = rows.map(row => ({
+        ...row,
+        question_text: blankWordInContext(fallbackContext, wordText),
+    }));
+    return fallbackRows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
 }
 
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
