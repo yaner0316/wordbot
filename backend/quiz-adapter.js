@@ -309,6 +309,24 @@ async function submitQuizWithDataSource({
     let correct = 0;
     const results = [];
     const insertedAssessments = [];
+    const shouldUpdateMastery = isRealAssessment(testId) && typeof dataSource.updateWordMastery === 'function';
+    let wordRows = [];
+    let baseAssessmentRows = [];
+    let sourceRecordIdByWordId = new Map();
+    let wordRecords = [];
+    if (shouldUpdateMastery) {
+        wordRows = typeof dataSource.getWordsForUser === 'function'
+            ? await dataSource.getWordsForUser(username)
+            : [];
+        const sourceWordRecordIds = [...new Set(questions
+            .map(question => String(question.record_id || question.wordRecordId || '').trim())
+            .filter(Boolean))];
+        baseAssessmentRows = typeof dataSource.getMasteryAssessmentsForWords === 'function'
+            ? await dataSource.getMasteryAssessmentsForWords(username, sourceWordRecordIds)
+            : await dataSource.getAssessmentsForUser(username);
+        sourceRecordIdByWordId = buildWordSourceIdMap(wordRows);
+        wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username }));
+    }
 
     for (let index = 0; index < questions.length; index++) {
         const question = questions[index];
@@ -348,28 +366,12 @@ async function submitQuizWithDataSource({
             confidence: submitted.confidence,
         });
 
-        if (isRealAssessment(testId) && typeof dataSource.updateWordMastery === 'function') {
-            const [wordRows, assessmentRows] = await Promise.all([
-                dataSource.getWordsForUser(username),
-                dataSource.getAssessmentsForUser(username),
-            ]);
-            const sourceRecordIdByWordId = buildWordSourceIdMap(wordRows);
-            const wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username }));
+        if (shouldUpdateMastery) {
+            const assessmentRows = [...baseAssessmentRows, ...insertedAssessments];
             const existingAssessmentRecords = assessmentRows.map(row =>
                 toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId })
             );
-            const insertedAlreadyLoaded = assessmentRows.some(row =>
-                (row.id && inserted.id && row.id === inserted.id) ||
-                (row.test_id === inserted.test_id &&
-                    row.source_word_record_id === inserted.source_word_record_id &&
-                    row.submitted_answer === inserted.submitted_answer)
-            );
-            const assessmentRecords = insertedAlreadyLoaded
-                ? existingAssessmentRecords
-                : [
-                    ...existingAssessmentRecords,
-                    toFeishuAssessmentRecord(inserted, { username, sourceRecordIdByWordId }),
-                ];
+            const assessmentRecords = existingAssessmentRecords;
             const sameSpelling = wordRecords.filter(record =>
                 String(record.fields?.Word || '').trim().toLowerCase() === String(question.word || '').trim().toLowerCase()
             );

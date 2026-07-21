@@ -410,3 +410,72 @@ test('missing session with no persisted assessments still returns QUIZ_SESSION_N
         error => error.message === 'QUIZ_SESSION_NOT_FOUND'
     );
 });
+
+test('supabase submit idempotency reads only assessments for the submitted test id', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word${index + 1}`,
+        record_id: `rec-word-${index + 1}`,
+        context: `Context ${index + 1}`,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    }));
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => ({ questions }),
+            getAssessmentsForTest: async (username, testId) => {
+                calls.push(['getAssessmentsForTest', username, testId]);
+                return [];
+            },
+            getMasteryAssessmentsForWords: async (username, sourceWordRecordIds) => {
+                calls.push(['getMasteryAssessmentsForWords', username, sourceWordRecordIds]);
+                return [];
+            },
+            getAssessmentsForUser: async () => {
+                throw new Error('full user assessment scan should not run during submit');
+            },
+            submitAssessment: async input => ({
+                id: `assessment-${input.sourceWordRecordId}`,
+                test_id: input.testId,
+                word_snapshot: input.word,
+                source_word_record_id: input.sourceWordRecordId,
+                submitted_answer: input.yourAnswer,
+                answer_confidence: input.confidence,
+                correct_answer: input.correctAnswer,
+                is_correct: input.correctness,
+                assessed_at: new Date().toISOString(),
+            }),
+            deleteQuizSession: async () => ({ deleted: 1 }),
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+
+    const result = await dataSource.submitAnswers(
+        'qiuqiu',
+        'real-fast-submit',
+        questions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(result.total, 10);
+    assert.ok(calls.some(call => call[0] === 'getAssessmentsForTest'));
+});
+
+test('supabase mode uses supabase review functions instead of Feishu fallback', async () => {
+    const dataSource = loadDataSource({
+        envValue: 'supabase',
+        supabaseExports: {
+            createReviewRound: async input => ({ source: 'supabase-review', input }),
+            prebuildWrongQuestionCache: async input => ({ source: 'supabase-wrong-cache', input }),
+        },
+        feishuExports: {
+            createReviewRound: async input => ({ source: 'feishu-review', input }),
+            prebuildWrongQuestionCache: async input => ({ source: 'feishu-wrong-cache', input }),
+        },
+    });
+
+    assert.equal((await dataSource.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-1' })).source, 'supabase-review');
+    assert.equal((await dataSource.prebuildWrongQuestionCache({ userId: 'qiuqiu', testId: 'real-1', result: {} })).source, 'supabase-wrong-cache');
+});

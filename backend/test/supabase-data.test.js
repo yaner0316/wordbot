@@ -441,3 +441,115 @@ test('quiz session persistence ignores expired sessions and deletes submitted se
     }), { deleted: 1 });
     assert.deepEqual(client.db.quiz_sessions, []);
 });
+
+test('getAssessmentsForTest returns only rows for one user and test id', async () => {
+    const client = createFakeSupabase({
+        users: [
+            { id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' },
+            { id: 'user-2', username: 'other', username_key: 'other' },
+        ],
+        assessments: [
+            { id: 'a-1', user_id: 'user-1', test_id: 'real-target', word_snapshot: 'Apple', source_word_record_id: 'rec-word-1', question_type: '1', is_correct: 'correct', assessed_at: '2026-07-21T00:00:00.000Z', options: [] },
+            { id: 'a-2', user_id: 'user-1', test_id: 'real-other', word_snapshot: 'Pear', source_word_record_id: 'rec-word-2', question_type: '1', is_correct: 'wrong', assessed_at: '2026-07-21T00:01:00.000Z', options: [] },
+            { id: 'a-3', user_id: 'user-2', test_id: 'real-target', word_snapshot: 'Desk', source_word_record_id: 'rec-word-3', question_type: '1', is_correct: 'wrong', assessed_at: '2026-07-21T00:02:00.000Z', options: [] },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const rows = await adapter.getAssessmentsForTest('qiuqiu', 'real-target');
+
+    assert.deepEqual(rows.map(row => row.id), ['a-1']);
+});
+
+test('createReviewRound builds a Supabase review round from wrong submitted assessments', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'Apple',
+            meaning_en: 'a fruit',
+            meaning_zh: 'ƻ��',
+            level: MIDDLE,
+            mastery_status: 'pending',
+            entered_at: '2026-07-18T00:00:00.000Z',
+        }],
+        assessments: [{
+            id: 'a-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            source_word_record_id: 'rec-word-1',
+            test_id: 'real-source',
+            word_snapshot: 'Apple',
+            question_type: '1',
+            question_text: 'I ate an _____.',
+            options: ['A. Apple', 'B. Pear', 'C. Chair', 'D. Desk'],
+            correct_answer: 'A',
+            submitted_answer: 'B',
+            answer_confidence: 'sure',
+            is_correct: 'wrong',
+            assessed_at: '2026-07-21T00:00:00.000Z',
+            learning_day: '2026-07-21',
+            level: MIDDLE,
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const round = await adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' });
+
+    assert.equal(round.sourceTestId, 'real-source');
+    assert.equal(round.questions.length, 1);
+    assert.equal(round.questions[0].type, 4);
+    assert.equal(round.questions[0].correctMeaning, 'ƻ��');
+    const reviewRows = client.db.assessments.filter(row => row.test_id === round.reviewId);
+    assert.equal(reviewRows.length, 1);
+    assert.equal(reviewRows[0].assessment_kind, 'review');
+    assert.equal(reviewRows[0].source_test_id, 'real-source');
+    assert.equal(reviewRows[0].review_status, 'active');
+});
+
+
+test('submitReviewRound scores Supabase type-four review rows', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [],
+        assessments: [{
+            id: 'review-row-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            source_word_record_id: 'rec-word-1',
+            test_id: 'real-review-r1',
+            word_snapshot: 'Apple',
+            question_type: '4',
+            question_text: '',
+            options: [],
+            correct_answer: 'apple',
+            submitted_answer: null,
+            answer_confidence: null,
+            is_correct: null,
+            assessed_at: '2026-07-21T00:00:00.000Z',
+            learning_day: '2026-07-21',
+            assessment_kind: 'review',
+            review_round: '1',
+            review_status: 'active',
+            source_test_id: 'real-source',
+            parent_review_id: '',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.submitReviewRound({
+        userId: 'qiuqiu',
+        reviewId: 'real-review-r1',
+        answers: [{ text: 'apple', confidence: 'sure' }],
+    });
+
+    assert.equal(result.reviewId, 'real-review-r1');
+    assert.equal(result.correct, 1);
+    assert.equal(result.total, 1);
+    assert.equal(result.complete, true);
+    assert.equal(client.db.assessments[0].submitted_answer, 'apple');
+    assert.equal(client.db.assessments[0].is_correct, 'correct');
+    assert.equal(client.db.assessments[0].review_status, 'complete');
+});

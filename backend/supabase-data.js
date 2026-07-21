@@ -4,7 +4,9 @@ const crypto = require('crypto');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const supabase = require('./supabase-client');
-const { isRealAssessment } = require('./assessment-mode');
+const { isRealAssessment, getAssessmentMode } = require('./assessment-mode');
+const { isMeaningAnswerCorrect } = require('./meaning-review');
+const { summarizeReviewRound } = require('./review-session');
 const {
     getCacheQuestionReadinessIssues,
     summarizeCacheStatus,
@@ -315,10 +317,73 @@ async function getAssessmentsForUserWithClient(client, username) {
             .order('id', { ascending: true }),
         'getAssessmentsForUser'
     );
-    return rows.map((row) => ({
+    return decorateAssessmentRows(rows, user);
+}
+
+function decorateAssessmentRows(rows, user) {
+    return (rows || []).map((row) => ({
         ...row,
-        username: user.username,
-        username_key: user.username_key,
+        username: user?.username || row.username || '',
+        username_key: user?.username_key || row.username_key || '',
+        correctness: row.is_correct,
+        timestamp: row.assessed_at,
+    }));
+}
+
+async function getAssessmentsForTestWithClient(client, username, testId) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return [];
+    const rows = await fetchAllRows(
+        () => client
+            .from('assessments')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('test_id', requireTestId(testId))
+            .order('assessed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getAssessmentsForTest'
+    );
+    return decorateAssessmentRows(rows, user);
+}
+
+async function getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds = []) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return [];
+    const ids = [...new Set((sourceWordRecordIds || []).map(id => String(id || '').trim()).filter(Boolean))];
+    if (!ids.length) return [];
+    const rows = await fetchAllRows(
+        () => client
+            .from('assessments')
+            .select('*')
+            .eq('user_id', user.id)
+            .in('source_word_record_id', ids)
+            .order('assessed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getMasteryAssessmentsForWords'
+    );
+    return decorateAssessmentRows(rows, user);
+}
+
+async function getAssessmentsByTestIdWithClient(client, testId) {
+    const rows = await fetchAllRows(
+        () => client
+            .from('assessments')
+            .select('*')
+            .eq('test_id', requireTestId(testId))
+            .order('assessed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getAssessmentsByTestId'
+    );
+    if (!rows.length) return [];
+    const users = await fetchAllRows(
+        () => client.from('users').select('*').in('id', [...new Set(rows.map(row => row.user_id).filter(Boolean))]),
+        'getAssessmentsByTestId.users'
+    );
+    const usersById = new Map(users.map(user => [user.id, user]));
+    return rows.map(row => ({
+        ...row,
+        username: usersById.get(row.user_id)?.username || '',
+        username_key: usersById.get(row.user_id)?.username_key || '',
         correctness: row.is_correct,
         timestamp: row.assessed_at,
     }));
@@ -769,6 +834,184 @@ async function submitAssessmentWithClient(client, input) {
     return data;
 }
 
+function isSubmittedAssessmentRow(row) {
+    return row && row.submitted_answer !== null && row.submitted_answer !== undefined && row.is_correct;
+}
+
+function isCorrectAssessmentRow(row) {
+    return String(row?.is_correct || '').trim().toLowerCase() === 'correct';
+}
+
+async function getWordInfoForReview(client, userId, row) {
+    let query = client.from('words').select('*');
+    if (row.word_id) query = query.eq('id', row.word_id);
+    else query = query.eq('user_id', userId).eq('feishu_record_id', row.source_word_record_id);
+    const { data, error } = await query.maybeSingle();
+    ensureNoError(error, 'getWordInfoForReview');
+    if (!data) throw new Error('Word record not found for review generation');
+    return data;
+}
+
+async function findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId = '') {
+    const rows = await fetchAllRows(
+        () => client
+            .from('assessments')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('source_test_id', sourceTestId)
+            .eq('parent_review_id', parentReviewId)
+            .eq('review_status', 'active')
+            .order('assessed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'findExistingReviewRound'
+    );
+    if (!rows.length) return null;
+    const reviewId = rows[0].test_id;
+    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(rows, user), reviewId);
+}
+
+function buildSupabaseReviewRoundResponse(rows, reviewId) {
+    if (!rows.length) return null;
+    const first = rows[0];
+    return {
+        reviewId,
+        sourceTestId: first.source_test_id || '',
+        parentReviewId: first.parent_review_id || '',
+        round: Number(first.review_round || 1),
+        mode: getAssessmentMode(reviewId),
+        status: first.review_status || 'active',
+        questions: rows.map(row => ({
+            recordId: row.source_word_record_id || row.word_id || '',
+            type: Number(row.question_type) || 4,
+            word: row.word_snapshot || '',
+            context: row.question_text || '',
+            options: Array.isArray(row.options) ? row.options : [],
+            answer: Number(row.question_type) === 4 ? undefined : row.correct_answer,
+            answerMode: Number(row.question_type) === 4 ? 'cn_meaning' : undefined,
+            correctMeaning: row.correct_answer || '',
+            correctMeanings: null,
+        })),
+    };
+}
+
+async function createReviewRoundWithClient(client, { userId, sourceTestId, parentReviewId = '' }) {
+    const user = await requireUserByUsername(client, userId);
+    const sourceRows = await getAssessmentsForTestWithClient(client, userId, parentReviewId || sourceTestId);
+    if (!sourceRows.length) throw new Error('Review source records not found');
+    if (!sourceRows.every(row => row.user_id === user.id)) throw new Error('Review source does not belong to current user');
+    if (!sourceRows.every(isSubmittedAssessmentRow)) throw new Error('Source assessment must be submitted before review');
+
+    const existing = await findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId);
+    if (existing) return existing;
+
+    const wrongRows = sourceRows.filter(row => !isCorrectAssessmentRow(row));
+    if (!wrongRows.length) return { sourceTestId, parentReviewId, complete: true, questions: [] };
+
+    const mode = getAssessmentMode(sourceTestId);
+    const reviewId = mode + '-review-' + crypto.randomUUID().split('-')[0];
+    const round = parentReviewId ? Number(sourceRows[0].review_round || 0) + 1 : 1;
+    const assessedAtBase = Date.now();
+    const insertRows = [];
+    for (let index = 0; index < wrongRows.length; index++) {
+        const row = wrongRows[index];
+        const word = await getWordInfoForReview(client, user.id, row);
+        const correctMeaning = String(word.meaning_zh || row.correct_answer || word.meaning_en || word.word || '').trim();
+        const assessedAt = toIsoString(assessedAtBase + index);
+        insertRows.push({
+            user_id: user.id,
+            word_id: word.id,
+            source_word_record_id: row.source_word_record_id || word.feishu_record_id || word.id,
+            test_id: reviewId,
+            is_real_assessment: isRealAssessment(reviewId),
+            assessed_at: assessedAt,
+            learning_day: learningDay(assessedAt),
+            question_type: '4',
+            level: normalizeOptionalLearningLevel(row.level || word.level),
+            word_snapshot: String(row.word_snapshot || word.word || '').trim(),
+            question_text: '',
+            options: [],
+            correct_answer: correctMeaning,
+            submitted_answer: null,
+            answer_confidence: null,
+            is_correct: null,
+            source: 'review',
+            assessment_kind: 'review',
+            review_round: String(round),
+            review_status: 'active',
+            source_question_id: row.id || row.feishu_record_id || '',
+            source_test_id: sourceTestId,
+            parent_review_id: parentReviewId,
+        });
+    }
+    const { data, error } = await client.from('assessments').insert(insertRows).select('*');
+    ensureNoError(error, 'createReviewRound');
+    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(data || [], user), reviewId);
+}
+
+async function prebuildWrongQuestionCacheWithClient() {
+    return { prepared: 0, skipped: true, source: 'supabase-review-round' };
+}
+
+async function submitReviewRoundWithClient(client, { userId, reviewId, answers }) {
+    const user = await requireUserByUsername(client, userId);
+    const rows = await getAssessmentsForTestWithClient(client, userId, reviewId);
+    if (!rows.length) throw new Error('Review records not found');
+    if (!rows.every(row => row.user_id === user.id)) throw new Error('Review source does not belong to current user');
+    const sorted = [...rows].sort((left, right) => Number(toMillis(left.assessed_at)) - Number(toMillis(right.assessed_at)));
+    const results = [];
+    for (let index = 0; index < sorted.length; index++) {
+        const row = sorted[index];
+        const answer = answers?.[index] || {};
+        const submitted = String(answer.text ?? '').trim();
+        const expected = String(row.correct_answer || '').trim();
+        const correct = isMeaningAnswerCorrect(submitted, expected);
+        const { data, error } = await client
+            .from('assessments')
+            .update({
+                submitted_answer: submitted,
+                answer_confidence: answer.confidence || 'sure',
+                is_correct: correct ? 'correct' : 'wrong',
+            })
+            .eq('id', row.id)
+            .select('*')
+            .single();
+        ensureNoError(error, 'submitReviewRound.updateAnswer');
+        results.push({
+            q: index + 1,
+            word: row.word_snapshot || '',
+            recordId: row.source_word_record_id || row.word_id || '',
+            your: submitted,
+            answer: expected,
+            correct,
+            confidence: answer.confidence || '',
+        });
+        Object.assign(row, data || {});
+    }
+    const summary = summarizeReviewRound(results);
+    await Promise.all(sorted.map(row => client
+        .from('assessments')
+        .update({ review_status: summary.status })
+        .eq('id', row.id)
+        .select('*')
+        .single()
+        .then(({ error }) => ensureNoError(error, 'submitReviewRound.updateStatus'))
+    ));
+    const total = results.length;
+    const correct = results.filter(result => result.correct).length;
+    return {
+        mode: getAssessmentMode(reviewId),
+        results,
+        correct,
+        total,
+        accuracy: total ? ((correct / total) * 100).toFixed(1) + '%' : '0.0%',
+        masteredWords: [],
+        ...summary,
+        reviewId,
+        sourceTestId: sorted[0].source_test_id || '',
+        round: Number(sorted[0].review_round || 1),
+    };
+}
+
 const cacheUsageWrites = new Map();
 
 function incrementCacheUsedCountWithClient(client, cacheId) {
@@ -998,6 +1241,9 @@ function createSupabaseDataAdapter(client = supabase) {
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
+        getAssessmentsForTest: (username, testId) => getAssessmentsForTestWithClient(client, username, testId),
+        getMasteryAssessmentsForWords: (username, sourceWordRecordIds) =>
+            getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds),
         getQuestionCache: (username, level, roundType) => getQuestionCacheWithClient(client, username, level, roundType),
         submitAssessment: input => submitAssessmentWithClient(client, input),
         updateWordMastery: (username, word, newMasteryStatus, options) =>
@@ -1017,6 +1263,9 @@ function createSupabaseDataAdapter(client = supabase) {
             deleteQuizSessionWithClient(client, username, testId),
         cleanupExpiredQuizSessions: options =>
             cleanupExpiredQuizSessionsWithClient(client, options),
+        createReviewRound: input => createReviewRoundWithClient(client, input),
+        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input),
+        submitReviewRound: input => submitReviewRoundWithClient(client, input),
     };
 }
 
@@ -1031,6 +1280,8 @@ module.exports = {
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
+    getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
+    getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,
     getQuestionCache: defaultAdapter.getQuestionCache,
     submitAssessment: defaultAdapter.submitAssessment,
     updateWordMastery: defaultAdapter.updateWordMastery,
@@ -1045,4 +1296,7 @@ module.exports = {
     getQuizSession: defaultAdapter.getQuizSession,
     deleteQuizSession: defaultAdapter.deleteQuizSession,
     cleanupExpiredQuizSessions: defaultAdapter.cleanupExpiredQuizSessions,
+    createReviewRound: defaultAdapter.createReviewRound,
+    prebuildWrongQuestionCache: defaultAdapter.prebuildWrongQuestionCache,
+    submitReviewRound: defaultAdapter.submitReviewRound,
 };

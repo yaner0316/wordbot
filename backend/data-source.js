@@ -233,6 +233,10 @@ function loadSupabaseDataSource() {
     }
 
     async function getExistingSupabaseQuizResult(user, testId, expectedCount) {
+        if (typeof supabaseData.getAssessmentsForTest === 'function') {
+            const assessments = await supabaseData.getAssessmentsForTest(user, testId);
+            return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
+        }
         if (typeof supabaseData.getAssessmentsForUser !== 'function') return null;
         const assessments = await supabaseData.getAssessmentsForUser(user);
         return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
