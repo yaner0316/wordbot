@@ -514,6 +514,38 @@ test('createReviewRound builds a Supabase review round from wrong submitted asse
 });
 
 
+test('concurrent review generation returns one active round', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'Apple', meaning_en: 'a fruit', meaning_zh: 'apple', level: MIDDLE, mastery_status: 'pending', entered_at: '2026-07-18T00:00:00.000Z' }],
+        assessments: [{ id: 'a-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-source', word_snapshot: 'Apple', question_type: '1', correct_answer: 'A', submitted_answer: 'B', is_correct: 'wrong', assessed_at: '2026-07-21T00:00:00.000Z', learning_day: '2026-07-21', level: MIDDLE }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+    const [first, second] = await Promise.all([
+        adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' }),
+        adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' }),
+    ]);
+
+    assert.equal(first.reviewId, second.reviewId);
+    assert.equal(client.db.assessments.filter(row => row.assessment_kind === 'review').length, 1);
+});
+
+test('review active, defer, and summary flows use Supabase assessment metadata', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        assessments: [{ id: 'review-row-1', user_id: 'user-1', source_word_record_id: 'rec-word-1', test_id: 'real-review-r1', source_test_id: 'real-source', word_snapshot: 'Apple', question_type: '4', correct_answer: 'apple', submitted_answer: null, is_correct: null, assessed_at: '2026-07-21T00:00:00.000Z', review_status: 'active', assessment_kind: 'review' }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const active = await adapter.getActiveReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' });
+    assert.equal(active.reviewId, 'real-review-r1');
+    const deferred = await adapter.deferReviewRound({ userId: 'qiuqiu', reviewId: 'real-review-r1' });
+    assert.deepEqual(deferred.remainingRecordIds, ['rec-word-1']);
+    const summary = await adapter.getReviewSummary({ userId: 'qiuqiu', sourceTestId: 'real-source' });
+    assert.deepEqual(summary.deferredRecordIds, ['rec-word-1']);
+    assert.equal(summary.reviewed, 1);
+});
+
 test('submitReviewRound scores Supabase type-four review rows', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -556,6 +588,14 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
     assert.equal(client.db.assessments[0].submitted_answer, 'apple');
     assert.equal(client.db.assessments[0].is_correct, 'correct');
     assert.equal(client.db.assessments[0].review_status, 'complete');
+
+    const retry = await adapter.submitReviewRound({
+        userId: 'qiuqiu',
+        reviewId: 'real-review-r1',
+        answers: [{ text: 'apple', confidence: 'sure' }],
+    });
+    assert.equal(retry.total, 1);
+    assert.equal(client.db.assessments.length, 1);
 });
 
 test('rebuildQuestionCacheForUser inherits level and fallback distractors for unassigned words', async () => {

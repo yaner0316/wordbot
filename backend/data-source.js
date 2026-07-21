@@ -222,23 +222,23 @@ function loadSupabaseDataSource() {
         const records = assessments
             .filter(row => assessmentTestId(row) === testId)
             .slice(0, expectedCount);
-        if (records.length < expectedCount) {
-            if (records.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
-            return null;
-        }
+        if (records.length < expectedCount) return null;
         return rebuildSubmittedResult(
             records.map(row => toFeishuAssessmentRecord(row, { username: '' })),
             value => String(value || '').trim().toLowerCase() === 'correct'
         );
     }
 
-    async function getExistingSupabaseQuizResult(user, testId, expectedCount) {
+    async function getSupabaseQuizAssessments(user, testId) {
         if (typeof supabaseData.getAssessmentsForTest === 'function') {
-            const assessments = await supabaseData.getAssessmentsForTest(user, testId);
-            return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
+            return supabaseData.getAssessmentsForTest(user, testId) || [];
         }
-        if (typeof supabaseData.getAssessmentsForUser !== 'function') return null;
+        if (typeof supabaseData.getAssessmentsForUser !== 'function') return [];
         const assessments = await supabaseData.getAssessmentsForUser(user);
+        return (assessments || []).filter(row => assessmentTestId(row) === testId);
+    }
+
+    function getCompleteSupabaseQuizResult(testId, assessments, expectedCount) {
         return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
     }
 
@@ -251,12 +251,15 @@ function loadSupabaseDataSource() {
                 questions = session?.questions;
             }
             if (!questions) {
-                const existingResult = await getExistingSupabaseQuizResult(user, testId, QUIZ_QUESTION_COUNT);
+                const existingAssessments = await getSupabaseQuizAssessments(user, testId);
+                const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
                 if (existingResult) return existingResult;
+                if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
                 throw new Error('QUIZ_SESSION_NOT_FOUND');
             }
         }
-        const existingResult = await getExistingSupabaseQuizResult(user, testId, questions.length);
+        const existingAssessments = await getSupabaseQuizAssessments(user, testId);
+        const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, questions.length);
         if (existingResult) return existingResult;
         const result = await submitQuizWithDataSource({
             username: user,
@@ -264,6 +267,7 @@ function loadSupabaseDataSource() {
             answers,
             questions,
             dataSource: supabaseData,
+            existingAssessments,
         });
         quizQuestionsByTestId.delete(key);
         if (typeof supabaseData.deleteQuizSession === 'function') {

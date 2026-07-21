@@ -291,6 +291,7 @@ async function submitQuizWithDataSource({
     questions,
     dataSource,
     now = Date.now,
+    existingAssessments = [],
 }) {
     if (!dataSource) throw new Error('DATA_SOURCE_REQUIRED');
     if (!username) throw new Error('USERNAME_REQUIRED');
@@ -309,6 +310,12 @@ async function submitQuizWithDataSource({
     let correct = 0;
     const results = [];
     const insertedAssessments = [];
+    const existingBySourceRecordId = new Map(
+        (existingAssessments || [])
+            .filter(row => row?.submitted_answer !== null && row?.submitted_answer !== undefined && row?.is_correct)
+            .map(row => [String(row.source_word_record_id || '').trim(), row])
+            .filter(([recordId]) => recordId)
+    );
     const shouldUpdateMastery = isRealAssessment(testId) && typeof dataSource.updateWordMastery === 'function';
     let wordRows = [];
     let baseAssessmentRows = [];
@@ -333,11 +340,27 @@ async function submitQuizWithDataSource({
         const submitted = normalizedAnswers[index];
         const yourAnswer = ANSWER_LETTERS[submitted.option];
         const correctAnswer = String(question.correctAnswer || question.answer || '').trim();
+        const sourceWordRecordId = String(question.record_id || question.wordRecordId || '').trim();
+        const existing = existingBySourceRecordId.get(sourceWordRecordId);
+        if (existing) {
+            const existingAnswer = String(existing.submitted_answer || '').split('|')[0].trim().toUpperCase();
+            const existingCorrect = isCorrectAssessmentValue(existing.is_correct);
+            if (existingCorrect) correct++;
+            results.push({
+                q: index + 1,
+                word: String(question.word || '').toLowerCase(),
+                recordId: sourceWordRecordId,
+                your: existingAnswer,
+                answer: correctAnswer,
+                correct: existingCorrect,
+                confidence: existing.answer_confidence || String(existing.submitted_answer || '').split('|')[1] || '',
+            });
+            continue;
+        }
         const isCorrect = yourAnswer === correctAnswer;
         if (isCorrect) correct++;
 
         const recordTime = Number(now()) + index;
-        const sourceWordRecordId = String(question.record_id || question.wordRecordId || '').trim();
         const inserted = await dataSource.submitAssessment({
             username,
             word: question.word,

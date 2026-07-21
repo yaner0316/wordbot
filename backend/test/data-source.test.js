@@ -373,8 +373,12 @@ test('repeated submit after the first request deletes the session returns the st
     assert.equal(assessments.length, 10);
 });
 
-test('partial persisted assessment does not become a false quiz session not found error', async () => {
-    const partial = [{
+test('partial persisted assessment resumes the same session without inserting the completed question twice', async () => {
+    const questions = [
+        { type: 1, word: 'word1', record_id: 'rec-word-1', context: 'Context 1', options: ['A', 'B', 'C', 'D'], answer: 'A', correctAnswer: 'A' },
+        { type: 1, word: 'word2', record_id: 'rec-word-2', context: 'Context 2', options: ['A', 'B', 'C', 'D'], answer: 'A', correctAnswer: 'A' },
+    ];
+    const assessments = [{
         id: 'assessment-1',
         test_id: 'real-partial-submit',
         word_snapshot: 'word1',
@@ -384,15 +388,59 @@ test('partial persisted assessment does not become a false quiz session not foun
         correct_answer: 'A',
         is_correct: 'correct',
     }];
+    let sessionAvailable = true;
+    const inserted = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => sessionAvailable ? { questions } : null,
+            getAssessmentsForTest: async () => assessments,
+            submitAssessment: async input => {
+                const record = { ...assessments[0], id: 'assessment-2', word_snapshot: input.word, source_word_record_id: input.sourceWordRecordId, submitted_answer: input.yourAnswer, correct_answer: input.correctAnswer, is_correct: input.correctness };
+                assessments.push(record);
+                inserted.push(record);
+                return record;
+            },
+            deleteQuizSession: async () => {
+                sessionAvailable = false;
+                return { deleted: 1 };
+            },
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+
+    const result = await dataSource.submitAnswers(
+        'qiuqiu',
+        'real-partial-submit',
+        [{ option: 0, confidence: 'sure' }, { option: 0, confidence: 'sure' }]
+    );
+
+    assert.equal(result.total, 2);
+    assert.equal(result.correct, 2);
+    assert.equal(inserted.length, 1);
+    assert.equal(assessments.length, 2);
+    assert.equal(sessionAvailable, false);
+});
+
+test('missing session with partial persisted assessment returns an explicit incomplete error', async () => {
     const dataSource = loadDataSource({
         supabaseExports: {
             getQuizSession: async () => null,
-            getAssessmentsForUser: async () => partial,
+            getAssessmentsForTest: async () => [{
+                id: 'assessment-1',
+                test_id: 'real-missing-partial',
+                source_word_record_id: 'rec-word-1',
+                word_snapshot: 'word1',
+                submitted_answer: 'A',
+                answer_confidence: 'sure',
+                correct_answer: 'A',
+                is_correct: 'correct',
+            }],
         },
     });
 
     await assert.rejects(
-        dataSource.submitAnswers('qiuqiu', 'real-partial-submit', [{ option: 0 }]),
+        dataSource.submitAnswers('qiuqiu', 'real-missing-partial', []),
         error => error.message === 'QUIZ_SUBMISSION_INCOMPLETE'
     );
 });

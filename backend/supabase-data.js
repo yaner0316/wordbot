@@ -871,24 +871,24 @@ async function getWordInfoForReview(client, userId, row) {
     return data;
 }
 
-async function findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId = '') {
-    const rows = await fetchAllRows(
-        () => client
-            .from('assessments')
-            .select('*')
-            .eq('user_id', user.id)
-            .eq('source_test_id', sourceTestId)
-            .eq('parent_review_id', parentReviewId)
-            .eq('review_status', 'active')
-            .order('assessed_at', { ascending: true })
-            .order('id', { ascending: true }),
-        'findExistingReviewRound'
-    );
-    if (!rows.length) return null;
-    const reviewId = rows[0].test_id;
-    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(rows, user), reviewId);
+function isMissingReviewParentColumnError(error) {
+    const message = [error?.message, error?.details, error?.hint].map(value => String(value || '').toLowerCase()).join(' ');
+    return message.includes('parent_review_id') && (error?.code === 'PGRST204' || message.includes('column') || message.includes('schema cache'));
 }
 
+async function findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId = '') {
+    const loadRows = includeParent => fetchAllRows(() => {
+        let query = client.from('assessments').select('*').eq('user_id', user.id).eq('source_test_id', sourceTestId).eq('review_status', 'active').order('assessed_at', { ascending: true }).order('id', { ascending: true });
+        if (includeParent) query = query.eq('parent_review_id', parentReviewId);
+        return query;
+    }, 'findExistingReviewRound');
+    let rows;
+    try { rows = await loadRows(Boolean(parentReviewId)); }
+    catch (error) { if (!isMissingReviewParentColumnError(error)) throw error; rows = await loadRows(false); }
+    if (parentReviewId) rows = rows.filter(row => !Object.prototype.hasOwnProperty.call(row, 'parent_review_id') || row.parent_review_id === parentReviewId);
+    if (!rows.length) return null;
+    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(rows, user), rows[0].test_id);
+}
 function buildSupabaseReviewRoundResponse(rows, reviewId) {
     if (!rows.length) return null;
     const first = rows[0];
@@ -1029,6 +1029,36 @@ async function submitReviewRoundWithClient(client, { userId, reviewId, answers }
         sourceTestId: sorted[0].source_test_id || '',
         round: Number(sorted[0].review_round || 1),
     };
+}
+
+
+async function getActiveReviewRoundWithClient(client, { userId, sourceTestId }) {
+    const user = await requireUserByUsername(client, userId);
+    return findExistingReviewRoundWithClient(client, user, sourceTestId, '');
+}
+async function deferReviewRoundWithClient(client, { userId, reviewId }) {
+    const user = await requireUserByUsername(client, userId);
+    const rows = await getAssessmentsForTestWithClient(client, userId, reviewId);
+    if (!rows.length) throw new Error('Review records not found');
+    const remainingRecordIds = rows.filter(row => !isCorrectAssessmentRow(row)).map(row => row.source_word_record_id).filter(Boolean);
+    if (!remainingRecordIds.length) throw new Error('No review words remain deferred');
+    const { error } = await client.from('assessments').update({ review_status: 'deferred' }).eq('user_id', user.id).eq('test_id', reviewId).eq('review_status', 'active').select('*');
+    ensureNoError(error, 'deferReviewRound');
+    return { reviewId, deferred: true, remainingRecordIds };
+}
+async function getReviewSummaryWithClient(client, { userId, sourceTestId }) {
+    const user = await requireUserByUsername(client, userId);
+    const rows = await fetchAllRows(() => client.from('assessments').select('*').eq('user_id', user.id).eq('source_test_id', sourceTestId).order('assessed_at', { ascending: true }).order('id', { ascending: true }), 'getReviewSummary');
+    const reviewedRecordIds = [...new Set(rows.map(row => row.source_word_record_id).filter(Boolean))];
+    const deferredRecordIds = [...new Set(rows.filter(row => row.review_status === 'deferred').map(row => row.source_word_record_id).filter(Boolean))];
+    return { sourceTestId, reviewedRecordIds, deferredRecordIds, reviewed: reviewedRecordIds.length, deferred: deferredRecordIds.length };
+}
+const reviewRoundCreationLocks = new Map();
+function reviewRoundLockKey({ userId, sourceTestId, parentReviewId = '' }) { return [userId, sourceTestId, parentReviewId].map(value => String(value || '').trim().toLowerCase()).join(':'); }
+async function createReviewRoundWithLock(client, input) {
+    const key = reviewRoundLockKey(input); const previous = reviewRoundCreationLocks.get(key) || Promise.resolve();
+    const current = previous.catch(() => {}).then(() => createReviewRoundWithClient(client, input)); reviewRoundCreationLocks.set(key, current);
+    try { return await current; } finally { if (reviewRoundCreationLocks.get(key) === current) reviewRoundCreationLocks.delete(key); }
 }
 
 const cacheUsageWrites = new Map();
@@ -1282,7 +1312,10 @@ function createSupabaseDataAdapter(client = supabase) {
             deleteQuizSessionWithClient(client, username, testId),
         cleanupExpiredQuizSessions: options =>
             cleanupExpiredQuizSessionsWithClient(client, options),
-        createReviewRound: input => createReviewRoundWithClient(client, input),
+        createReviewRound: input => createReviewRoundWithLock(client, input),
+        getActiveReviewRound: input => getActiveReviewRoundWithClient(client, input),
+        deferReviewRound: input => deferReviewRoundWithClient(client, input),
+        getReviewSummary: input => getReviewSummaryWithClient(client, input),
         prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input),
         submitReviewRound: input => submitReviewRoundWithClient(client, input),
     };
@@ -1316,6 +1349,9 @@ module.exports = {
     deleteQuizSession: defaultAdapter.deleteQuizSession,
     cleanupExpiredQuizSessions: defaultAdapter.cleanupExpiredQuizSessions,
     createReviewRound: defaultAdapter.createReviewRound,
+    getActiveReviewRound: defaultAdapter.getActiveReviewRound,
+    deferReviewRound: defaultAdapter.deferReviewRound,
+    getReviewSummary: defaultAdapter.getReviewSummary,
     prebuildWrongQuestionCache: defaultAdapter.prebuildWrongQuestionCache,
     submitReviewRound: defaultAdapter.submitReviewRound,
 };
