@@ -280,6 +280,44 @@ test('question cache status summarizes Supabase rows by level', async () => {
     assert.equal(status.byLevel[MIDDLE].ready, 1);
 });
 
+test('getQuestionCache normalizes known elementary mojibake before enum filtering', async () => {
+    const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+    const MOJIBAKE_ELEMENTARY = String.fromCodePoint(0x0421, 0x0467);
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'test_user', username_key: 'test_user' }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'corn',
+            meaning_en: 'yellow food',
+            level: ELEMENTARY,
+            mastery_status: 'pending',
+        }],
+        question_cache: [{
+            id: 'cache-1',
+            feishu_record_id: 'rec-cache-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            level: ELEMENTARY,
+            round_type: 'primary',
+            quality_status: 'ready',
+            question_type: 1,
+            question_text: 'I eat _____.',
+            options: ['A. corn', 'B. desk', 'C. run', 'D. blue'],
+            answer: 'A',
+            used_count: 0,
+            generated_at: '2026-07-19T12:00:00.000Z',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const rows = await adapter.getQuestionCache('test_user', MOJIBAKE_ELEMENTARY, 'primary');
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].level, ELEMENTARY);
+});
+
 test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
     const client = createFakeSupabase({

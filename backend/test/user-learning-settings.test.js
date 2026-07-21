@@ -47,7 +47,10 @@ test('rejects a level change inside the 30 day cooldown', () => {
 });
 
 test('normalizes known learning levels and rejects unknown values', () => {
-    assert.equal(normalizeLearningLevel('小学'), '小学');
+    const elementary = String.fromCharCode(0x5c0f, 0x5b66);
+    assert.equal(normalizeLearningLevel(elementary), elementary);
+    assert.equal(normalizeLearningLevel(String.fromCodePoint(0x0421, 0x0467)), elementary);
+    assert.equal(normalizeLearningLevel('??'), elementary);
     assert.equal(normalizeLearningLevel('CET/TOEFL'), 'CET4_6_TOEFL');
     assert.throws(() => normalizeLearningLevel('大学'), /invalid learning level/);
 });

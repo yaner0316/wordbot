@@ -1,18 +1,12 @@
-const DEFAULT_LEARNING_LEVEL = '中学';
-const LEVELS = ['小学', '中学', '高中', 'CET4_6_TOEFL'];
-const LEVEL_ALIASES = new Map([
-    ['CET/TOEFL', 'CET4_6_TOEFL'],
-    ['CET4_6_TOEFL', 'CET4_6_TOEFL'],
-]);
+const {
+    DEFAULT_LEARNING_LEVEL,
+    LEVELS,
+    normalizeLevel,
+} = require('./learning-level');
 const LEVEL_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 
 function normalizeLearningLevel(level) {
-    const value = String(level || '').trim() || DEFAULT_LEARNING_LEVEL;
-    const normalized = LEVEL_ALIASES.get(value) || value;
-    if (!LEVELS.includes(normalized)) {
-        throw new Error(`invalid learning level: ${value}`);
-    }
-    return normalized;
+    return normalizeLevel(level);
 }
 
 function asTimestamp(value) {

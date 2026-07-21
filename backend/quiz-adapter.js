@@ -6,6 +6,7 @@ const {
 } = require('./quiz-word-queue');
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { calculateGameReward } = require('./game-reward');
+const { normalizeLevel } = require('./learning-level');
 const {
     evaluateWordMastery,
     normalizeSubmittedAnswer,
@@ -37,6 +38,10 @@ function isFeishuRecord(row) {
     return row && typeof row === 'object' && row.fields && row.record_id;
 }
 
+function normalizeOptionalLevel(level) {
+    return normalizeLevel(level, { allowNull: true }) || '';
+}
+
 function toFeishuWordRecord(row, { username }) {
     if (isFeishuRecord(row)) return row;
     const recordTime = toMillis(row.entered_at || row.created_at);
@@ -54,7 +59,7 @@ function toFeishuWordRecord(row, { username }) {
             Context_CN: row.context_zh || '',
             Distractors: JSON.stringify(row.distractors || []),
             Old_Distractors: JSON.stringify(row.old_distractors || []),
-            Level: row.level || '',
+            Level: normalizeOptionalLevel(row.level),
             Status: row.mastery_status || '',
             Error_Count: row.error_count ?? 0,
             record_time: recordTime,
@@ -84,7 +89,7 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
             correct_answer: row.correct_answer || '',
             options: JSON.stringify(row.options || []),
             test_time: assessedAt,
-            level: row.level || '',
+            level: normalizeOptionalLevel(row.level),
             source: row.source || '',
             is_correct: row.is_correct || '',
             your_answer: submittedAnswerField(row),
@@ -108,7 +113,7 @@ function toFeishuCacheRow(row, { username }) {
             user: row.username || username,
             word_record_id: wordRecordId,
             word: row.word || '',
-            level: row.level || '',
+            level: normalizeOptionalLevel(row.level),
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
             question_type: row.question_type || '',
@@ -185,6 +190,7 @@ async function generateQuizWithDataSource({
     if (!dataSource) throw new Error('DATA_SOURCE_REQUIRED');
     if (!username) throw new Error('USERNAME_REQUIRED');
     if (!level) throw new Error('LEVEL_REQUIRED');
+    const effectiveLevel = normalizeLevel(level);
 
     const user = dataSource.getUserByUsername
         ? await dataSource.getUserByUsername(username)
@@ -194,7 +200,7 @@ async function generateQuizWithDataSource({
     const [wordRows, assessmentRows, cacheRows] = await Promise.all([
         dataSource.getWordsForUser(username),
         dataSource.getAssessmentsForUser(username),
-        dataSource.getQuestionCache(username, level, roundType),
+        dataSource.getQuestionCache(username, effectiveLevel, roundType),
     ]);
 
     const selectableWordRows = filterSelectableWordRows(wordRows);
@@ -210,7 +216,7 @@ async function generateQuizWithDataSource({
         cacheRows: questionCacheRows,
         assessmentRecords,
         userId: canonicalUsername,
-        level,
+        level: effectiveLevel,
         limit: wordRecords.length || limit,
         now,
         minAgeMs,
@@ -220,7 +226,7 @@ async function generateQuizWithDataSource({
         cacheRows: questionCacheRows,
         queue,
         userId: canonicalUsername,
-        level,
+        level: effectiveLevel,
         roundType,
         limit,
     }).map((question) => ({
@@ -231,7 +237,7 @@ async function generateQuizWithDataSource({
     const diagnostics = {
         dataSource: dataSource.name || 'custom',
         user: canonicalUsername,
-        level,
+        level: effectiveLevel,
         roundType,
         wordCount: wordRows.length,
         selectableWordCount: wordRecords.length,
@@ -247,7 +253,7 @@ async function generateQuizWithDataSource({
             error: 'Question pool exhausted for this level.',
             code: 'QUESTION_POOL_EXHAUSTED',
             source: 'question_cache',
-            level,
+            level: effectiveLevel,
             diagnostics,
             readyCount: queue.length,
             requiredCount: limit,
@@ -260,7 +266,7 @@ async function generateQuizWithDataSource({
             error: 'Question cache is still preparing.',
             code: 'QUESTION_CACHE_NOT_READY',
             source: 'question_cache',
-            level,
+            level: effectiveLevel,
             diagnostics,
             readyCount: questions.length,
             requiredCount: limit,
@@ -272,7 +278,7 @@ async function generateQuizWithDataSource({
         testId: createAssessmentId(mode, createId),
         mode,
         source: 'question_cache',
-        level,
+        level: effectiveLevel,
         diagnostics,
         questions,
     };

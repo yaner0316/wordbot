@@ -13,17 +13,21 @@ const {
     generateElementaryDistractors,
     generateElementaryTemplateContext,
 } = require('./elementary-context');
+const {
+    DEFAULT_LEARNING_LEVEL,
+    ELEMENTARY_LEVEL,
+    HIGH_LEVEL,
+    JUNIOR_HIGH_LEVEL,
+    LEVELS,
+    normalizeLevel,
+} = require('./learning-level');
 
 const PAGE_SIZE = 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VALID_CORRECTNESS = new Set(['correct', 'wrong']);
 const VALID_CONFIDENCE = new Set(['sure', 'guess']);
 const VALID_MASTERY_STATUS = new Set(['pending', 'recognized', 'consolidating', 'mastered']);
-const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
-const JUNIOR_HIGH_LEVEL = String.fromCharCode(0x4e2d, 0x5b66);
-const HIGH_LEVEL = String.fromCharCode(0x9ad8, 0x4e2d);
-const VALID_LEARNING_LEVELS = new Set([ELEMENTARY_LEVEL, JUNIOR_HIGH_LEVEL, HIGH_LEVEL, 'CET4_6_TOEFL']);
-const DEFAULT_LEARNING_LEVEL = JUNIOR_HIGH_LEVEL;
+const VALID_LEARNING_LEVELS = new Set(LEVELS);
 const LEVEL_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
 const QUIZ_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -100,10 +104,13 @@ function normalizeMasteryStatus(value) {
 }
 
 function normalizeLearningLevel(value) {
-    const text = String(value || '').trim() || DEFAULT_LEARNING_LEVEL;
-    const normalized = text === 'CET/TOEFL' ? 'CET4_6_TOEFL' : text;
-    if (!VALID_LEARNING_LEVELS.has(normalized)) throw new Error(`invalid learning level: ${text}`);
+    const normalized = normalizeLevel(value);
+    if (!VALID_LEARNING_LEVELS.has(normalized)) throw new Error(`invalid learning level: ${value}`);
     return normalized;
+}
+
+function normalizeOptionalLearningLevel(value) {
+    return normalizeLevel(value, { allowNull: true });
 }
 
 function buildLearningSettingsFromUser(user, { now = Date.now() } = {}) {
@@ -265,6 +272,7 @@ async function getWordsForUser(username, level) {
 async function getWordsForUserWithClient(client, username, level) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return [];
+    const effectiveLevel = normalizeOptionalLearningLevel(level);
     const rows = await fetchAllRows(
         () => {
             let query = client
@@ -273,7 +281,7 @@ async function getWordsForUserWithClient(client, username, level) {
                 .eq('user_id', user.id)
                 .order('entered_at', { ascending: true })
                 .order('id', { ascending: true });
-            if (level) query = query.eq('level', level);
+            if (effectiveLevel) query = query.eq('level', effectiveLevel);
             return query;
         },
         'getWordsForUser'
@@ -529,6 +537,7 @@ async function getQuestionCache(username, level, roundType) {
 async function getQuestionCacheWithClient(client, username, level, roundType) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return [];
+    const effectiveLevel = normalizeOptionalLearningLevel(level);
     const rows = await fetchAllRows(
         () => {
             let query = client
@@ -539,7 +548,7 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
                 .order('used_count', { ascending: true })
                 .order('generated_at', { ascending: true })
                 .order('id', { ascending: true });
-            if (level) query = query.eq('level', level);
+            if (effectiveLevel) query = query.eq('level', effectiveLevel);
             if (roundType) query = query.eq('round_type', roundType);
             return query;
         },
@@ -620,7 +629,7 @@ async function deleteQuestionCacheRowsWithClient(client, username, type = null) 
 
 async function rebuildQuestionCacheForUserWithClient(client, username) {
     const user = await requireUserByUsername(client, username);
-    const level = user.learning_level || null;
+    const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
     const words = await getWordsForUserWithClient(client, username, level);
     const candidateWords = words
@@ -738,7 +747,7 @@ async function submitAssessmentWithClient(client, input) {
         assessed_at: assessedAt,
         learning_day: learningDay(assessedAt),
         question_type: normalizeQuestionType(input.questionType),
-        level: input.level || wordRow.level || null,
+        level: normalizeOptionalLearningLevel(input.level || wordRow.level),
         word_snapshot: String(input.word || wordRow.word || '').trim(),
         question_text: input.questionText || input.context || null,
         options: Array.isArray(input.options) ? input.options : [],
@@ -845,7 +854,7 @@ async function addWordWithClient(client, input) {
         meaning_zh: input.meaningZh || input.cnMeaning || null,
         context_en: input.context || input.contextEn || null,
         context_zh: input.contextZh || null,
-        level: input.level || user.learning_level || null,
+        level: normalizeOptionalLearningLevel(input.level || user.learning_level),
         mastery_status: 'pending',
         entered_at: toIsoString(input.recordTime),
     };
