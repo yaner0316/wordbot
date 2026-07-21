@@ -167,6 +167,58 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(result.total, 10);
 });
 
+test('supabase quiz generation falls back to memory when quiz_sessions table is missing', async () => {
+    const missingTableError = new Error("Could not find the table 'public.quiz_sessions' in the schema cache");
+    missingTableError.code = 'PGRST205';
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getUserByUsername: async username => ({ username }),
+            getWordsForUser: async () => Array.from({ length: 10 }, (_, index) => ({
+                id: `word-${index + 1}`,
+                feishu_record_id: `rec-word-${index + 1}`,
+                word: `word${index + 1}`,
+                meaning_en: `meaning ${index + 1}`,
+                level: 'middle',
+            })),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
+                id: `cache-${index + 1}`,
+                feishu_record_id: `cache-rec-${index + 1}`,
+                source_word_record_id: `rec-word-${index + 1}`,
+                word: `word${index + 1}`,
+                level: 'middle',
+                round_type: 'primary',
+                quality_status: 'ready',
+                question_type: 1,
+                question_text: `I learned word${index + 1} today.`,
+                options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
+                answer: 'A',
+                option_meanings: ['meaning', 'fruit', 'furniture', 'furniture'],
+                correct_meaning: `meaning ${index + 1}`,
+                used_count: 0,
+            })),
+            saveQuizSession: async () => {
+                throw missingTableError;
+            },
+            submitAssessment: async input => ({ id: 'assessment-1', ...input }),
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+    const result = await dataSource.submitAnswers(
+        'qiuqiu',
+        quiz.testId,
+        quiz.questions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(quiz.source, 'question_cache');
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(result.correct, 10);
+    assert.equal(result.total, 10);
+});
+
 test('supabase submitAnswers restores questions from persisted session when memory is empty', async () => {
     const persistedQuestions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,

@@ -205,9 +205,7 @@ function loadSupabaseDataSource() {
         });
         if (!quiz.error && quiz.testId && Array.isArray(quiz.questions)) {
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${quiz.testId}`, quiz.questions);
-            if (typeof supabaseData.saveQuizSession === 'function') {
-                await supabaseData.saveQuizSession(user, quiz.testId, quiz.questions);
-            }
+            await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);
         }
         return quiz;
@@ -280,13 +278,47 @@ function loadFeishuFallbackExports() {
     }
 }
 
+async function saveQuizSessionBestEffort(supabaseData, user, testId, questions) {
+    if (typeof supabaseData.saveQuizSession !== 'function') return null;
+    try {
+        return await supabaseData.saveQuizSession(user, testId, questions);
+    } catch (error) {
+        if (isMissingQuizSessionsTableError(error)) {
+            console.warn(`[quiz_sessions] persistence skipped: ${error.message}`);
+            return null;
+        }
+        throw error;
+    }
+}
+
+function isMissingQuizSessionsTableError(error) {
+    const messageParts = [
+        error?.message,
+        error?.details,
+        error?.hint,
+    ].map(part => String(part || '').toLowerCase());
+    const message = messageParts.join(' ');
+    return message.includes('quiz_sessions') && (
+        error?.code === 'PGRST205' ||
+        message.includes('could not find the table') ||
+        message.includes('schema cache')
+    );
+}
+
 function maybeCleanupExpiredQuizSessions(supabaseData, now = Date.now()) {
     if (typeof supabaseData.cleanupExpiredQuizSessions !== 'function') return;
     if (now - lastQuizSessionCleanupAt < 60 * 60 * 1000) return;
     lastQuizSessionCleanupAt = now;
-    supabaseData.cleanupExpiredQuizSessions().catch(error => {
+    try {
+        const cleanupPromise = supabaseData.cleanupExpiredQuizSessions();
+        if (cleanupPromise && typeof cleanupPromise.catch === 'function') {
+            cleanupPromise.catch(error => {
+                console.warn(`[quiz_sessions] cleanup failed: ${error.message}`);
+            });
+        }
+    } catch (error) {
         console.warn(`[quiz_sessions] cleanup failed: ${error.message}`);
-    });
+    }
 }
 
 module.exports = DATA_SOURCE === 'feishu'
