@@ -206,3 +206,22 @@ test('cached question selection fills from later ready rows in word queue order'
         ['cache-1', 'cache-2', 'cache-5', 'cache-7', 'cache-8', 'cache-9', 'cache-10', 'cache-11', 'cache-12', 'cache-13']
     );
 });
+
+test('cached question selection backfills from ready cache rows outside the queue', () => {
+    const queue = Array.from({ length: 12 }, (_, index) => `rec-${index + 1}`);
+    const cacheRows = [1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16].map(index => cache(index));
+
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows,
+        queue,
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.deepEqual(
+        selected.map(question => question.cacheRecordId),
+        ['cache-1', 'cache-2', 'cache-3', 'cache-4', 'cache-5', 'cache-6', 'cache-7', 'cache-8', 'cache-13', 'cache-14']
+    );
+});

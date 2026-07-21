@@ -162,11 +162,20 @@ function selectCachedQuestionsForWordQueue({
             byRecordId.set(row.wordRecordId, row);
         }
     }
-    return (queue || [])
+    const selected = (queue || [])
         .map(recordId => byRecordId.get(recordId))
         .filter(Boolean)
-        .slice(0, limit)
-        .map(row => ({
+        .slice(0, limit);
+    const selectedRecordIds = new Set(selected.map(row => row.wordRecordId));
+    if (selected.length < limit) {
+        for (const row of normalizedRows) {
+            if (selectedRecordIds.has(row.wordRecordId)) continue;
+            selected.push(row);
+            selectedRecordIds.add(row.wordRecordId);
+            if (selected.length >= limit) break;
+        }
+    }
+    return selected.map(row => ({
             ...row.question,
             cacheRecordId: row.recordId,
             cacheUsedCount: row.usedCount,
