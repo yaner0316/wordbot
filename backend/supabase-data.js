@@ -155,9 +155,14 @@ function hasWholeWord(context, word) {
     return new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(String(context || ''));
 }
 
-function fallbackElementaryContext(word) {
+function fallbackElementaryContext(word, meaning) {
     const key = String(word || '').trim().toLowerCase();
-    return `Please read ${key} aloud.`;
+    const clue = String(meaning || '').split(/[.;!?]/)[0].trim()
+        .replace(new RegExp('\\b' + escapeRegExp(key) + '\\b', 'ig'), '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!clue) return '';
+    return 'In class, the word ' + key + ' means ' + clue + '.';
 }
 
 function blankWordInContext(context, word) {
@@ -645,7 +650,7 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const templateContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
         : '';
-    const fallbackContext = level === ELEMENTARY_LEVEL ? fallbackElementaryContext(wordText) : 'The student wrote ' + wordText + ' in the sentence.';
+    const fallbackContext = level === ELEMENTARY_LEVEL ? fallbackElementaryContext(wordText, word.meaning_en || word.meaning_zh || '') : 'The student wrote ' + wordText + ' in the sentence.';
     const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
@@ -808,13 +813,22 @@ async function resolveCacheRow(client, cacheId) {
         ensureNoError(error, 'resolveCacheRow.uuid');
         if (data) return data;
     }
-    const { data, error } = await client
+    let { data, error } = await client
         .from('question_cache')
         .select('*')
         .eq('feishu_record_id', id)
         .maybeSingle();
     ensureNoError(error, 'resolveCacheRow.feishu');
-    if (!data) throw new Error(`QUESTION_CACHE_NOT_FOUND: ${id}`);
+    if (!data) {
+        ({ data, error } = await client
+            .from('question_cache')
+            .select('*')
+            .eq('source_word_record_id', id)
+            .eq('round_type', 'primary')
+            .maybeSingle());
+        ensureNoError(error, 'resolveCacheRow.sourceWord');
+    }
+    if (!data) throw new Error('QUESTION_CACHE_NOT_FOUND: ' + id);
     return data;
 }
 

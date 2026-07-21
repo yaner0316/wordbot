@@ -253,6 +253,9 @@ function hasAmbiguousElementaryContext(question) {
         return true;
     }
 
+    const hairColorCount = optionWords.filter(item => ELEMENTARY_HAIR_COLOR_WORDS.has(item)).length;
+    if (hairColorCount >= 3 && /has _____ hair/.test(context)) return true;
+
     const clothingCount = optionWords.filter(item => ELEMENTARY_CLOTHING_WORDS.has(item)).length;
     const hasWeakClothingContext = [
         /\b(?:put\s+on|puts\s+on|wear|wore|wears|wearing)\b.*\b(?:blue|red|green|yellow|black|white|warm|new|clean|school)\s+_____\b/,
@@ -315,6 +318,8 @@ const ELEMENTARY_CLOTHING_WORDS = new Set([
     'shirt', 'jacket', 'pants', 'dress', 'coat', 'sweater', 'skirt', 'shorts',
     'shoes', 'socks', 'uniform', 'jeans', 't-shirt', 'tshirt', 'hat', 'cap',
 ]);
+
+const ELEMENTARY_HAIR_COLOR_WORDS = new Set(['blond', 'blonde', 'black', 'brown', 'red', 'gray', 'grey']);
 
 const ELEMENTARY_ANIMAL_WORDS = new Set([
     'cub', 'calf', 'lamb', 'foal', 'puppy', 'kitten', 'chick', 'duckling',

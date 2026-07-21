@@ -212,6 +212,25 @@ test('incrementCacheUsedCount resolves Feishu cache IDs before updating used_cou
     assert.ok(row.last_used_at);
 });
 
+test('incrementCacheUsedCount resolves database cache rows by source word record id', async () => {
+    const client = seededClient();
+    client.db.question_cache.push({
+        id: 'cache-source-id',
+        feishu_record_id: null,
+        source_word_record_id: 'rec-source-word-1',
+        user_id: 'user-1',
+        word_id: 'word-1',
+        round_type: 'primary',
+        used_count: 0,
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const row = await adapter.incrementCacheUsedCount('rec-source-word-1');
+
+    assert.equal(row.id, 'cache-source-id');
+    assert.equal(row.used_count, 1);
+});
+
 test('addWord inserts a word and ordered parts of speech junction rows', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);
@@ -658,4 +677,5 @@ test('rebuildQuestionCacheForUser falls back for an unknown elementary word', as
     assert.equal(result.level, ELEMENTARY);
     assert.equal(result.count, 20);
     assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 10);
+    assert.equal(client.db.question_cache.some(row => row.question_text.includes('Please read')), false);
 });

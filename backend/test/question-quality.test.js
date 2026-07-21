@@ -151,6 +151,21 @@ test('elementary fill-in rejects weak distractor shape', () => {
     assert.ok(getQuestionQualityIssues(question).includes('bad_distractor_shape'));
 });
 
+test('elementary fill-in rejects ambiguous hair-color contexts', () => {
+    const question = {
+        type: 1,
+        level: String.fromCharCode(0x5c0f, 0x5b66),
+        word: 'blond',
+        context: 'The boy has _____ hair in the picture.',
+        correctMeaning: 'having light yellow hair',
+        options: ['A. red', 'B. blond', 'C. black', 'D. brown'],
+        answer: 'B',
+    };
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_elementary_context'), issues.join(','));
+});
+
 test('elementary definition questions are always rejected', () => {
     const question = {
         type: 2,

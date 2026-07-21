@@ -107,7 +107,7 @@ function toFeishuCacheRow(row, { username }) {
         ''
     ).trim();
     return {
-        record_id: sourceRecordId(row),
+        record_id: row.feishu_record_id || row.id || sourceRecordId(row),
         created_time: generatedAt,
         fields: {
             user: row.username || username,
