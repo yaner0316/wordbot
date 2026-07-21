@@ -553,3 +553,34 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
     assert.equal(client.db.assessments[0].is_correct, 'correct');
     assert.equal(client.db.assessments[0].review_status, 'complete');
 });
+
+test('rebuildQuestionCacheForUser inherits the selected level for unassigned words', async () => {
+    const JUNIOR_HIGH = String.fromCharCode(0x4e2d, 0x5b66);
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: JUNIOR_HIGH }],
+        words: ['apple', 'bridge', 'candle', 'dinner', 'engine', 'forest', 'garden', 'hammer', 'island', 'jacket'].map((word, index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: `Meaning ${index + 1}`,
+            level: null,
+            context_en: `This sentence contains ${word}.`,
+            distractors: ['alpha', 'bravo', 'charlie'],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.level, JUNIOR_HIGH);
+    assert.equal(result.count, 20);
+    assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'primary').length, 10);
+    assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'review').length, 10);
+});

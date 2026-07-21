@@ -696,8 +696,12 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
-    const words = await getWordsForUserWithClient(client, username, level);
+    const words = await getWordsForUserWithClient(client, username);
     const candidateWords = words
+        .filter(row => {
+            const wordLevel = normalizeOptionalLearningLevel(row.level);
+            return !wordLevel || wordLevel === level;
+        })
         .filter(row => row.mastery_status !== 'mastered')
         .sort((left, right) => toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at));
     let deleteQuery = client
