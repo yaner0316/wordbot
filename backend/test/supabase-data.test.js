@@ -460,6 +460,45 @@ test('updateUserLearningSettings repairs missing migrated user level despite coo
     assert.ok(client.db.users[0].level_changed_at);
     assert.equal(client.db.question_cache.length, 0);
 });
+test('updateUserLearningSettings repairs mistaken elementary level when migrated words are unassigned', async () => {
+    const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
+    const HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-1',
+            username: 'yusi',
+            username_key: 'yusi',
+            learning_level: ELEMENTARY,
+            level_changed_at: new Date().toISOString(),
+        }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'absurd',
+            meaning_en: 'wildly unreasonable',
+            level: null,
+            mastery_status: 'pending',
+            entered_at: '2026-07-19T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [{
+            id: 'cache-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            level: ELEMENTARY,
+            quality_status: 'ready',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.updateUserLearningSettings('yusi', HIGH);
+
+    assert.equal(result.success, true);
+    assert.equal(result.settings.learningLevel, HIGH);
+    assert.equal(client.db.users[0].learning_level, HIGH);
+    assert.equal(client.db.question_cache.length, 0);
+});
 test('quiz session persistence saves and restores unexpired Supabase sessions', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);

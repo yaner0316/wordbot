@@ -501,6 +501,20 @@ async function getUserLearningSettingsWithClient(client, username) {
     };
 }
 
+
+async function isMigratedUnassignedVocabularyLevelRepair(client, user, currentLevel, nextLevel) {
+    if (currentLevel !== ELEMENTARY_LEVEL || nextLevel === ELEMENTARY_LEVEL) return false;
+    const rows = await fetchAllRows(
+        () => client
+            .from('words')
+            .select('id, level')
+            .eq('user_id', user.id)
+            .order('entered_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'updateUserLearningSettings.migratedWords'
+    );
+    return rows.length > 0 && rows.every(row => !normalizeOptionalLearningLevel(row.level));
+}
 async function updateUserLearningSettingsWithClient(client, username, requestedLevel) {
     const user = await requireUserByUsername(client, username);
     const now = Date.now();
@@ -510,15 +524,18 @@ async function updateUserLearningSettingsWithClient(client, username, requestedL
     const levelChangedAt = user.level_changed_at ? toMillis(user.level_changed_at) : 0;
     const nextAllowedAt = levelChangedAt ? levelChangedAt + LEVEL_CHANGE_COOLDOWN_MS : now;
     if (hasStoredLearningLevel && nextLevel !== currentLevel && levelChangedAt && now < nextAllowedAt) {
-        return {
-            success: false,
-            error: 'cooldown',
-            settings: {
-                ...buildLearningSettingsFromUser(user, { now }),
-                nextLevelChangeAt: nextAllowedAt,
-                canChangeLevel: false,
-            },
-        };
+        const isMigrationRepair = await isMigratedUnassignedVocabularyLevelRepair(client, user, currentLevel, nextLevel);
+        if (!isMigrationRepair) {
+            return {
+                success: false,
+                error: 'cooldown',
+                settings: {
+                    ...buildLearningSettingsFromUser(user, { now }),
+                    nextLevelChangeAt: nextAllowedAt,
+                    canChangeLevel: false,
+                },
+            };
+        }
     }
     const changed = !hasStoredLearningLevel || nextLevel !== currentLevel;
     const payload = {
