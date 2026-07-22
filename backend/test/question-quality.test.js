@@ -82,6 +82,17 @@ test('isQuestionQualityAcceptable: type 3 with English-only context is rejected'
     assert.equal(isQuestionQualityAcceptable(q), false);
 });
 
+test('isQuestionQualityAcceptable: type 3 rejects invalid option words', () => {
+    const q = {
+        type: 3,
+        word: 'afford',
+        context: '负担得起',
+        options: ['A. afford', 'B. trick', 'C. whistle', 'D. genaine'],
+        answer: 'A',
+    };
+    assert.equal(isQuestionQualityAcceptable(q), false);
+    assert.ok(getQuestionQualityIssues(q).includes('invalid_option_word'));
+});
 test('isQuestionQualityAcceptable: type 3 with clean CN_Meaning is accepted', () => {
     const q = { type: 3, context: '固执的', correctMeaning: '固执的', options: ['A. stubborn', 'B. happy', 'C. calm', 'D. sad'], answer: 'A', word: 'stubborn' };
     assert.equal(isQuestionQualityAcceptable(q), true);

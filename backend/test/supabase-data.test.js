@@ -838,6 +838,44 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
         ['负担得起', '窍门', '哨声', '小溪']
     );
 });
+test('rebuildQuestionCacheForUser filters sparse middle-school fallback distractors to Chinese-meaning words', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            ['genaine', ''],
+            ['bomb', ''],
+            ['crowded', ''],
+            ['afford', '负担得起'],
+            ['trick', '窍门'],
+            ['whistle', '哨声'],
+            ['stream', '小溪'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: meaning,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:0${index}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 8);
+    const optionText = client.db.question_cache.flatMap(row => row.options).join(' ').toLowerCase();
+    assert.equal(optionText.includes('genaine'), false);
+    assert.equal(optionText.includes('bomb'), false);
+    assert.equal(optionText.includes('crowded'), false);
+});
 test('rebuildQuestionCacheForUser does not use all candidate words as middle-school fallback distractors', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],

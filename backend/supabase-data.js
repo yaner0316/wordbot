@@ -15,6 +15,7 @@ const {
     generateElementaryDistractors,
     generateElementaryTemplateContext,
 } = require('./elementary-context');
+const { isBadQuizWord } = require('./question-quality');
 const {
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
@@ -655,14 +656,14 @@ function cleanChineseMeaningForCache(word) {
 
 function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
     const wordText = String(word.word || '').trim().toLowerCase();
-    if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
+    if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     const meaning = cleanChineseMeaningForCache(word);
     if (!meaning) return [];
     const distractors = uniqueWords([
         ...(word.distractors || []),
         ...(word.old_distractors || []),
         ...(fallbackDistractors || []),
-    ], wordText).slice(0, 3);
+    ], wordText).filter(option => !isBadQuizWord(option)).slice(0, 3);
     if (distractors.length < 3) return [];
     const optionWords = shuffled([wordText, ...distractors]);
     const letters = ['A', 'B', 'C', 'D'];
@@ -791,7 +792,10 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
-    const fallbackDistractors = candidateWords.map(word => word.word);
+    const fallbackDistractors = candidateWords
+        .filter(word => cleanChineseMeaningForCache(word))
+        .filter(word => !isBadQuizWord(word.word))
+        .map(word => word.word);
     for (const word of candidateWords) {
         rows.push(...buildCacheQuestionRowsForWord({ user, word, level, fallbackDistractors }));
     }

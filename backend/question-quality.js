@@ -495,8 +495,6 @@ function getQuestionQualityIssues(question) {
         if (hasAnswerRevealedAfterBlank(question)) issues.push('answer_revealed_after_blank');
         if (hasGenericFillInContext(question)) issues.push('generic_fill_in_context');
         if (hasDictionaryFragmentContext(question)) issues.push('dictionary_fragment_context');
-        if (hasInvalidOptionWord(question)) issues.push('invalid_option_word');
-        if (hasInvalidDistractorWord(question)) issues.push('invalid_distractor_word');
         if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
         if (hasAmbiguousFillInContext(question)) issues.push('ambiguous_fill_in_context');
@@ -505,6 +503,12 @@ function getQuestionQualityIssues(question) {
     }
     if ([1, 2].includes(type) && hasBadCorrectMeaning(question)) {
         issues.push('bad_correct_meaning');
+    }
+    if ([1, 2, 3].includes(type) && hasInvalidOptionWord(question)) {
+        issues.push('invalid_option_word');
+    }
+    if ([1, 2, 3].includes(type) && hasInvalidDistractorWord(question)) {
+        issues.push('invalid_distractor_word');
     }
     if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) {
         issues.push('bad_distractor_shape');
