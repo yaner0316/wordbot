@@ -1073,7 +1073,7 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
             submitted_answer: null,
             answer_confidence: null,
             is_correct: null,
-            source: 'review',
+            source: ['question_cache', 'live_fallback'].includes(row.source) ? row.source : 'question_cache',
             assessment_kind: 'review',
             review_round: String(round),
             review_status: 'active',

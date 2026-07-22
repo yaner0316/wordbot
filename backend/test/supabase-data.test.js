@@ -699,6 +699,7 @@ test('createReviewRound builds a Supabase review round from wrong submitted asse
     const reviewRows = client.db.assessments.filter(row => row.test_id === round.reviewId);
     assert.equal(reviewRows.length, 1);
     assert.equal(reviewRows[0].assessment_kind, 'review');
+    assert.equal(reviewRows[0].source, 'question_cache');
     assert.equal(reviewRows[0].source_test_id, 'real-source');
     assert.equal(reviewRows[0].review_status, 'active');
 });
