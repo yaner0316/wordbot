@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+﻿const crypto = require('crypto');
 
 const {
     buildQuizWordQueue,
@@ -7,6 +7,7 @@ const {
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
+const { isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
 const {
     evaluateWordMastery,
     normalizeSubmittedAnswer,
@@ -176,6 +177,67 @@ function filterSelectableWordRows(wordRows) {
     });
 }
 
+function fieldText(value) {
+    if (value === undefined || value === null) return '';
+    if (Array.isArray(value)) return fieldText(value[0]);
+    if (typeof value === 'object') return String(value.text ?? value.name ?? value.value ?? value.id ?? '');
+    return String(value);
+}
+
+function cleanOptionWord(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function validFallbackWord(value) {
+    const word = cleanOptionWord(value);
+    return Boolean(word && /^[a-z]+(?:'[a-z]+)?$/.test(word) && !isBadQuizWord(word));
+}
+
+function rotateOptions(values, seed) {
+    const offset = values.length ? Math.abs(seed) % values.length : 0;
+    return values.map((_, index) => values[(index + offset) % values.length]);
+}
+
+function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId }) {
+    const existingRecordIds = new Set((existingQuestions || []).map(question => String(question.record_id || '').trim()).filter(Boolean));
+    const recordsById = new Map((wordRecords || []).map(record => [String(record.record_id || '').trim(), record]));
+    const fallbackWords = (wordRecords || [])
+        .map(record => fieldText(record.fields?.Word).trim().toLowerCase())
+        .filter(validFallbackWord);
+    const usedDistractors = new Set();
+    const questions = [];
+    for (const recordId of queue || []) {
+        if (existingQuestions.length + questions.length >= limit) break;
+        if (existingRecordIds.has(recordId)) continue;
+        const record = recordsById.get(String(recordId || '').trim());
+        if (!record) continue;
+        const word = fieldText(record.fields?.Word).trim().toLowerCase();
+        const meaning = fieldText(record.fields?.CN_Meaning).trim();
+        if (!validFallbackWord(word) || !meaning) continue;
+        const freshDistractors = fallbackWords.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
+        const recycledDistractors = fallbackWords.filter(candidate => candidate !== word);
+        const distractors = [...new Set([...freshDistractors, ...recycledDistractors])].slice(0, 3);
+        if (distractors.length < 3) continue;
+        for (const distractor of distractors) usedDistractors.add(distractor);
+        const optionWords = rotateOptions([word, ...distractors], questions.length + word.length);
+        const answer = ANSWER_LETTERS[optionWords.indexOf(word)];
+        const question = {
+            type: 3,
+            word,
+            context: meaning,
+            options: optionWords.map((option, index) => `${ANSWER_LETTERS[index]}. ${option}`),
+            answer,
+            correctAnswer: answer,
+            correctMeaning: meaning,
+            record_id: recordId,
+            testId,
+        };
+        if (!isQuestionQualityAcceptable(question)) continue;
+        questions.push(question);
+    }
+    return questions;
+}
+
 async function generateQuizWithDataSource({
     username,
     level,
@@ -234,6 +296,8 @@ async function generateQuizWithDataSource({
         correctAnswer: question.answer,
     }));
 
+    const testId = createAssessmentId(mode, createId);
+
     const diagnostics = {
         dataSource: dataSource.name || 'custom',
         user: canonicalUsername,
@@ -262,20 +326,48 @@ async function generateQuizWithDataSource({
     }
 
     if (questions.length < limit) {
+        const fallbackQuestions = buildMeaningFallbackQuestions({
+            wordRecords,
+            queue,
+            existingQuestions: questions,
+            limit,
+            testId,
+        });
+        const combinedQuestions = [...questions, ...fallbackQuestions].slice(0, limit);
+        if (combinedQuestions.length >= limit) {
+            return {
+                testId,
+                mode,
+                source: questions.length ? 'question_cache_with_fallback' : 'live_fallback',
+                level: effectiveLevel,
+                diagnostics: {
+                    ...diagnostics,
+                    fallbackUsed: true,
+                    fallbackQuestionCount: fallbackQuestions.length,
+                    finalQuestionCount: combinedQuestions.length,
+                },
+                questions: combinedQuestions,
+            };
+        }
         return {
             error: 'Question cache is still preparing.',
             code: 'QUESTION_CACHE_NOT_READY',
             source: 'question_cache',
             level: effectiveLevel,
-            diagnostics,
-            readyCount: questions.length,
+            diagnostics: {
+                ...diagnostics,
+                fallbackUsed: fallbackQuestions.length > 0,
+                fallbackQuestionCount: fallbackQuestions.length,
+                finalQuestionCount: combinedQuestions.length,
+            },
+            readyCount: combinedQuestions.length,
             requiredCount: limit,
-            questions,
+            questions: combinedQuestions,
         };
     }
 
     return {
-        testId: createAssessmentId(mode, createId),
+        testId,
         mode,
         source: 'question_cache',
         level: effectiveLevel,
@@ -424,3 +516,5 @@ module.exports = {
     toFeishuAssessmentRecord,
     toFeishuCacheRow,
 };
+
+
