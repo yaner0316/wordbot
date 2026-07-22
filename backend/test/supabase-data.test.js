@@ -796,6 +796,48 @@ test('rebuildQuestionCacheForUser skips middle-school words without natural cont
     assert.equal(client.db.question_cache.length, 0);
 });
 
+test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache when context is sparse', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            ['afford', '负担得起'],
+            ['trick', '窍门'],
+            ['whistle', '哨声'],
+            ['stream', '小溪'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: meaning,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:0${index}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.level, MIDDLE);
+    assert.equal(result.count, 8);
+    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary').length, 4);
+    assert.equal(client.db.question_cache.every(row => row.question_type === '3'), true);
+    assert.equal(client.db.question_cache.every(row => row.quality_status === 'ready'), true);
+    assert.equal(client.db.question_cache.every(row => !String(row.question_text || '').includes('Meaning')), true);
+    assert.deepEqual(
+        client.db.question_cache
+            .filter(row => row.round_type === 'primary')
+            .map(row => row.correct_meaning),
+        ['负担得起', '窍门', '哨声', '小溪']
+    );
+});
 test('rebuildQuestionCacheForUser does not use all candidate words as middle-school fallback distractors', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],

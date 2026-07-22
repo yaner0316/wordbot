@@ -644,6 +644,54 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
     });
 }
 
+function hasChineseText(value) {
+    return /[\u3400-\u9fff]/.test(String(value || ''));
+}
+
+function cleanChineseMeaningForCache(word) {
+    const meaning = String(word?.meaning_zh || '').trim();
+    return hasChineseText(meaning) ? meaning : '';
+}
+
+function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
+    const wordText = String(word.word || '').trim().toLowerCase();
+    if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
+    const meaning = cleanChineseMeaningForCache(word);
+    if (!meaning) return [];
+    const distractors = uniqueWords([
+        ...(word.distractors || []),
+        ...(word.old_distractors || []),
+        ...(fallbackDistractors || []),
+    ], wordText).slice(0, 3);
+    if (distractors.length < 3) return [];
+    const optionWords = shuffled([wordText, ...distractors]);
+    const letters = ['A', 'B', 'C', 'D'];
+    const answer = letters[optionWords.indexOf(wordText)];
+    const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
+    const optionMeanings = optionWords.map(option => option === wordText ? meaning : option);
+    const base = {
+        user_id: user.id,
+        word_id: word.id,
+        source_word_record_id: word.feishu_record_id || word.id,
+        level,
+        quality_status: 'ready',
+        question_type: '3',
+        question_text: meaning,
+        context_zh: null,
+        suffix: null,
+        options,
+        answer,
+        option_meanings: optionMeanings,
+        correct_meaning: meaning,
+        ai_audit_status: 'skipped',
+        source_version: 'supabase-rebuild-v1',
+        used_count: 0,
+        generated_at: toIsoString(now),
+        last_used_at: null,
+    };
+    const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
+    return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+}
 function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
@@ -655,7 +703,12 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
         ? fallbackElementaryContext(wordText, word.meaning_en || word.meaning_zh || '')
         : '';
     const sourceContext = templateContext || word.context_en || fallbackContext;
-    if (!hasWholeWord(sourceContext, wordText)) return [];
+    if (!hasWholeWord(sourceContext, wordText)) {
+        if (level !== ELEMENTARY_LEVEL) {
+            return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, fallbackDistractors });
+        }
+        return [];
+    }
     const context = blankWordInContext(sourceContext, wordText);
     const levelFallbackDistractors = level === ELEMENTARY_LEVEL
         ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
@@ -693,7 +746,11 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     };
     const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
     const readyRows = rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
-    if (readyRows.length || level !== ELEMENTARY_LEVEL || sourceContext === fallbackContext) return readyRows;
+    if (readyRows.length) return readyRows;
+    if (level !== ELEMENTARY_LEVEL) {
+        return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, fallbackDistractors });
+    }
+    if (sourceContext === fallbackContext) return readyRows;
     const fallbackRows = rows.map(row => ({
         ...row,
         question_text: blankWordInContext(fallbackContext, wordText),
@@ -734,8 +791,9 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
+    const fallbackDistractors = candidateWords.map(word => word.word);
     for (const word of candidateWords) {
-        rows.push(...buildCacheQuestionRowsForWord({ user, word, level }));
+        rows.push(...buildCacheQuestionRowsForWord({ user, word, level, fallbackDistractors }));
     }
     if (rows.length) {
         const { error } = await client
