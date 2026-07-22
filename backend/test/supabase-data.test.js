@@ -876,6 +876,50 @@ test('rebuildQuestionCacheForUser filters sparse middle-school fallback distract
     assert.equal(optionText.includes('bomb'), false);
     assert.equal(optionText.includes('crowded'), false);
 });
+test('rebuildQuestionCacheForUser varies sparse middle-school fallback distractors by target word', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            ['bomb', '炸弹'],
+            ['crowded', '拥挤的'],
+            ['resilient', '有弹性的'],
+            ['afford', '负担得起'],
+            ['trick', '窍门'],
+            ['whistle', '哨声'],
+            ['stream', '小溪'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: meaning,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:0${index}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    const wordById = new Map(client.db.words.map(word => [word.id, word.word]));
+    const distractorSets = client.db.question_cache
+        .filter(row => row.round_type === 'primary')
+        .map(row => ({
+            target: wordById.get(row.word_id),
+            options: row.options.map(option => option.replace(/^[A-D]\.\s+/, '')),
+        }))
+        .filter(row => ['afford', 'trick', 'whistle', 'stream'].includes(row.target))
+        .map(row => row.options.filter(option => option !== row.target).sort().join('|'));
+    assert.ok(distractorSets.length >= 4);
+    assert.ok(new Set(distractorSets).size > 1, distractorSets.join('; '));
+});
 test('rebuildQuestionCacheForUser does not use all candidate words as middle-school fallback distractors', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],

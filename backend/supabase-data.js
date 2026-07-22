@@ -654,16 +654,29 @@ function cleanChineseMeaningForCache(word) {
     return hasChineseText(meaning) ? meaning : '';
 }
 
-function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
+function stableWordOffset(word, size) {
+    if (!size) return 0;
+    let hash = 0;
+    for (const char of String(word || '')) {
+        hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+    }
+    return hash % size;
+}
+
+function rotateFallbackDistractors(pool, word) {
+    const offset = stableWordOffset(word, pool.length);
+    return [...pool.slice(offset), ...pool.slice(0, offset)];
+}function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     const meaning = cleanChineseMeaningForCache(word);
     if (!meaning) return [];
-    const distractors = uniqueWords([
+    const distractorPool = uniqueWords([
         ...(word.distractors || []),
         ...(word.old_distractors || []),
         ...(fallbackDistractors || []),
-    ], wordText).filter(option => !isBadQuizWord(option)).slice(0, 3);
+    ], wordText).filter(option => !isBadQuizWord(option));
+    const distractors = rotateFallbackDistractors(distractorPool, wordText).slice(0, 3);
     if (distractors.length < 3) return [];
     const optionWords = shuffled([wordText, ...distractors]);
     const letters = ['A', 'B', 'C', 'D'];
