@@ -16,8 +16,8 @@ test('runs AI quiz audit only when explicitly enabled with questions and an API 
     assert.equal(shouldRunAiQuizAudit({ enabled: true, hasApiKey: true, questionCount: 0 }), false);
 });
 
-test('live quiz fallback is opt-in when question cache is configured', () => {
-    assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: undefined }), false);
+test('live quiz fallback is enabled by default when question cache is configured', () => {
+    assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: undefined }), true);
     assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: '0' }), false);
     assert.equal(shouldAllowLiveQuizFallback({ cacheConfigured: true, flag: '1' }), true);
 });
