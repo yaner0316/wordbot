@@ -1,5 +1,7 @@
 const { inflectWord } = require('./word-inflector');
 
+const BAD_QUIZ_WORDS = new Set(['genaine']);
+
 function escapeRegExp(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -125,6 +127,10 @@ function isElementaryLevel(level) {
 
 function getOptionWord(option) {
     return stripOptionLabel(option).replace(/[^a-z\s'-]/gi, '').trim();
+}
+
+function isBadQuizWord(word) {
+    return BAD_QUIZ_WORDS.has(String(word || '').trim().toLowerCase());
 }
 
 function getCorrectOptionWord(question) {
@@ -400,6 +406,30 @@ function hasSenseMismatchRisk(question) {
     return '';
 }
 
+function hasGenericFillInContext(question) {
+    const context = String(question.context || '').trim().toLowerCase().replace(/_{3,}/g, '_____').replace(/\s+/g, ' ');
+    return context === 'the student wrote _____ in the sentence.';
+}
+
+function hasDictionaryFragmentContext(question) {
+    const context = String(question.context || '').trim();
+    if (!context) return false;
+    const semicolonCount = (context.match(/;/g) || []).length;
+    if (semicolonCount < 2) return false;
+    const fragments = context.split(';').map(part => part.trim()).filter(Boolean);
+    const fullSentenceCount = fragments.filter(part => /^[A-Z]/.test(part) && /[.!?]$/.test(part)).length;
+    const phraseLikeCount = fragments.filter(part => /^(?:a|an|the)\s+/i.test(part) && !/[.!?]$/.test(part)).length;
+    return fullSentenceCount === 0 || phraseLikeCount >= 2;
+}
+
+function hasInvalidOptionWord(question) {
+    return (question.options || []).map(getOptionWord).some(isBadQuizWord);
+}
+
+function hasInvalidDistractorWord(question) {
+    return getDistractorWords(question).some(isBadQuizWord);
+}
+
 function hasBadDistractorShape(question) {
     const correct = getCorrectOptionWord(question);
     const distractors = getDistractorWords(question);
@@ -436,6 +466,11 @@ function getQuestionQualityIssues(question) {
         const rawContext = String(question.context || '');
         const context = rawContext.replace(/_{3,}/g, word);
         const baseContext = rawContext.replace(/_{3,}/g, baseWord);
+        if (isBadQuizWord(baseWord) || isBadQuizWord(word)) issues.push('invalid_quiz_word');
+        if (hasGenericFillInContext(question)) issues.push('generic_fill_in_context');
+        if (hasDictionaryFragmentContext(question)) issues.push('dictionary_fragment_context');
+        if (hasInvalidOptionWord(question)) issues.push('invalid_option_word');
+        if (hasInvalidDistractorWord(question)) issues.push('invalid_distractor_word');
         if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
         if (hasAmbiguousFillInContext(question)) issues.push('ambiguous_fill_in_context');
@@ -472,6 +507,7 @@ module.exports = {
     hasAiMetaResponse,
     hasMeaningfulChineseMeaning,
     hasInvalidFillInGrammar,
+    isBadQuizWord,
     getQuestionQualityIssues,
     isQuestionQualityAcceptable,
 };

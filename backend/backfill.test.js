@@ -7,6 +7,7 @@ test('normalizes canonical usernames, levels, and compound parts of speech', () 
   assert.equal(canonicalUsernameKey(' Drag gy '), 'draggy');
   assert.equal(normalizeLevel('??'), '\u5c0f\u5b66');
   assert.equal(normalizeLevel('\u0421\u0467'), '\u5c0f\u5b66');
+  assert.equal(normalizeLevel('\u6942\u6a39\u8151'), '\u9ad8\u4e2d');
   assert.deepEqual(normalizePartsOfSpeech('n., adjective'), ['noun', 'adjective']);
   assert.deepEqual(normalizePartsOfSpeech('phrasal verb'), ['phrasal verb']);
 });

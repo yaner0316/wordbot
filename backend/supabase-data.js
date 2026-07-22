@@ -503,11 +503,12 @@ async function getUserLearningSettingsWithClient(client, username) {
 async function updateUserLearningSettingsWithClient(client, username, requestedLevel) {
     const user = await requireUserByUsername(client, username);
     const now = Date.now();
+    const hasStoredLearningLevel = Boolean(user.learning_level);
     const currentLevel = normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL);
     const nextLevel = normalizeLearningLevel(requestedLevel);
     const levelChangedAt = user.level_changed_at ? toMillis(user.level_changed_at) : 0;
     const nextAllowedAt = levelChangedAt ? levelChangedAt + LEVEL_CHANGE_COOLDOWN_MS : now;
-    if (nextLevel !== currentLevel && levelChangedAt && now < nextAllowedAt) {
+    if (hasStoredLearningLevel && nextLevel !== currentLevel && levelChangedAt && now < nextAllowedAt) {
         return {
             success: false,
             error: 'cooldown',
@@ -518,7 +519,7 @@ async function updateUserLearningSettingsWithClient(client, username, requestedL
             },
         };
     }
-    const changed = nextLevel !== currentLevel;
+    const changed = !hasStoredLearningLevel || nextLevel !== currentLevel;
     const payload = {
         learning_level: nextLevel,
         ...(changed ? { level_changed_at: new Date(now).toISOString() } : {}),
@@ -650,13 +651,15 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const templateContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
         : '';
-    const fallbackContext = level === ELEMENTARY_LEVEL ? fallbackElementaryContext(wordText, word.meaning_en || word.meaning_zh || '') : 'The student wrote ' + wordText + ' in the sentence.';
+    const fallbackContext = level === ELEMENTARY_LEVEL
+        ? fallbackElementaryContext(wordText, word.meaning_en || word.meaning_zh || '')
+        : '';
     const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) return [];
     const context = blankWordInContext(sourceContext, wordText);
     const levelFallbackDistractors = level === ELEMENTARY_LEVEL
-        ? [...generateElementaryDistractors(wordText), ...fallbackDistractors, 'apple', 'book', 'cat', 'dog', 'house', 'school']
-        : fallbackDistractors;
+        ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
+        : [];
     const distractors = uniqueWords([
         ...levelFallbackDistractors,
         ...(word.distractors || []),
@@ -731,9 +734,8 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
-    const fallbackDistractors = candidateWords.map(row => row.word);
     for (const word of candidateWords) {
-        rows.push(...buildCacheQuestionRowsForWord({ user, word, level, fallbackDistractors }));
+        rows.push(...buildCacheQuestionRowsForWord({ user, word, level }));
     }
     if (rows.length) {
         const { error } = await client

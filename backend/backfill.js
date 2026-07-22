@@ -91,6 +91,7 @@ function normalizeLevel(value) {
     ['\u4e36\u6d93\ue15f', MIDDLE],
     [HIGH, HIGH],
     ['\u696d\u6a3a\u8151', HIGH],
+    ['\u6942\u6a39\u8151', HIGH],
     ['CET4_6_TOEFL', 'CET4_6_TOEFL'],
   ]);
   return mappings.get(raw) || null;

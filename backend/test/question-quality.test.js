@@ -660,3 +660,55 @@ test('fill-in rejects same-category ocean route contexts across levels', () => {
     assert.equal(isQuestionQualityAcceptable(question), false);
     assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
 });
+
+test('middle-school quality rejects qiuqiu screenshot bad fill-in samples', () => {
+    const cases = [
+        {
+            word: 'genaine',
+            context: 'The student wrote _____ in the sentence.',
+            options: ['A. genaine', 'B. resilient', 'C. bomb', 'D. crowded'],
+            expected: ['invalid_quiz_word', 'generic_fill_in_context'],
+        },
+        {
+            word: 'repair',
+            context: "After the storm, the carpenter's _____ of the damaged roof kept the house dry.",
+            options: ['A. crowded', 'B. bomb', 'C. genaine', 'D. repair'],
+            answer: 'D',
+            expected: ['invalid_distractor_word'],
+        },
+        {
+            word: 'draggy',
+            context: 'The meeting turned _____ after the second hour, with everyone losing interest.',
+            options: ['A. crowded', 'B. genaine', 'C. draggy', 'D. bomb'],
+            answer: 'C',
+            expected: ['invalid_distractor_word'],
+        },
+        {
+            word: 'straight',
+            context: 'The road ahead was _____ for miles, offering a clear view of the horizon.',
+            options: ['A. straight', 'B. genaine', 'C. crowded', 'D. bomb'],
+            expected: ['invalid_distractor_word'],
+        },
+        {
+            word: 'successful',
+            context: 'a _____ use of medicine; a successful experiment; a successful enterprise',
+            options: ['A. successful', 'B. crowded', 'C. bomb', 'D. repair'],
+            expected: ['dictionary_fragment_context'],
+        },
+    ];
+
+    for (const sample of cases) {
+        const question = {
+            type: 1,
+            level: JUNIOR_HIGH,
+            correctMeaning: 'sample meaning',
+            answer: sample.answer || 'A',
+            ...sample,
+        };
+        const issues = getQuestionQualityIssues(question);
+        assert.equal(isQuestionQualityAcceptable(question), false, sample.word);
+        for (const expected of sample.expected) {
+            assert.ok(issues.includes(expected), sample.word + ' issues=' + issues.join(','));
+        }
+    }
+});

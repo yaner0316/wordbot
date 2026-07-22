@@ -51,6 +51,7 @@ test('normalizes known learning levels and rejects unknown values', () => {
     assert.equal(normalizeLearningLevel(elementary), elementary);
     assert.equal(normalizeLearningLevel(String.fromCodePoint(0x0421, 0x0467)), elementary);
     assert.equal(normalizeLearningLevel('??'), elementary);
+    assert.equal(normalizeLearningLevel(String.fromCharCode(0x6942, 0x6a39, 0x8151)), String.fromCharCode(0x9ad8, 0x4e2d));
     assert.equal(normalizeLearningLevel('CET/TOEFL'), 'CET4_6_TOEFL');
     assert.throws(() => normalizeLearningLevel('大学'), /invalid learning level/);
 });

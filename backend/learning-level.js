@@ -17,6 +17,7 @@ const LEVEL_ALIASES = new Map([
     [String.fromCharCode(0x704f, 0x5fd3, 0xe15f), ELEMENTARY_LEVEL],
     [String.fromCharCode(0x4e36, 0x6d93, 0xe15f), JUNIOR_HIGH_LEVEL],
     [String.fromCharCode(0x696d, 0x6a3a, 0x8151), HIGH_LEVEL],
+    [String.fromCharCode(0x6942, 0x6a39, 0x8151), HIGH_LEVEL],
 ]);
 
 function normalizeLevel(level, { allowNull = false, defaultLevel = DEFAULT_LEARNING_LEVEL } = {}) {

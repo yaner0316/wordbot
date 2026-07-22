@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildQuizWordQueue, selectCachedQuestionsForWordQueue } = require('../quiz-word-queue');
@@ -224,4 +224,31 @@ test('cached question selection backfills from ready cache rows outside the queu
         selected.map(question => question.cacheRecordId),
         ['cache-1', 'cache-2', 'cache-3', 'cache-4', 'cache-5', 'cache-6', 'cache-7', 'cache-8', 'cache-13', 'cache-14']
     );
+});
+
+test('cached question selection does not backfill bad ready rows outside the queue', () => {
+    const queue = Array.from({ length: 12 }, (_, index) => `rec-${index + 1}`);
+    const cacheRows = [1, 2, 3, 4, 5, 6, 7, 8].map(index => cache(index));
+    cacheRows.push(cache(13, {
+        fields: {
+            word_record_id: 'rec-genaine',
+            word: 'genaine',
+            question_text: 'The student wrote _____ in the sentence.',
+            options: JSON.stringify(['A. genaine', 'B. resilient', 'C. bomb', 'D. crowded']),
+            answer: 'A',
+            option_meanings: JSON.stringify(['bad spelling', 'strong', 'explosive', 'full']),
+        },
+    }));
+
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows,
+        queue,
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(selected.length, 8);
+    assert.equal(selected.some(question => question.word === 'genaine'), false);
 });

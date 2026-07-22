@@ -430,6 +430,36 @@ test('updateUserLearningSettings updates Supabase user level and removes stale c
     assert.equal(client.db.question_cache.length, 0);
 });
 
+test('updateUserLearningSettings repairs missing migrated user level despite cooldown timestamp', async () => {
+    const HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-1',
+            username: 'yusi',
+            username_key: 'yusi',
+            learning_level: null,
+            level_changed_at: new Date().toISOString(),
+        }],
+        words: [],
+        assessments: [],
+        question_cache: [{
+            id: 'cache-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            level: HIGH,
+            quality_status: 'ready',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.updateUserLearningSettings('yusi', HIGH);
+
+    assert.equal(result.success, true);
+    assert.equal(result.settings.learningLevel, HIGH);
+    assert.equal(client.db.users[0].learning_level, HIGH);
+    assert.ok(client.db.users[0].level_changed_at);
+    assert.equal(client.db.question_cache.length, 0);
+});
 test('quiz session persistence saves and restores unexpired Supabase sessions', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);
@@ -674,7 +704,7 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
     assert.equal(client.db.assessments.length, 1);
 });
 
-test('rebuildQuestionCacheForUser inherits level and fallback distractors for unassigned words', async () => {
+test('rebuildQuestionCacheForUser inherits level and uses word-specific distractors for unassigned words', async () => {
     const JUNIOR_HIGH = String.fromCharCode(0x4e2d, 0x5b66);
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: JUNIOR_HIGH }],
@@ -686,8 +716,8 @@ test('rebuildQuestionCacheForUser inherits level and fallback distractors for un
             meaning_en: `Meaning ${index + 1}`,
             meaning_zh: `Meaning ${index + 1}`,
             level: null,
-            context_en: index < 8 ? `This sentence contains ${word}.` : null,
-            distractors: [],
+            context_en: `This sentence contains ${word}.`,
+            distractors: ['alpha', 'bravo', 'charlie'],
             old_distractors: [],
             mastery_status: 'pending',
             entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
@@ -735,4 +765,77 @@ test('rebuildQuestionCacheForUser falls back for an unknown elementary word', as
     assert.equal(result.count, 20);
     assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 10);
     assert.equal(client.db.question_cache.some(row => row.question_text.includes('Please read')), false);
+});
+
+test('rebuildQuestionCacheForUser skips middle-school words without natural context and approved distractors', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: ['genaine', 'repair', 'draggy', 'straight'].map((word, index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: `Meaning ${index + 1}`,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.level, MIDDLE);
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.length, 0);
+});
+
+test('rebuildQuestionCacheForUser does not use all candidate words as middle-school fallback distractors', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            {
+                id: 'word-1',
+                feishu_record_id: 'rec-word-1',
+                user_id: 'user-1',
+                word: 'repair',
+                meaning_en: 'to fix something damaged',
+                meaning_zh: 'to fix something damaged',
+                level: MIDDLE,
+                context_en: "After the storm, the carpenter's repair of the damaged roof kept the house dry.",
+                distractors: [],
+                old_distractors: [],
+                mastery_status: 'pending',
+                entered_at: '2026-07-19T00:00:00.000Z',
+            },
+            ...['crowded', 'bomb', 'straight'].map((word, index) => ({
+                id: `word-${index + 2}`,
+                feishu_record_id: `rec-word-${index + 2}`,
+                user_id: 'user-1',
+                word,
+                meaning_en: `Meaning ${index + 2}`,
+                meaning_zh: `Meaning ${index + 2}`,
+                level: MIDDLE,
+                context_en: `${word} appears in a separate sentence.`,
+                distractors: [],
+                old_distractors: [],
+                mastery_status: 'pending',
+                entered_at: `2026-07-19T00:00:0${index + 1}.000Z`,
+            })),
+        ],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.length, 0);
 });
