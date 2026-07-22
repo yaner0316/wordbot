@@ -513,10 +513,19 @@ async function isMigratedUnassignedVocabularyLevelRepair(client, user, currentLe
             .order('id', { ascending: true }),
         'updateUserLearningSettings.migratedWords'
     );
-    return rows.length > 0 && rows.every(row => {
+    const levelCounts = rows.reduce((counts, row) => {
+        const rowLevel = normalizeOptionalLearningLevel(row.level);
+        if (!rowLevel) counts.unassigned += 1;
+        else if (rowLevel === nextLevel) counts.target += 1;
+        else if (rowLevel === currentLevel) counts.current += 1;
+        return counts;
+    }, { unassigned: 0, target: 0, current: 0 });
+    const allRowsUnassignedOrTarget = rows.every(row => {
         const rowLevel = normalizeOptionalLearningLevel(row.level);
         return !rowLevel || rowLevel === nextLevel;
     });
+    const targetLevelDominatesCurrent = levelCounts.target >= 10 && levelCounts.target > levelCounts.current;
+    return rows.length > 0 && (allRowsUnassignedOrTarget || targetLevelDominatesCurrent);
 }
 async function updateUserLearningSettingsWithClient(client, username, requestedLevel) {
     const user = await requireUserByUsername(client, username);
