@@ -118,6 +118,7 @@ const CN = {
     mud: String.fromCharCode(0x6ce5),
     pepper: String.fromCharCode(0x80e1, 0x6912),
     lamb: String.fromCharCode(0x7f8a, 0x7f94),
+    crowded: String.fromCharCode(0x62e5, 0x6324),
 };
 
 function isElementaryLevel(level) {
@@ -403,6 +404,9 @@ function hasSenseMismatchRisk(question) {
     if (word === 'lamb' && meaning.includes(CN.lamb) && /(lambing|young ewes|shepherd was up all night)/.test(context + ' ' + getCorrectOptionWord(question))) {
         return 'sense_mismatch_lamb';
     }
+    if (word === 'crowded' && meaning.includes(CN.crowded) && /\bcrowded\s+into\b/.test(context.replace(/_{3,}/g, 'crowded'))) {
+        return 'sense_mismatch_crowded';
+    }
     return '';
 }
 
@@ -428,6 +432,27 @@ function hasInvalidOptionWord(question) {
 
 function hasInvalidDistractorWord(question) {
     return getDistractorWords(question).some(isBadQuizWord);
+}
+
+function hasBadCorrectMeaning(question) {
+    const type = Number(question?.type);
+    if (![1, 2].includes(type) || isElementaryLevel(question.level)) return false;
+    const meaning = String(question.correctMeaning || '').trim();
+    if (!meaning || hasAiMetaResponse(meaning) || hasMeaningfulChineseMeaning(meaning)) return false;
+    return meaning.length > 30 || /;/.test(meaning);
+}
+
+function hasAnswerRevealedAfterBlank(question) {
+    const type = Number(question?.type);
+    if (type !== 1) return false;
+    const rawContext = String(question.context || '');
+    const blankIndex = rawContext.indexOf('_____');
+    if (blankIndex < 0) return false;
+    const afterBlank = rawContext.slice(blankIndex + 5);
+    const words = [String(question.word || '').trim().toLowerCase(), getCorrectOptionWord(question)]
+        .map(word => String(word || '').trim().toLowerCase())
+        .filter(Boolean);
+    return words.some(word => new RegExp('\\b' + escapeRegExp(word) + '\\b', 'i').test(afterBlank));
 }
 
 function hasBadDistractorShape(question) {
@@ -467,6 +492,7 @@ function getQuestionQualityIssues(question) {
         const context = rawContext.replace(/_{3,}/g, word);
         const baseContext = rawContext.replace(/_{3,}/g, baseWord);
         if (isBadQuizWord(baseWord) || isBadQuizWord(word)) issues.push('invalid_quiz_word');
+        if (hasAnswerRevealedAfterBlank(question)) issues.push('answer_revealed_after_blank');
         if (hasGenericFillInContext(question)) issues.push('generic_fill_in_context');
         if (hasDictionaryFragmentContext(question)) issues.push('dictionary_fragment_context');
         if (hasInvalidOptionWord(question)) issues.push('invalid_option_word');
@@ -476,6 +502,9 @@ function getQuestionQualityIssues(question) {
         if (hasAmbiguousFillInContext(question)) issues.push('ambiguous_fill_in_context');
         const mismatch = hasSenseMismatchRisk(question);
         if (mismatch) issues.push(mismatch);
+    }
+    if ([1, 2].includes(type) && hasBadCorrectMeaning(question)) {
+        issues.push('bad_correct_meaning');
     }
     if ([1, 2, 3].includes(type) && hasBadDistractorShape(question)) {
         issues.push('bad_distractor_shape');

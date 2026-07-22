@@ -712,3 +712,51 @@ test('middle-school quality rejects qiuqiu screenshot bad fill-in samples', () =
         }
     }
 });
+
+test('middle-school fill-in rejects cached rows with English-only correct meanings', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'draggy',
+        context: 'The meeting turned _____ after the second hour, with everyone losing interest.',
+        correctMeaning: 'Moving or developing very slowly; tending to drag on; dull.',
+        options: ['A. rugby', 'B. medical', 'C. draggy', 'D. drawer'],
+        answer: 'C',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('bad_correct_meaning'), 'issues=' + issues.join(','));
+});
+
+test('fill-in rejects dictionary example bundles that reveal the target after the blank', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'distant',
+        context: "We heard a _____ rumbling but didn't pay any more attention to it. She was surprised to find that her fiance was a distant relative of hers. His distant look showed that he was not listening to me.",
+        correctMeaning: String.fromCharCode(0x9065, 0x8fdc, 0x7684),
+        options: ['A. cheek', 'B. authentic', 'C. drawer', 'D. distant'],
+        answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('answer_revealed_after_blank'), 'issues=' + issues.join(','));
+});
+
+test('fill-in rejects crowded verb-context when target meaning is crowded adjective', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'crowded',
+        context: 'The man _____ into the packed room.',
+        correctMeaning: String.fromCharCode(0x62e5, 0x6324),
+        options: ['A. businessman', 'B. railway', 'C. joy', 'D. crowded'],
+        answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('sense_mismatch_crowded'), 'issues=' + issues.join(','));
+});
