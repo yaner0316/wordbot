@@ -5,7 +5,7 @@ const { createSupabaseDataAdapter } = require('../supabase-data');
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 
-function createFakeSupabase(seed = {}) {
+function createFakeSupabase(seed = {}, options = {}) {
     const db = {
         users: [],
         words: [],
@@ -87,6 +87,19 @@ function createFakeSupabase(seed = {}) {
             if (!tableRows) return { data: null, error: new Error(`unknown table ${this.table}`) };
 
             if (this.operation === 'insert' || this.operation === 'upsert') {
+                const missingColumns = options.missingColumns?.[this.table] || [];
+                const missingColumn = missingColumns.find(column =>
+                    this.payload.some(row => Object.prototype.hasOwnProperty.call(row, column))
+                );
+                if (missingColumn) {
+                    return {
+                        data: null,
+                        error: {
+                            code: 'PGRST204',
+                            message: "Could not find the '" + missingColumn + "' column of '" + this.table + "' in the schema cache",
+                        },
+                    };
+                }
                 const inserted = this.payload.map(row => {
                     const next = { ...row };
                     if (!next.id && ['words', 'assessments', 'question_cache'].includes(this.table)) {
@@ -532,6 +545,50 @@ test('createReviewRound builds a Supabase review round from wrong submitted asse
     assert.equal(reviewRows[0].review_status, 'active');
 });
 
+
+test('createReviewRound tolerates assessments without parent_review_id', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'draggy', username_key: 'draggy' }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'Attitude',
+            meaning_en: 'a way of thinking',
+            meaning_zh: 'attitude',
+            level: MIDDLE,
+            mastery_status: 'pending',
+            entered_at: '2026-07-18T00:00:00.000Z',
+        }],
+        assessments: [{
+            id: 'a-1',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            source_word_record_id: 'rec-word-1',
+            test_id: 'real-source',
+            word_snapshot: 'Attitude',
+            question_type: '1',
+            correct_answer: 'A',
+            submitted_answer: 'B',
+            is_correct: 'wrong',
+            assessed_at: '2026-07-21T00:00:00.000Z',
+            learning_day: '2026-07-21',
+            level: MIDDLE,
+        }],
+    }, {
+        missingColumns: { assessments: ['parent_review_id'] },
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const round = await adapter.createReviewRound({ userId: 'draggy', sourceTestId: 'real-source' });
+
+    assert.equal(round.questions.length, 1);
+    const retry = await adapter.createReviewRound({ userId: 'draggy', sourceTestId: 'real-source' });
+    const reviewRows = client.db.assessments.filter(row => row.assessment_kind === 'review');
+    assert.equal(retry.reviewId, round.reviewId);
+    assert.equal(reviewRows.length, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(reviewRows[0], 'parent_review_id'), false);
+});
 
 test('concurrent review generation returns one active round', async () => {
     const client = createFakeSupabase({

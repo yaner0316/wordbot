@@ -976,7 +976,15 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
             parent_review_id: parentReviewId,
         });
     }
-    const { data, error } = await client.from('assessments').insert(insertRows).select('*');
+    let { data, error } = await client.from('assessments').insert(insertRows).select('*');
+    if (isMissingReviewParentColumnError(error)) {
+        const compatibleRows = insertRows.map(row => {
+            const compatibleRow = { ...row };
+            delete compatibleRow.parent_review_id;
+            return compatibleRow;
+        });
+        ({ data, error } = await client.from('assessments').insert(compatibleRows).select('*'));
+    }
     ensureNoError(error, 'createReviewRound');
     return buildSupabaseReviewRoundResponse(decorateAssessmentRows(data || [], user), reviewId);
 }
