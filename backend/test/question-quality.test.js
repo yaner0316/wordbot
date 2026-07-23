@@ -672,6 +672,22 @@ test('fill-in rejects same-category ocean route contexts across levels', () => {
     assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
 });
 
+test('fill-in rejects same-category transport route contexts across levels', () => {
+    const question = {
+        type: 1,
+        level: SENIOR_HIGH,
+        word: 'railway',
+        context: 'The _____ connects the two major cities.',
+        correctMeaning: String.fromCharCode(0x94c1, 0x8def),
+        options: ['A. highway', 'B. waterway', 'C. runway', 'D. railway'],
+        answer: 'D',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
+
 test('middle-school quality rejects qiuqiu screenshot bad fill-in samples', () => {
     const cases = [
         {

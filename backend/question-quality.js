@@ -313,6 +313,11 @@ const OCEAN_ROUTE_WORDS = new Set([
     'ocean', 'sea', 'mediterranean', 'caribbean', 'baltic', 'black', 'red',
 ]);
 
+const TRANSPORT_ROUTE_WORDS = new Set([
+    'highway', 'railway', 'waterway', 'runway', 'road', 'route', 'freeway',
+    'expressway', 'motorway', 'railroad', 'canal', 'bridge', 'tunnel',
+]);
+
 const PLAYGROUND_ACTION_WORDS = new Set([
     'swing', 'jump', 'climb', 'slide', 'run', 'walk',
 ]);
@@ -381,6 +386,16 @@ function hasAmbiguousFillInContext(question) {
         /\b(?:sailed|crossed|voyage|route)\b.*\b(?:from|between)\b.*\b(?:to|and)\b/,
     ].some(pattern => pattern.test(context));
     if (oceanRouteCount >= 3 && hasOceanRouteContext) {
+        return true;
+    }
+
+    const transportRouteCount = optionWords.filter(word => TRANSPORT_ROUTE_WORDS.has(word)).length;
+    const hasTransportRouteContext = [
+        /\b(?:the|a|an)\s+_____\s+(?:connects|links|joins)\s+(?:the\s+)?(?:two\s+)?(?:major\s+)?(?:cities|towns|places)\b/,
+        /\b_____\s+(?:runs|goes|passes)\s+(?:from|between)\b.*\b(?:to|and)\b/,
+        /\b(?:between|from)\b.*\b(?:cities|towns|places)\b.*\b_____\b/,
+    ].some(pattern => pattern.test(context));
+    if (transportRouteCount >= 3 && hasTransportRouteContext) {
         return true;
     }
     return false;
