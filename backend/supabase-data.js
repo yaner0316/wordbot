@@ -16,6 +16,7 @@ const {
     generateElementaryTemplateContext,
 } = require('./elementary-context');
 const { isBadQuizWord } = require('./question-quality');
+const { generateSupabaseDistractors } = require('./supabase-distractors');
 const {
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
@@ -695,7 +696,7 @@ function stableWordOffset(word, size) {
 function rotateFallbackDistractors(pool, word) {
     const offset = stableWordOffset(word, pool.length);
     return [...pool.slice(offset), ...pool.slice(0, offset)];
-}function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
+}async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     const meaning = cleanChineseMeaningForCache(word);
@@ -703,9 +704,11 @@ function rotateFallbackDistractors(pool, word) {
     const distractorPool = uniqueWords([
         ...(word.distractors || []),
         ...(word.old_distractors || []),
-        ...(fallbackDistractors || []),
     ], wordText).filter(option => !isBadQuizWord(option));
-    const distractors = rotateFallbackDistractors(distractorPool, wordText).slice(0, 3);
+    const generated = distractorPool.length >= 3
+        ? []
+        : await generateDistractors({ word: wordText, meaning });
+    const distractors = uniqueWords([...distractorPool, ...(generated || [])], wordText).slice(0, 3);
     if (distractors.length < 3) return [];
     const optionWords = shuffled([wordText, ...distractors]);
     const letters = ['A', 'B', 'C', 'D'];
@@ -735,7 +738,7 @@ function rotateFallbackDistractors(pool, word) {
     const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
     return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
 }
-function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), fallbackDistractors = [] }) {
+async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
     const meaning = word.meaning_zh || word.meaning_en || wordText;
@@ -748,7 +751,7 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) {
         if (level !== ELEMENTARY_LEVEL) {
-            return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, fallbackDistractors });
+            return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors });
         }
         return [];
     }
@@ -791,7 +794,7 @@ function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Dat
     const readyRows = rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
     if (readyRows.length) return readyRows;
     if (level !== ELEMENTARY_LEVEL) {
-        return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, fallbackDistractors });
+        return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors });
     }
     if (sourceContext === fallbackContext) return readyRows;
     const fallbackRows = rows.map(row => ({
@@ -814,7 +817,7 @@ async function deleteQuestionCacheRowsWithClient(client, username, type = null) 
     return { deleted: (data || []).length };
 }
 
-async function rebuildQuestionCacheForUserWithClient(client, username) {
+async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
@@ -834,12 +837,15 @@ async function rebuildQuestionCacheForUserWithClient(client, username) {
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
-    const fallbackDistractors = candidateWords
-        .filter(word => cleanChineseMeaningForCache(word))
-        .filter(word => !isBadQuizWord(word.word))
-        .map(word => word.word);
+    const generateDistractors = async input => {
+        try {
+            return await distractorGenerator(input);
+        } catch (error) {
+            return null;
+        }
+    };
     for (const word of candidateWords) {
-        rows.push(...buildCacheQuestionRowsForWord({ user, word, level, fallbackDistractors }));
+        rows.push(...await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors }));
     }
     if (rows.length) {
         const { error } = await client
@@ -1408,7 +1414,8 @@ async function cleanupExpiredQuizSessionsWithClient(client, options = {}) {
     return { deleted: (data || []).length };
 }
 
-function createSupabaseDataAdapter(client = supabase) {
+function createSupabaseDataAdapter(client = supabase, { generateDistractors = null } = {}) {
+    const distractorGenerator = generateDistractors || (async () => null);
     return {
         name: 'supabase',
         canonicalUsernameKey,
@@ -1429,7 +1436,7 @@ function createSupabaseDataAdapter(client = supabase) {
         getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
-        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username),
+        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
         saveQuizSession: (username, testId, questions, options) =>
@@ -1449,7 +1456,7 @@ function createSupabaseDataAdapter(client = supabase) {
     };
 }
 
-const defaultAdapter = createSupabaseDataAdapter(supabase);
+const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors });
 
 module.exports = {
     name: 'supabase',

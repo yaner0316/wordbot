@@ -950,7 +950,9 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async () => ['support', 'shoulder', 'maintain'],
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
@@ -967,7 +969,80 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
         ['负担得起', '窍门', '哨声', '小溪']
     );
 });
-test('rebuildQuestionCacheForUser filters sparse middle-school fallback distractors to Chinese-meaning words', async () => {
+test('rebuildQuestionCacheForUser uses independently generated distractors instead of vocabulary words', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            ['afford', '负担得起；买得起'],
+            ['liquid', '液体'],
+            ['freeze', '冻结'],
+            ['container', '容器'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: meaning,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-23T00:00:0${index}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async ({ word }) => word === 'afford'
+            ? ['support', 'shoulder', 'maintain']
+            : null,
+    });
+
+    await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    const affordRows = client.db.question_cache.filter(row => row.word_id === 'word-1');
+    assert.equal(affordRows.length, 2);
+    const options = affordRows[0].options.map(option => option.replace(/^[A-D]\.\s+/, ''));
+    assert.deepEqual(options.filter(option => option !== 'afford').sort(), ['maintain', 'shoulder', 'support']);
+    assert.equal(options.some(option => ['liquid', 'freeze', 'container'].includes(option)), false);
+});
+
+test('rebuildQuestionCacheForUser skips sparse type 3 questions when distractor generation fails', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            ['afford', '负担得起；买得起'],
+            ['liquid', '液体'],
+            ['freeze', '冻结'],
+            ['container', '容器'],
+        ].map(([word, meaning], index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
+            user_id: 'user-1',
+            word,
+            meaning_en: `Meaning ${index + 1}`,
+            meaning_zh: meaning,
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: `2026-07-23T00:00:0${index}.000Z`,
+        })),
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async () => null,
+    });
+
+    await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(client.db.question_cache.length, 0);
+});
+test('rebuildQuestionCacheForUser does not use candidate words when distractor generation fails', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [
@@ -999,7 +1074,7 @@ test('rebuildQuestionCacheForUser filters sparse middle-school fallback distract
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
-    assert.equal(result.count, 8);
+    assert.equal(result.count, 0);
     const optionText = client.db.question_cache.flatMap(row => row.options).join(' ').toLowerCase();
     assert.equal(optionText.includes('genaine'), false);
     assert.equal(optionText.includes('bomb'), false);
@@ -1033,7 +1108,11 @@ test('rebuildQuestionCacheForUser varies sparse middle-school fallback distracto
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async ({ word }) => word === 'afford'
+            ? ['support', 'shoulder', 'maintain']
+            : ['select', 'reject', 'replace'],
+    });
 
     await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
