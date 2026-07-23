@@ -173,7 +173,9 @@ function seededClient() {
 
 test('submitAssessment resolves username and source word record to Supabase foreign keys', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const row = await adapter.submitAssessment({
         username: 'qiuqiu',
@@ -205,7 +207,9 @@ test('submitAssessment resolves username and source word record to Supabase fore
 
 test('updateWordMastery updates the resolved user word row', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const rows = await adapter.updateWordMastery('qiuqiu', 'Apple', 'mastered');
 
@@ -216,7 +220,9 @@ test('updateWordMastery updates the resolved user word row', async () => {
 
 test('incrementCacheUsedCount resolves Feishu cache IDs before updating used_count', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const row = await adapter.incrementCacheUsedCount('rec-cache-1');
 
@@ -236,7 +242,9 @@ test('incrementCacheUsedCount resolves database cache rows by source word record
         round_type: 'primary',
         used_count: 0,
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const row = await adapter.incrementCacheUsedCount('rec-source-word-1');
 
@@ -246,7 +254,9 @@ test('incrementCacheUsedCount resolves database cache rows by source word record
 
 test('addWord inserts a word and ordered parts of speech junction rows', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const row = await adapter.addWord({
         username: 'qiuqiu',
@@ -269,7 +279,9 @@ test('addWord inserts a word and ordered parts of speech junction rows', async (
 
 test('addWords inserts multiple words through Supabase addWord path', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.addWords('qiuqiu', [
         { word: 'orange', meaning: 'a citrus fruit', level: MIDDLE, POS: ['noun'] },
@@ -289,7 +301,9 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
 
 test('question cache status summarizes Supabase rows by level', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
     client.db.question_cache[0] = {
         ...client.db.question_cache[0],
         level: MIDDLE,
@@ -299,7 +313,7 @@ test('question cache status summarizes Supabase rows by level', async () => {
         question_text: 'I ate an _____ after lunch.',
         options: ['A. apple', 'B. pear', 'C. chair', 'D. desk'],
         answer: 'A',
-        option_meanings: ['fruit', 'fruit', 'seat', 'furniture'],
+        option_meanings: ['水果', '水果', '座位', '家具'],
         correct_meaning: 'a fruit',
         generated_at: '2026-07-19T12:00:00.000Z',
     };
@@ -342,7 +356,9 @@ test('getQuestionCache normalizes known elementary mojibake before enum filterin
             generated_at: '2026-07-19T12:00:00.000Z',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const rows = await adapter.getQuestionCache('test_user', MOJIBAKE_ELEMENTARY, 'primary');
 
@@ -379,7 +395,9 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
@@ -419,7 +437,9 @@ test('updateUserLearningSettings updates Supabase user level and removes stale c
             quality_status: 'ready',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.updateUserLearningSettings('qiuqiu', ELEMENTARY);
 
@@ -450,7 +470,9 @@ test('updateUserLearningSettings repairs missing migrated user level despite coo
             quality_status: 'ready',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.updateUserLearningSettings('yusi', HIGH);
 
@@ -490,7 +512,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when migrated
             quality_status: 'ready',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.updateUserLearningSettings('yusi', HIGH);
 
@@ -529,7 +553,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when migrated
             quality_status: 'ready',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.updateUserLearningSettings('yusi', HIGH);
 
@@ -579,7 +605,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when high wor
             quality_status: 'ready',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.updateUserLearningSettings('yusi', HIGH);
 
@@ -590,7 +618,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when high wor
 });
 test('quiz session persistence saves and restores unexpired Supabase sessions', async () => {
     const client = seededClient();
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
     const questions = [{ word: 'Apple', answer: 'A', options: ['A. Apple', 'B. Pear'] }];
 
     await adapter.saveQuizSession('qiuqiu', 'quiz-1', questions, {
@@ -623,7 +653,9 @@ test('quiz session persistence ignores expired sessions and deletes submitted se
             expires_at: '2026-07-21T00:00:00.000Z',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     assert.equal(await adapter.getQuizSession('qiuqiu', 'expired-quiz', {
         now: () => '2026-07-20T00:00:00.000Z',
@@ -648,7 +680,9 @@ test('getAssessmentsForTest returns only rows for one user and test id', async (
             { id: 'a-3', user_id: 'user-2', test_id: 'real-target', word_snapshot: 'Desk', source_word_record_id: 'rec-word-3', question_type: '1', is_correct: 'wrong', assessed_at: '2026-07-21T00:02:00.000Z', options: [] },
         ],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const rows = await adapter.getAssessmentsForTest('qiuqiu', 'real-target');
 
@@ -688,7 +722,9 @@ test('createReviewRound builds a Supabase review round from wrong submitted asse
             level: MIDDLE,
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const round = await adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' });
 
@@ -737,7 +773,9 @@ test('createReviewRound tolerates assessments without parent_review_id', async (
     }, {
         missingColumns: { assessments: ['parent_review_id'] },
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const round = await adapter.createReviewRound({ userId: 'draggy', sourceTestId: 'real-source' });
 
@@ -755,7 +793,9 @@ test('concurrent review generation returns one active round', async () => {
         words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'Apple', meaning_en: 'a fruit', meaning_zh: 'apple', level: MIDDLE, mastery_status: 'pending', entered_at: '2026-07-18T00:00:00.000Z' }],
         assessments: [{ id: 'a-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-source', word_snapshot: 'Apple', question_type: '1', correct_answer: 'A', submitted_answer: 'B', is_correct: 'wrong', assessed_at: '2026-07-21T00:00:00.000Z', learning_day: '2026-07-21', level: MIDDLE }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
     const [first, second] = await Promise.all([
         adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' }),
         adapter.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' }),
@@ -770,7 +810,9 @@ test('review active, defer, and summary flows use Supabase assessment metadata',
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
         assessments: [{ id: 'review-row-1', user_id: 'user-1', source_word_record_id: 'rec-word-1', test_id: 'real-review-r1', source_test_id: 'real-source', word_snapshot: 'Apple', question_type: '4', correct_answer: 'apple', submitted_answer: null, is_correct: null, assessed_at: '2026-07-21T00:00:00.000Z', review_status: 'active', assessment_kind: 'review' }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const active = await adapter.getActiveReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-source' });
     assert.equal(active.reviewId, 'real-review-r1');
@@ -808,7 +850,9 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
             parent_review_id: '',
         }],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.submitReviewRound({
         userId: 'qiuqiu',
@@ -854,7 +898,9 @@ test('rebuildQuestionCacheForUser inherits level and uses word-specific distract
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
@@ -886,7 +932,9 @@ test('rebuildQuestionCacheForUser falls back for an unknown elementary word', as
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('Draggy');
 
@@ -916,7 +964,9 @@ test('rebuildQuestionCacheForUser skips middle-school words without natural cont
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
@@ -951,6 +1001,7 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
         question_cache: [],
     });
     const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateDistractors: async () => ['support', 'shoulder', 'maintain'],
     });
 
@@ -995,6 +1046,7 @@ test('rebuildQuestionCacheForUser uses independently generated distractors inste
         question_cache: [],
     });
     const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateDistractors: async ({ word }) => word === 'afford'
             ? ['support', 'shoulder', 'maintain']
             : null,
@@ -1009,6 +1061,40 @@ test('rebuildQuestionCacheForUser uses independently generated distractors inste
     assert.equal(options.some(option => ['liquid', 'freeze', 'container'].includes(option)), false);
 });
 
+test('rebuildQuestionCacheForUser writes Chinese meanings for generated options', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'attitude',
+            meaning_en: 'a way of thinking or feeling',
+            meaning_zh: '态度',
+            level: MIDDLE,
+            context_en: null,
+            distractors: [],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: '2026-07-23T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async () => ['explicit', 'disappointed', 'blond'],
+        translateWords: async words => ({
+            explicit: '明确的',
+            disappointed: '失望的',
+            blond: '金发的',
+        }),
+    });
+
+    await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    const row = client.db.question_cache.find(item => item.round_type === 'primary');
+    assert.deepEqual(row.option_meanings.sort(), ['失望的', '态度', '明确的', '金发的'].sort());
+});
 test('rebuildQuestionCacheForUser skips sparse type 3 questions when distractor generation fails', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
@@ -1035,6 +1121,7 @@ test('rebuildQuestionCacheForUser skips sparse type 3 questions when distractor 
         question_cache: [],
     });
     const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateDistractors: async () => null,
     });
 
@@ -1070,7 +1157,9 @@ test('rebuildQuestionCacheForUser does not use candidate words when distractor g
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
@@ -1109,6 +1198,7 @@ test('rebuildQuestionCacheForUser varies sparse middle-school fallback distracto
         question_cache: [],
     });
     const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateDistractors: async ({ word }) => word === 'afford'
             ? ['support', 'shoulder', 'maintain']
             : ['select', 'reject', 'replace'],
@@ -1164,7 +1254,9 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
         assessments: [],
         question_cache: [],
     });
-    const adapter = createSupabaseDataAdapter(client);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+    });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 

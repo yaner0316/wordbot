@@ -38,7 +38,7 @@ function cache(index, overrides = {}) {
             question_text: `A clear sentence for word-${index}.`,
             options: JSON.stringify(['A. word', 'B. bad', 'C. wrong', 'D. no']),
             answer: 'A',
-            option_meanings: JSON.stringify(['meaning', 'bad', 'wrong', 'no']),
+            option_meanings: JSON.stringify(['释义', '错误', '错误的', '没有']),
             used_count: 0,
             ...fieldOverrides,
         },

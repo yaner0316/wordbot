@@ -15,8 +15,9 @@ const {
     generateElementaryDistractors,
     generateElementaryTemplateContext,
 } = require('./elementary-context');
-const { isBadQuizWord } = require('./question-quality');
+const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
+const { translateSupabaseWords } = require('./supabase-translations');
 const {
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
@@ -693,10 +694,22 @@ function stableWordOffset(word, size) {
     return hash % size;
 }
 
+async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, translateWords }) {
+    const missingWords = optionWords.filter(option =>
+        option !== correctWord || !hasMeaningfulChineseMeaning(correctMeaning)
+    );
+    const translated = await translateWords(missingWords);
+    const meanings = optionWords.map(option =>
+        option === correctWord
+            ? String(translated?.[option] || correctMeaning || '').trim()
+            : String(translated?.[option] || '').trim()
+    );
+    return meanings.every(hasMeaningfulChineseMeaning) ? meanings : null;
+}
 function rotateFallbackDistractors(pool, word) {
     const offset = stableWordOffset(word, pool.length);
     return [...pool.slice(offset), ...pool.slice(0, offset)];
-}async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors }) {
+}async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     const meaning = cleanChineseMeaningForCache(word);
@@ -714,7 +727,8 @@ function rotateFallbackDistractors(pool, word) {
     const letters = ['A', 'B', 'C', 'D'];
     const answer = letters[optionWords.indexOf(wordText)];
     const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
-    const optionMeanings = optionWords.map(option => option === wordText ? meaning : option);
+    const optionMeanings = await buildOptionMeanings({ optionWords, correctWord: wordText, correctMeaning: meaning, translateWords });
+    if (!optionMeanings) return [];
     const base = {
         user_id: user.id,
         word_id: word.id,
@@ -738,7 +752,7 @@ function rotateFallbackDistractors(pool, word) {
     const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
     return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
 }
-async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors }) {
+async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText)) return [];
     const meaning = word.meaning_zh || word.meaning_en || wordText;
@@ -751,7 +765,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const sourceContext = templateContext || word.context_en || fallbackContext;
     if (!hasWholeWord(sourceContext, wordText)) {
         if (level !== ELEMENTARY_LEVEL) {
-            return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors });
+            return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
         }
         return [];
     }
@@ -769,7 +783,8 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const letters = ['A', 'B', 'C', 'D'];
     const answer = letters[optionWords.indexOf(wordText)];
     const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
-    const optionMeanings = optionWords.map(option => option === wordText ? String(meaning || wordText) : option);
+    const optionMeanings = await buildOptionMeanings({ optionWords, correctWord: wordText, correctMeaning: String(meaning || wordText), translateWords });
+    if (!optionMeanings) return [];
     const base = {
         user_id: user.id,
         word_id: word.id,
@@ -783,7 +798,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         options,
         answer,
         option_meanings: optionMeanings,
-        correct_meaning: String(meaning || ''),
+        correct_meaning: optionMeanings[optionWords.indexOf(wordText)] || String(meaning || ''),
         ai_audit_status: 'skipped',
         source_version: 'supabase-rebuild-v1',
         used_count: 0,
@@ -794,7 +809,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const readyRows = rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
     if (readyRows.length) return readyRows;
     if (level !== ELEMENTARY_LEVEL) {
-        return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors });
+        return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
     }
     if (sourceContext === fallbackContext) return readyRows;
     const fallbackRows = rows.map(row => ({
@@ -817,7 +832,7 @@ async function deleteQuestionCacheRowsWithClient(client, username, type = null) 
     return { deleted: (data || []).length };
 }
 
-async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null) {
+async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
@@ -844,8 +859,15 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             return null;
         }
     };
+    const translateWords = async words => {
+        try {
+            return await translator(words);
+        } catch (error) {
+            return {};
+        }
+    };
     for (const word of candidateWords) {
-        rows.push(...await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors }));
+        rows.push(...await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords }));
     }
     if (rows.length) {
         const { error } = await client
@@ -1414,8 +1436,9 @@ async function cleanupExpiredQuizSessionsWithClient(client, options = {}) {
     return { deleted: (data || []).length };
 }
 
-function createSupabaseDataAdapter(client = supabase, { generateDistractors = null } = {}) {
+function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null } = {}) {
     const distractorGenerator = generateDistractors || (async () => null);
+    const translator = translateWords || (async () => ({}));
     return {
         name: 'supabase',
         canonicalUsernameKey,
@@ -1436,7 +1459,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
-        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator),
+        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
         saveQuizSession: (username, testId, questions, options) =>
@@ -1456,7 +1479,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
     };
 }
 
-const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors });
+const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors, translateWords: translateSupabaseWords });
 
 module.exports = {
     name: 'supabase',

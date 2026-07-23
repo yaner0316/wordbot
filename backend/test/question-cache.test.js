@@ -268,6 +268,11 @@ test('rejects ready cache rows that are missing quality-critical fields', () => 
     assert.equal(isCacheQuestionReady(question({ question_text: '' })), false);
 });
 
+test('rejects cached questions whose non-answer option meanings are English words', () => {
+    assert.equal(isCacheQuestionReady(question({
+        option_meanings: JSON.stringify(['苹果', 'pear', '椅子', '书']),
+    })), false);
+});
 test('rejects cached fill-in questions with numeric quantity and singular target mismatch', () => {
     assert.equal(isCacheQuestionReady(question({
         word_record_id: 'rec-corn',

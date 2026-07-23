@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { generateQuizWithDataSource } = require('../quiz-adapter');
@@ -40,7 +40,7 @@ function cacheRow(index) {
         question_text: 'A clear sentence uses _____ in context.',
         options: [`A. ${WORDS[index - 1]}`, 'B. alpha', 'C. bravo', 'D. charlie'],
         answer: 'A',
-        option_meanings: [`中文释义${index}`, 'alpha', 'bravo', 'charlie'],
+        option_meanings: ['中文释义', '阿尔法', '布拉沃', '查理'],
         correct_meaning: `中文释义${index}`,
         used_count: 0,
         generated_at: new Date(2026, 1, index).toISOString(),

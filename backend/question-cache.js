@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { getQuestionQualityIssues, isQuestionQualityAcceptable } = require('./question-quality');
+const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
 
 const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
@@ -139,7 +139,7 @@ function getCacheQuestionReadinessIssues(row) {
         issues.push('bad_option_meanings');
     } else if (!question.optionMeanings.every(meaning => {
         const value = String(meaning || '').trim();
-        return Boolean(value) && !isFailedOptionMeaning(value);
+        return hasMeaningfulChineseMeaning(value) && !isFailedOptionMeaning(value);
     })) {
         issues.push('bad_option_meanings');
     }
