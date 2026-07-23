@@ -71,7 +71,6 @@ function buildAssessmentSummary(assessmentRecords, { userId, now }) {
     for (const record of assessmentRecords || []) {
         const fields = record.fields || {};
         if (userId && userKey(fields.user) !== userKey(userId)) continue;
-        if (!hasSubmittedAnswer(record)) continue;
         if (!isRealAssessment(fieldValue(fields.test_id))) continue;
         const recordId = fieldValue(fields.record_id).trim();
         if (!recordId) continue;
@@ -80,9 +79,10 @@ function buildAssessmentSummary(assessmentRecords, { userId, now }) {
             summary.set(recordId, { hasAny: false, hasBeforeToday: false, hasToday: false });
         }
         const item = summary.get(recordId);
-        item.hasAny = true;
         if (day === today) item.hasToday = true;
-        else item.hasBeforeToday = true;
+        if (!hasSubmittedAnswer(record)) continue;
+        item.hasAny = true;
+        if (day !== today) item.hasBeforeToday = true;
     }
     return summary;
 }
@@ -132,11 +132,11 @@ function buildQuizWordQueue({
         })
         .filter(record => isPastCooldown(record, { now, minAgeMs }))
         .sort((left, right) => recordTimestamp(left) - recordTimestamp(right))
-        .filter(record => !masteryByRecordId.get(record.record_id)?.mastered)
-        .filter(record => !assessmentSummary.get(record.record_id)?.hasToday);
+        .filter(record => !masteryByRecordId.get(record.record_id)?.mastered);
 
-    const due = eligible.filter(record => assessmentSummary.get(record.record_id)?.hasBeforeToday);
-    const unseen = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasAny);
+    const availableToday = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasToday);
+    const due = availableToday.filter(record => assessmentSummary.get(record.record_id)?.hasBeforeToday);
+    const unseen = availableToday.filter(record => !assessmentSummary.get(record.record_id)?.hasAny);
     return [...due, ...unseen].slice(0, limit).map(record => record.record_id);
 }
 
@@ -166,15 +166,6 @@ function selectCachedQuestionsForWordQueue({
         .map(recordId => byRecordId.get(recordId))
         .filter(Boolean)
         .slice(0, limit);
-    const selectedRecordIds = new Set(selected.map(row => row.wordRecordId));
-    if (selected.length < limit) {
-        for (const row of normalizedRows) {
-            if (selectedRecordIds.has(row.wordRecordId)) continue;
-            selected.push(row);
-            selectedRecordIds.add(row.wordRecordId);
-            if (selected.length >= limit) break;
-        }
-    }
     return selected.map(row => ({
             ...row.question,
             cacheRecordId: row.recordId,

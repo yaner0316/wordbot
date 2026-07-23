@@ -102,6 +102,32 @@ test('word queue skips words already attempted today when building the next same
     assert.deepEqual(queue, ['rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20']);
 });
 
+test('word queue skips words already generated today even before submission', () => {
+    const wordRecords = Array.from({ length: 20 }, (_, index) => word(index + 1));
+    const cacheRows = Array.from({ length: 20 }, (_, index) => cache(index + 1));
+    const generatedToday = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(index =>
+        assessment(`rec-${index}`, { testId: 'real-generated', time: TODAY, correct: false, answer: '' })
+    );
+    for (const record of generatedToday) {
+        record.fields.is_correct = null;
+        record.fields.your_answer = '';
+    }
+
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows,
+        assessmentRecords: generatedToday,
+        userId: 'student',
+        level: LEVEL,
+        limit: 10,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20']);
+});
+
+
 test('word queue still introduces earliest eligible words when cache rows were used before', () => {
     const wordRecords = Array.from({ length: 20 }, (_, index) => word(index + 1));
     const cacheRows = Array.from({ length: 20 }, (_, index) => cache(index + 1, { fields: { used_count: 1 } }));
@@ -207,7 +233,7 @@ test('cached question selection fills from later ready rows in word queue order'
     );
 });
 
-test('cached question selection backfills from ready cache rows outside the queue', () => {
+test('cached question selection does not backfill from ready cache rows outside the queue', () => {
     const queue = Array.from({ length: 12 }, (_, index) => `rec-${index + 1}`);
     const cacheRows = [1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16].map(index => cache(index));
 
@@ -222,7 +248,7 @@ test('cached question selection backfills from ready cache rows outside the queu
 
     assert.deepEqual(
         selected.map(question => question.cacheRecordId),
-        ['cache-1', 'cache-2', 'cache-3', 'cache-4', 'cache-5', 'cache-6', 'cache-7', 'cache-8', 'cache-13', 'cache-14']
+        ['cache-1', 'cache-2', 'cache-3', 'cache-4', 'cache-5', 'cache-6', 'cache-7', 'cache-8']
     );
 });
 
