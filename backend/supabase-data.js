@@ -1,4 +1,5 @@
 const path = require('path');
+const https = require('https');
 const crypto = require('crypto');
 
 require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -1123,8 +1124,81 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     return buildSupabaseReviewRoundResponse(decorateAssessmentRows(data || [], user), reviewId);
 }
 
-async function prebuildWrongQuestionCacheWithClient() {
-    return { prepared: 0, skipped: true, source: 'supabase-review-round' };
+function generateReplacementContextWithAI(word, meaning, level, previousContext) {
+    const apiKey = process.env.MINIMAX_API_KEY;
+    if (!apiKey) return Promise.resolve('');
+    const prompt = [
+        'Create one new natural English sentence for a vocabulary fill-in-the-blank quiz.',
+        'Target word: "' + String(word || '').trim().toLowerCase() + '"',
+        'Required meaning: "' + String(meaning || '').trim() + '"',
+        'Level: "' + String(level || '').trim() + '"',
+        'Previous sentence: "' + String(previousContext || '').trim() + '"',
+        'Use the target word exactly once. Keep 8 to 16 words. Do not reuse the previous sentence.',
+        'Return JSON only: {"context":"sentence"}',
+    ].join('\n');
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: prompt }] });
+        const request = https.request({
+            hostname: 'api.minimax.chat',
+            path: '/v1/text/chatcompletion_v2',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey, 'Content-Length': Buffer.byteLength(body) },
+        }, response => {
+            const chunks = [];
+            response.on('data', chunk => chunks.push(chunk));
+            response.on('end', () => {
+                try {
+                    const content = JSON.parse(Buffer.concat(chunks).toString()).choices?.[0]?.message?.content || '';
+                    const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+                    const context = match ? match[1].replace(/\\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
+                    const target = String(word || '').trim().toLowerCase();
+                    const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
+                    if (!context || count !== 1 || context.toLowerCase() === String(previousContext || '').trim().toLowerCase()) return resolve('');
+                    resolve(context);
+                } catch (error) { reject(error); }
+            });
+        });
+        request.on('error', reject);
+        const timer = setTimeout(() => request.destroy(new Error('MiniMax request timeout')), 15000);
+        request.on('close', () => clearTimeout(timer));
+        request.write(body);
+        request.end();
+    });
+}
+
+async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}) {
+    if (!userId || !testId || !Array.isArray(result?.results)) return { prepared: 0, skipped: true, source: 'supabase' };
+    const wrongRecordIds = new Set(result.results.filter(item => item?.correct === false).map(item => String(item.recordId || '').trim()).filter(Boolean));
+    if (!wrongRecordIds.size) return { prepared: 0, skipped: true, source: 'supabase' };
+    const rows = (await getAssessmentsForTestWithClient(client, userId, testId))
+        .filter(row => row.is_real_assessment !== false && row.assessment_kind !== 'review')
+        .filter(row => wrongRecordIds.has(String(row.source_word_record_id || '').trim()))
+        .filter(isSubmittedAssessmentRow)
+        .filter(row => String(row.question_text || '').trim());
+    const user = await requireUserByUsername(client, userId);
+    const preparedRows = [];
+    for (const assessment of rows) {
+        const word = await getWordInfoForReview(client, user.id, assessment);
+        const level = normalizeOptionalLearningLevel(assessment.level || word.level);
+        let context = '';
+        for (let attempt = 0; attempt < 2 && !context; attempt++) {
+            context = await generateReplacementContextWithAI(word.word, word.meaning_zh || word.meaning_en, level, assessment.question_text).catch(() => '');
+        }
+        if (!context) continue;
+        const replacementWord = { ...word, context_en: context, context_zh: null };
+        const candidates = await buildCacheQuestionRowsForWord({
+            user, word: replacementWord, level, roundType: 'primary',
+            generateDistractors: input => generateSupabaseDistractors(input),
+            translateWords: words => translateSupabaseWords(words),
+        });
+        const primary = candidates.find(row => row.round_type === 'primary' && String(row.question_text || '').trim().toLowerCase() !== String(assessment.question_text || '').trim().toLowerCase());
+        if (primary) preparedRows.push({ ...primary, source_version: 'supabase-wrong-recovery-v1', generated_at: toIsoString(Date.now()) });
+    }
+    if (preparedRows.length) {
+        const { error } = await client.from('question_cache').insert(preparedRows).select('id');
+        ensureNoError(error, 'prebuildWrongQuestionCache.insert');
+    }
+    return { prepared: preparedRows.length, skipped: false, source: 'supabase' };
 }
 
 async function submitReviewRoundWithClient(client, { userId, reviewId, answers }) {

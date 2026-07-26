@@ -80,8 +80,9 @@ test('word queue prioritizes unmastered touched words and fills with earliest un
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
-test('word queue skips words already attempted today when building the next same-day quiz', () => {
+test('word queue skips all migrated records for a word already attempted today', () => {
     const wordRecords = Array.from({ length: 100 }, (_, index) => word(index + 1));
+    wordRecords[1].fields.Word = wordRecords[0].fields.Word;
     const cacheRows = Array.from({ length: 100 }, (_, index) => cache(index + 1));
     const assessmentRecords = [
         ...[1, 2, 3, 4, 5].map(index => assessment(`rec-${index}`, { time: YESTERDAY })),
@@ -100,6 +101,20 @@ test('word queue skips words already attempted today when building the next same
     });
 
     assert.deepEqual(queue, ['rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20']);
+});
+
+test('cached question selection chooses a different primary variant after the previous normal question', () => {
+    const queue = ['rec-prospect'];
+    const cacheRows = [
+        cache('prospect-old', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: 'The company sees a bright _____ for growth.' } }),
+        cache('prospect-new', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: 'The young _____ trained for a career in science.' } }),
+    ];
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows, queue, userId: 'student', level: LEVEL, roundType: 'primary',
+        recentQuestionTextsByWord: new Map([['prospect', new Set(['The company sees a bright _____ for growth.'])]]),
+        limit: 1,
+    });
+    assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-new']);
 });
 
 test('word queue skips words already generated today even before submission', () => {

@@ -2,6 +2,7 @@
 
 const {
     buildQuizWordQueue,
+    buildRecentQuestionTextsByWord,
     selectCachedQuestionsForWordQueue,
 } = require('./quiz-word-queue');
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
@@ -291,6 +292,7 @@ async function generateQuizWithDataSource({
         level: effectiveLevel,
         roundType,
         limit,
+        recentQuestionTextsByWord: buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername }),
     }).map((question) => ({
         ...question,
         correctAnswer: question.answer,

@@ -9,6 +9,13 @@ function fieldValue(value) {
     }
     return String(value);
 }
+function normalizeWord(value) {
+    return fieldValue(value).trim().toLowerCase();
+}
+
+function normalizeQuestionText(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
 
 function userKey(value) {
     return String(value || '').trim().toLowerCase();
@@ -106,9 +113,24 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
     return masteryByRecordId;
 }
 
+function buildRecentQuestionTextsByWord(assessmentRecords, { userId } = {}) {
+    const result = new Map();
+    for (const record of assessmentRecords || []) {
+        const fields = record.fields || {};
+        if (userId && userKey(fields.user) !== userKey(userId)) continue;
+        if (!isRealAssessment(fieldValue(fields.test_id))) continue;
+        const word = normalizeWord(fields.word);
+        const questionText = normalizeQuestionText(fields.context || fields.question_text);
+        if (!word || !questionText) continue;
+        if (!result.has(word)) result.set(word, new Set());
+        result.get(word).add(questionText);
+    }
+    return result;
+}
+
 function buildQuizWordQueue({
-    wordRecords,
     cacheRows = [],
+    wordRecords,
     assessmentRecords = [],
     userId,
     level = '',
@@ -134,7 +156,12 @@ function buildQuizWordQueue({
         .sort((left, right) => recordTimestamp(left) - recordTimestamp(right))
         .filter(record => !masteryByRecordId.get(record.record_id)?.mastered);
 
-    const availableToday = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasToday);
+    const todayWords = new Set((assessmentRecords || [])
+        .filter(record => isRealAssessment(fieldValue(record.fields?.test_id)))
+        .filter(record => learningDay(Number(record.fields?.test_time || 0)) === learningDay(now))
+        .map(record => normalizeWord(record.fields?.word))
+        .filter(Boolean));
+    const availableToday = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasToday && !todayWords.has(normalizeWord(record.fields?.Word)));
     const due = availableToday.filter(record => assessmentSummary.get(record.record_id)?.hasBeforeToday);
     const unseen = availableToday.filter(record => !assessmentSummary.get(record.record_id)?.hasAny);
     return [...due, ...unseen].slice(0, limit).map(record => record.record_id);
@@ -147,6 +174,7 @@ function selectCachedQuestionsForWordQueue({
     level,
     roundType = 'primary',
     limit = 10,
+    recentQuestionTextsByWord = new Map(),
 }) {
     const targetUser = userKey(userId);
     const normalizedRows = (cacheRows || [])
@@ -158,7 +186,11 @@ function selectCachedQuestionsForWordQueue({
         .filter(row => isCacheQuestionReady(row));
     const byRecordId = new Map();
     for (const row of normalizedRows) {
-        if (!byRecordId.has(row.wordRecordId) || row.usedCount < byRecordId.get(row.wordRecordId).usedCount) {
+        const wordKey = normalizeWord(row.word);
+        const excluded = new Set([...(recentQuestionTextsByWord.get(wordKey) || [])].map(normalizeQuestionText));
+        if (excluded.has(normalizeQuestionText(row.question.context))) continue;
+        const current = byRecordId.get(row.wordRecordId);
+        if (!current || row.usedCount < current.usedCount) {
             byRecordId.set(row.wordRecordId, row);
         }
     }
@@ -176,4 +208,5 @@ function selectCachedQuestionsForWordQueue({
 module.exports = {
     buildQuizWordQueue,
     selectCachedQuestionsForWordQueue,
+    buildRecentQuestionTextsByWord,
 };

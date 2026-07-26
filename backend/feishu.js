@@ -67,6 +67,7 @@ const {
 } = require('./review-priority');
 const {
     buildQuizWordQueue,
+    buildRecentQuestionTextsByWord,
     selectCachedQuestionsForWordQueue,
 } = require('./quiz-word-queue');
 const { calculateGameReward } = require('./game-reward');
@@ -1036,6 +1037,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             cacheRows: cachedRows,
             queue: queuedRecordIds,
             userId,
+            recentQuestionTextsByWord: buildRecentQuestionTextsByWord(cacheAssessmentRecords, { userId }),
             level: effectiveLevel,
             roundType: 'primary',
             limit: requiredQuestionCount,
