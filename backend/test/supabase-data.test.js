@@ -4,6 +4,44 @@ const assert = require('node:assert/strict');
 const { createSupabaseDataAdapter } = require('../supabase-data');
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
+test('Supabase stats derive progress and quiz metrics from words and assessments', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [
+            { id: 'word-1', user_id: 'user-1', word: 'apple', mastery_status: 'pending' },
+            { id: 'word-2', user_id: 'user-1', word: 'banana', mastery_status: 'pending' },
+            { id: 'word-3', user_id: 'user-1', word: 'cherry', mastery_status: 'pending' },
+            { id: 'word-4', user_id: 'user-1', word: 'date', mastery_status: 'pending' },
+        ],
+        assessments: [
+            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '2', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-3', user_id: 'user-1', word_id: 'word-2', source_word_record_id: 'word-2', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'wrong', submitted_answer: 'B|sure' },
+            { id: 'assessment-4', user_id: 'user-1', word_id: 'word-3', source_word_record_id: 'word-3', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '3', is_correct: 'correct', submitted_answer: 'A|guess' },
+            { id: 'assessment-5', user_id: 'user-1', word_id: 'word-4', source_word_record_id: 'word-4', test_id: 'real-review-1', assessment_kind: 'review', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '4', is_correct: 'correct', submitted_answer: 'A|sure' },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    assert.deepEqual(await adapter.getStats('qiuqiu'), {
+        user: 'qiuqiu',
+        totalWords: 4,
+        totalMeanings: 4,
+        masteredWords: 1,
+        recognizedWords: 1,
+        consolidatingWords: 2,
+        unseenWords: 0,
+        pendingWords: 3,
+        masteryStageCounts: { mastered: 1, consolidating: 2, recognized: 1, unseen: 0 },
+        totalTests: 2,
+        totalQuestions: 4,
+        correctCount: 3,
+        accuracyRate: '75.0%',
+        lastTestTime: new Date('2026-07-21T00:00:00.000Z').getTime(),
+    });
+
+    assert.deepEqual(await adapter.getAllStats(), [await adapter.getStats('qiuqiu')]);
+});
 
 function createFakeSupabase(seed = {}, options = {}) {
     const db = {

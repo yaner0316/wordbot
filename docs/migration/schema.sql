@@ -136,6 +136,7 @@ create table public.assessments (
     review_status text,
     source_question_id text,
     source_test_id text,
+    parent_review_id text,
     migration_flags text[] not null default '{}'::text[],
     created_at timestamptz not null default now(),
     constraint assessments_test_id_not_blank check (btrim(test_id) <> ''),
@@ -188,6 +189,7 @@ create table public.quiz_sessions (
     questions jsonb not null,
     created_at timestamptz not null default now(),
     expires_at timestamptz not null default (now() + interval '24 hours'),
+    updated_at timestamptz not null default now(),
     constraint quiz_sessions_test_id_not_blank check (btrim(test_id) <> ''),
     constraint quiz_sessions_questions_array check (jsonb_typeof(questions) = 'array'),
     constraint quiz_sessions_expires_after_created check (expires_at > created_at)

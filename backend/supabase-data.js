@@ -7,6 +7,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const supabase = require('./supabase-client');
 const { isRealAssessment, getAssessmentMode } = require('./assessment-mode');
 const { isMeaningAnswerCorrect } = require('./meaning-review');
+const { evaluateMeaningMastery } = require('./mastery-evidence');
 const { summarizeReviewRound } = require('./review-session');
 const {
     getCacheQuestionReadinessIssues,
@@ -1510,6 +1511,115 @@ async function cleanupExpiredQuizSessionsWithClient(client, options = {}) {
     return { deleted: (data || []).length };
 }
 
+
+function statsAssessmentRow(row) {
+    return {
+        fields: {
+            record_id: row.feishu_record_id || row.id,
+            test_id: row.test_id,
+            test_time: toMillis(row.assessed_at),
+            question_type: row.question_type,
+            is_correct: row.is_correct,
+            your_answer: row.submitted_answer,
+        },
+    };
+}
+
+function isCorrectStatsValue(value) {
+    return String(value || '').trim().toLowerCase() === 'correct';
+}
+
+function summarizeSupabaseWordProgress(words, assessments) {
+    const groups = new Map();
+    for (const word of words || []) {
+        const key = String(word.word || '').trim().toLowerCase();
+        if (!key) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(word);
+    }
+
+    const counts = { mastered: 0, consolidating: 0, recognized: 0, unseen: 0 };
+    for (const meaningRows of groups.values()) {
+        const evaluations = meaningRows.map(word => {
+            const evidence = (assessments || [])
+                .filter(assessment => assessment.word_id === word.id
+                    || (word.feishu_record_id && assessment.source_word_record_id === word.feishu_record_id))
+                .filter(assessment => assessment.is_correct !== null && assessment.is_correct !== undefined)
+                .map(statsAssessmentRow);
+            return evaluateMeaningMastery(evidence, isCorrectStatsValue);
+        });
+        const stage = evaluations.every(item => item.mastered)
+            ? 'mastered'
+            : evaluations.some(item => item.stage === 'consolidating')
+                ? 'consolidating'
+                : evaluations.some(item => item.stage === 'recognized')
+                    ? 'recognized'
+                    : 'unseen';
+        counts[stage]++;
+    }
+
+    const totalWords = groups.size;
+    return {
+        totalWords,
+        totalMeanings: (words || []).length,
+        masteredWords: counts.mastered,
+        consolidatingWords: counts.consolidating,
+        recognizedWords: counts.recognized,
+        unseenWords: counts.unseen,
+        pendingWords: totalWords - counts.mastered,
+        masteryStageCounts: counts,
+    };
+}
+
+async function getStatsWithClient(client, username) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) {
+        return {
+            user: username,
+            totalWords: 0,
+            totalMeanings: 0,
+            masteredWords: 0,
+            recognizedWords: 0,
+            consolidatingWords: 0,
+            unseenWords: 0,
+            pendingWords: 0,
+            masteryStageCounts: { mastered: 0, consolidating: 0, recognized: 0, unseen: 0 },
+            totalTests: 0,
+            totalQuestions: 0,
+            correctCount: 0,
+            accuracyRate: '0.0%',
+            lastTestTime: null,
+        };
+    }
+
+    const [words, assessments] = await Promise.all([
+        getWordsForUserWithClient(client, user.username),
+        getAssessmentsForUserWithClient(client, user.username),
+    ]);
+    const submitted = assessments.filter(row => row.is_correct !== null && row.is_correct !== undefined);
+    const realRecords = submitted.filter(row => isRealAssessment(row.test_id));
+    const quizRecords = realRecords.filter(row => row.assessment_kind !== 'review' && !String(row.test_id || '').match(/^(real|test)-review-/));
+    const testIds = new Set(quizRecords.map(row => String(row.test_id || '').trim()).filter(Boolean));
+    const correctCount = quizRecords.filter(row => isCorrectStatsValue(row.is_correct)).length;
+    const totalQuestions = quizRecords.length;
+    const lastTestTime = quizRecords.reduce((max, row) => Math.max(max, toMillis(row.assessed_at)), 0);
+    const accuracy = totalQuestions ? (correctCount / totalQuestions) * 100 : 0;
+    return {
+        user: user.username,
+        ...summarizeSupabaseWordProgress(words, realRecords),
+        totalTests: testIds.size,
+        totalQuestions,
+        correctCount,
+        accuracyRate: accuracy.toFixed(1) + '%',
+        lastTestTime: lastTestTime || null,
+    };
+}
+
+async function getAllStatsWithClient(client) {
+    const users = await fetchAllRows(() => client.from('users').select('username, username_key').order('username_key', { ascending: true }), 'getAllStats.users');
+    return Promise.all(users.map(user => getStatsWithClient(client, user.username)));
+}
+
 function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null } = {}) {
     const distractorGenerator = generateDistractors || (async () => null);
     const translator = translateWords || (async () => ({}));
@@ -1517,6 +1627,8 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         name: 'supabase',
         canonicalUsernameKey,
         getUserByUsername: username => getUserByUsernameWithClient(client, username),
+        getStats: username => getStatsWithClient(client, username),
+        getAllStats: () => getAllStatsWithClient(client),
         getUserLearningSettings: username => getUserLearningSettingsWithClient(client, username),
         updateUserLearningSettings: (username, requestedLevel) =>
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
@@ -1560,6 +1672,8 @@ module.exports = {
     canonicalUsernameKey,
     createSupabaseDataAdapter,
     getUserByUsername: defaultAdapter.getUserByUsername,
+    getStats: defaultAdapter.getStats,
+    getAllStats: defaultAdapter.getAllStats,
     getUserLearningSettings: defaultAdapter.getUserLearningSettings,
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,

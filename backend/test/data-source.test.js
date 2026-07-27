@@ -87,6 +87,25 @@ test('defaults DATA_SOURCE to supabase and exposes the unified interface', async
     assert.equal((await dataSource.addWord({ username: 'qiuqiu', word: 'apple', meaning: 'fruit' })).source, 'supabase');
 });
 
+test('supabase data source reads stats from Supabase instead of Feishu fallback', async () => {
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getStats: async username => ({ source: 'supabase-stats', user: username }),
+            getAllStats: async () => [{ source: 'supabase-all-stats' }],
+        },
+        feishuExports: {
+            getStats: async username => ({ source: 'feishu-stats', user: username }),
+            getAllStats: async () => [{ source: 'feishu-all-stats' }],
+        },
+    });
+
+    assert.deepEqual(await dataSource.getStats('qiuqiu'), {
+        source: 'supabase-stats',
+        user: 'qiuqiu',
+    });
+    assert.deepEqual(await dataSource.getAllStats(), [{ source: 'supabase-all-stats' }]);
+});
+
 test('DATA_SOURCE=supabase routes addWords to supabase adapter instead of Feishu fallback', async () => {
     const dataSource = loadDataSource({
         envValue: 'supabase',
