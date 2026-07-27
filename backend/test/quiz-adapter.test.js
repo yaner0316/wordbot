@@ -48,7 +48,7 @@ function cacheRow(index) {
 }
 
 test('meaning fallback uses a concise Chinese sense when the stored meaning is too long', async () => {
-    const words = Array.from({ length: 10 }, (_, index) => word(index + 1, {
+    const words = Array.from({ length: 12 }, (_, index) => word(index + 1, {
         meaning_zh: '这是一个非常详细的中文释义，用来描述这个单词的含义、使用场景、语法特点和常见搭配，帮助学习者理解这个词；第二个释义；第三个释义',
     }));
     const dataSource = {
@@ -70,6 +70,31 @@ test('meaning fallback uses a concise Chinese sense when the stored meaning is t
     assert.equal(quiz.error, undefined);
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.questions.every(question => question.context.length <= 50), true);
+});
+test('meaning fallback accepts multi-word vocabulary targets', async () => {
+    const words = Array.from({ length: 12 }, (_, index) => word(index + 1, {
+        ...(index === 0 ? { word: 'pop singer' } : {}),
+        meaning_zh: '中文释义' + (index + 1),
+    }));
+    const dataSource = {
+        name: 'supabase',
+        getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+        getWordsForUser: async () => words,
+        getAssessmentsForUser: async () => [],
+        getQuestionCache: async () => [],
+    };
+
+    const quiz = await generateQuizWithDataSource({
+        username: 'qiuqiu',
+        level: MIDDLE,
+        dataSource,
+        mode: 'test',
+        createId: () => 'phrase-fallback',
+    });
+
+    assert.equal(quiz.error, undefined);
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.questions.some(question => question.word === 'pop singer'), true);
 });
 test('Supabase quiz adapter fills sparse ready cache from queued words instead of returning not ready', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1));

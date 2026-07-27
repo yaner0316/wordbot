@@ -191,12 +191,17 @@ function cleanOptionWord(value) {
 
 function validFallbackWord(value) {
     const word = cleanOptionWord(value);
-    return Boolean(word && /^[a-z]+(?:'[a-z]+)?$/.test(word) && !isBadQuizWord(word));
+    return Boolean(word && /^[a-z]+(?:[ '-][a-z]+)*$/.test(word) && !isBadQuizWord(word));
 }
 
 function conciseFallbackMeaning(value) {
     const candidates = String(value || '').split(/[;；。.!?！？\r\n]+/).map(item => item.trim()).filter(Boolean);
     return candidates.find(hasMeaningfulChineseMeaning) || '';
+}
+
+function validFallbackDistractorWord(value) {
+    const word = cleanOptionWord(value);
+    return Boolean(word && /^[a-z]+(?:'[a-z]+)?$/.test(word) && !isBadQuizWord(word));
 }
 
 function rotateOptions(values, seed) {
@@ -210,6 +215,7 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
     const fallbackWords = (wordRecords || [])
         .map(record => fieldText(record.fields?.Word).trim().toLowerCase())
         .filter(validFallbackWord);
+    const fallbackDistractors = fallbackWords.filter(validFallbackDistractorWord);
     const usedDistractors = new Set();
     const questions = [];
     for (const recordId of queue || []) {
@@ -220,8 +226,8 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         const word = fieldText(record.fields?.Word).trim().toLowerCase();
         const meaning = conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning));
         if (!validFallbackWord(word) || !meaning) continue;
-        const freshDistractors = fallbackWords.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
-        const recycledDistractors = fallbackWords.filter(candidate => candidate !== word);
+        const freshDistractors = fallbackDistractors.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
+        const recycledDistractors = fallbackDistractors.filter(candidate => candidate !== word);
         const distractors = [...new Set([...freshDistractors, ...recycledDistractors])].slice(0, 3);
         if (distractors.length < 3) continue;
         for (const distractor of distractors) usedDistractors.add(distractor);
