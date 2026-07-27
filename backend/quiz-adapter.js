@@ -8,7 +8,7 @@ const {
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
-const { isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
+const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
 const {
     evaluateWordMastery,
     normalizeSubmittedAnswer,
@@ -194,6 +194,11 @@ function validFallbackWord(value) {
     return Boolean(word && /^[a-z]+(?:'[a-z]+)?$/.test(word) && !isBadQuizWord(word));
 }
 
+function conciseFallbackMeaning(value) {
+    const candidates = String(value || '').split(/[;；。.!?！？\r\n]+/).map(item => item.trim()).filter(Boolean);
+    return candidates.find(hasMeaningfulChineseMeaning) || '';
+}
+
 function rotateOptions(values, seed) {
     const offset = values.length ? Math.abs(seed) % values.length : 0;
     return values.map((_, index) => values[(index + offset) % values.length]);
@@ -213,7 +218,7 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         const record = recordsById.get(String(recordId || '').trim());
         if (!record) continue;
         const word = fieldText(record.fields?.Word).trim().toLowerCase();
-        const meaning = fieldText(record.fields?.CN_Meaning).trim();
+        const meaning = conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning));
         if (!validFallbackWord(word) || !meaning) continue;
         const freshDistractors = fallbackWords.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
         const recycledDistractors = fallbackWords.filter(candidate => candidate !== word);
