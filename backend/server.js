@@ -277,6 +277,23 @@ app.put('/api/admin/userSettings', async (req, res) => {
     }
 });
 
+app.get('/api/game/state/:user', async (req, res) => {
+    try {
+        if (typeof getGameState !== 'function') return res.status(503).json({ error: 'Game state storage is unavailable.' });
+        res.json({ state: await getGameState(req.params.user) });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.put('/api/game/state/:user', async (req, res) => {
+    try {
+        if (typeof saveGameState !== 'function') return res.status(503).json({ error: 'Game state storage is unavailable.' });
+        res.json({ state: await saveGameState(req.params.user, req.body || {}) });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 app.get('/api/admin/questionCache/status', async (req, res) => {
     try {
         const { userId } = req.query;

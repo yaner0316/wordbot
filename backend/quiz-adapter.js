@@ -1,4 +1,4 @@
-﻿const crypto = require('crypto');
+const crypto = require('crypto');
 
 const {
     buildQuizWordQueue,
@@ -325,19 +325,6 @@ async function generateQuizWithDataSource({
         excludedMasteredStatusCount: wordRows.length - selectableWordRows.length,
     };
 
-    if (queue.length < limit) {
-        return {
-            error: 'Question pool exhausted for this level.',
-            code: 'QUESTION_POOL_EXHAUSTED',
-            source: 'question_cache',
-            level: effectiveLevel,
-            diagnostics,
-            readyCount: queue.length,
-            requiredCount: limit,
-            questions,
-        };
-    }
-
     if (questions.length < limit) {
         const fallbackQuestions = buildMeaningFallbackQuestions({
             wordRecords,
@@ -362,20 +349,37 @@ async function generateQuizWithDataSource({
                 questions: combinedQuestions,
             };
         }
+        if (combinedQuestions.length > 0) {
+            return {
+                testId,
+                mode,
+                source: questions.length ? 'question_cache_with_fallback' : 'live_fallback',
+                warning: 'Only ' + combinedQuestions.length + ' questions were ready; the question cache is still preparing.',
+                diagnostics: {
+                    ...diagnostics,
+                    fallbackUsed: fallbackQuestions.length > 0,
+                    fallbackQuestionCount: fallbackQuestions.length,
+                    finalQuestionCount: combinedQuestions.length,
+                },
+                questions: combinedQuestions,
+            };
+        }
         return {
-            error: 'Question cache is still preparing.',
-            code: 'QUESTION_CACHE_NOT_READY',
+            error: queue.length < limit
+                ? 'Question pool exhausted for this level.'
+                : 'Question cache is still preparing.',
+            code: queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY',
             source: 'question_cache',
             level: effectiveLevel,
             diagnostics: {
                 ...diagnostics,
-                fallbackUsed: fallbackQuestions.length > 0,
-                fallbackQuestionCount: fallbackQuestions.length,
-                finalQuestionCount: combinedQuestions.length,
+                fallbackUsed: false,
+                fallbackQuestionCount: 0,
+                finalQuestionCount: 0,
             },
-            readyCount: combinedQuestions.length,
+            readyCount: 0,
             requiredCount: limit,
-            questions: combinedQuestions,
+            questions: [],
         };
     }
 

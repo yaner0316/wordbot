@@ -43,6 +43,29 @@ test('Supabase stats derive progress and quiz metrics from words and assessments
     assert.deepEqual(await adapter.getAllStats(), [await adapter.getStats('qiuqiu')]);
 });
 
+test('Supabase game state persists shared minutes and garden state', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+    await adapter.saveGameState('qiuqiu', {
+        minutes: 12,
+        claimIds: ['quiz-1'],
+        garden: { hearts: 3, feed: 2, outfit: '草帽', visits: 1 },
+    });
+    assert.deepEqual(await adapter.getGameState('qiuqiu'), {
+        minutes: 12,
+        claimIds: ['quiz-1'],
+        garden: {
+            hearts: 3,
+            feed: 2,
+            outfit: '草帽',
+            visits: 1,
+            lastAction: 'idle',
+            lastGain: {},
+        },
+    });
+});
 function createFakeSupabase(seed = {}, options = {}) {
     const db = {
         users: [],
@@ -50,6 +73,7 @@ function createFakeSupabase(seed = {}, options = {}) {
         assessments: [],
         question_cache: [],
         quiz_sessions: [],
+        game_states: [],
         parts_of_speech: [],
         word_parts_of_speech: [],
         ...seed,

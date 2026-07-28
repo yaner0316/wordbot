@@ -475,6 +475,77 @@ async function toQuestionCacheStatusRecordsWithClient(client, user, rows) {
     }));
 }
 
+function defaultGameState() {
+    return {
+        minutes: 0,
+        claimIds: [],
+        garden: {
+            hearts: 0,
+            feed: 0,
+            outfit: '草帽',
+            visits: 0,
+            lastAction: 'idle',
+            lastGain: {},
+        },
+    };
+}
+
+function normalizeGameState(value = {}) {
+    const fallback = defaultGameState();
+    const garden = value.garden && typeof value.garden === 'object' ? value.garden : {};
+    return {
+        minutes: Math.max(0, Math.floor(Number(value.minutes) || 0)),
+        claimIds: Array.isArray(value.claimIds) ? [...new Set(value.claimIds.map(item => String(item || '').trim()).filter(Boolean))] : [],
+        garden: {
+            ...fallback.garden,
+            ...garden,
+            hearts: Math.max(0, Number(garden.hearts) || 0),
+            feed: Math.max(0, Number(garden.feed) || 0),
+            visits: Math.max(0, Number(garden.visits) || 0),
+        },
+    };
+}
+
+async function getGameStateWithClient(client, username) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return defaultGameState();
+    const { data, error } = await client
+        .from('game_states')
+        .select('game_time_minutes, reward_claim_ids, garden_state')
+        .eq('user_id', user.id)
+        .maybeSingle();
+    ensureNoError(error, 'getGameState');
+    if (!data) return defaultGameState();
+    return normalizeGameState({
+        minutes: data.game_time_minutes,
+        claimIds: data.reward_claim_ids,
+        garden: data.garden_state,
+    });
+}
+
+async function saveGameStateWithClient(client, username, value) {
+    const user = await requireUserByUsername(client, username);
+    const state = normalizeGameState(value);
+    const payload = {
+        user_id: user.id,
+        game_time_minutes: state.minutes,
+        reward_claim_ids: state.claimIds,
+        garden_state: state.garden,
+        updated_at: new Date().toISOString(),
+    };
+    const existing = await client
+        .from('game_states')
+        .select('user_id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+    ensureNoError(existing.error, 'saveGameState.lookup');
+    const query = existing.data
+        ? client.from('game_states').update(payload).eq('user_id', user.id).select('user_id').single()
+        : client.from('game_states').insert(payload).select('user_id').single();
+    const { error } = await query;
+    ensureNoError(error, 'saveGameState');
+    return state;
+}
 async function getQuestionCacheStatusWithClient(client, username) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return { configured: true, total: 0, ready: 0, byLevel: {}, byRoundType: {} };
@@ -854,6 +925,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     const { error: deleteError } = await deleteQuery.select('id');
     ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
     const rows = [];
+    const writtenRows = [];
     const generateDistractors = async input => {
         try {
             return await distractorGenerator(input);
@@ -869,16 +941,17 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         }
     };
     for (const word of candidateWords) {
-        rows.push(...await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords }));
-    }
-    if (rows.length) {
+        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords });
+        if (!wordRows.length) continue;
+        rows.push(...wordRows);
         const { error } = await client
             .from('question_cache')
-            .insert(rows)
+            .insert(wordRows)
             .select('id');
         ensureNoError(error, 'rebuildQuestionCache.insert');
+        writtenRows.push(...wordRows);
     }
-    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, writtenRows);
     return {
         configured: true,
         level,
@@ -1643,6 +1716,8 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             updateWordMasteryWithClient(client, username, word, newMasteryStatus, options),
         incrementCacheUsedCount: cacheId => incrementCacheUsedCountWithClient(client, cacheId),
         getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
+        getGameState: username => getGameStateWithClient(client, username),
+        saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
         rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator),
@@ -1685,6 +1760,8 @@ module.exports = {
     updateWordMastery: defaultAdapter.updateWordMastery,
     incrementCacheUsedCount: defaultAdapter.incrementCacheUsedCount,
     getQuestionCacheStatus: defaultAdapter.getQuestionCacheStatus,
+    getGameState: defaultAdapter.getGameState,
+    saveGameState: defaultAdapter.saveGameState,
     getQuestionCacheDiagnostics: defaultAdapter.getQuestionCacheDiagnostics,
     deleteQuestionCacheRows: defaultAdapter.deleteQuestionCacheRows,
     rebuildQuestionCacheForUser: defaultAdapter.rebuildQuestionCacheForUser,
