@@ -68,14 +68,14 @@ function startNextReviewPrebuild({ createReviewRound, user, reviewId, result }) 
     }
 }
 function startWrongQuestionCachePrebuild({ prebuildWrongQuestionCache, user, testId, result }) {
-    if (typeof prebuildWrongQuestionCache !== 'function' || !hasWrongAnswers(result)) return;
+    if (typeof prebuildWrongQuestionCache !== 'function' || !Array.isArray(result?.results) || result.results.length === 0) return;
     try {
         Promise.resolve(prebuildWrongQuestionCache({
             userId: user,
             testId,
             result,
         })).catch(error => {
-            console.warn('wrong-question cache prebuild failed:', error.message);
+            console.warn('question variant prebuild failed:', error.message);
         });
     } catch (error) {
         console.warn('wrong-question cache prebuild failed:', error.message);
@@ -155,6 +155,34 @@ function createApp({
                 res.json(await resetChildPassword({ user, parentUsername, parentPassword, newPassword }));
             } catch (error) {
                 res.status(400).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof getActiveQuizSession === 'function') {
+        app.get('/api/quiz/session', async (req, res) => {
+            try {
+                const { user } = req.query;
+                if (!user) return res.status(400).json({ error: '缂哄皯鐢ㄦ埛ID' });
+                const session = await getActiveQuizSession(user);
+                res.json(session ? { active: true, testId: session.test_id, questions: session.questions, progress: session.progress } : { active: false });
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+    }
+
+    if (typeof updateQuizSessionProgress === 'function') {
+        app.post('/api/quiz/session/progress', async (req, res) => {
+            try {
+                const { user, testId, currentQuestion, answers } = req.body;
+                if (!user || !testId || !Array.isArray(answers)) {
+                    return res.status(400).json({ error: '缂哄皯鍙傛暟' });
+                }
+                const session = await updateQuizSessionProgress(user, testId, { currentQuestion, answers });
+                res.json({ saved: Boolean(session), testId });
+            } catch (error) {
+                res.status(500).json({ error: error.message });
             }
         });
     }

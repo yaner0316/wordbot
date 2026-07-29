@@ -160,16 +160,6 @@ function hasWholeWord(context, word) {
     return new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(String(context || ''));
 }
 
-function fallbackElementaryContext(word, meaning) {
-    const key = String(word || '').trim().toLowerCase();
-    const clue = String(meaning || '').split(/[.;!?]/)[0].trim()
-        .replace(new RegExp('\\b' + escapeRegExp(key) + '\\b', 'ig'), '')
-        .replace(/\s+/g, ' ')
-        .trim();
-    if (!clue) return '';
-    return 'In class, the word ' + key + ' means ' + clue + '.';
-}
-
 function blankWordInContext(context, word) {
     return String(context || '').replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i'), '_____');
 }
@@ -832,10 +822,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const templateContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
         : '';
-    const fallbackContext = level === ELEMENTARY_LEVEL
-        ? fallbackElementaryContext(wordText, word.meaning_en || word.meaning_zh || '')
-        : '';
-    const sourceContext = templateContext || word.context_en || fallbackContext;
+    const sourceContext = templateContext || word.context_en || '';
     if (!hasWholeWord(sourceContext, wordText)) {
         if (level !== ELEMENTARY_LEVEL) {
             return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
@@ -884,12 +871,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     if (level !== ELEMENTARY_LEVEL) {
         return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
     }
-    if (sourceContext === fallbackContext) return readyRows;
-    const fallbackRows = rows.map(row => ({
-        ...row,
-        question_text: blankWordInContext(fallbackContext, wordText),
-    }));
-    return fallbackRows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+    return readyRows;
 }
 
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
@@ -1242,11 +1224,11 @@ function generateReplacementContextWithAI(word, meaning, level, previousContext)
 
 async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}) {
     if (!userId || !testId || !Array.isArray(result?.results)) return { prepared: 0, skipped: true, source: 'supabase' };
-    const wrongRecordIds = new Set(result.results.filter(item => item?.correct === false).map(item => String(item.recordId || '').trim()).filter(Boolean));
-    if (!wrongRecordIds.size) return { prepared: 0, skipped: true, source: 'supabase' };
+    const usedRecordIds = new Set(result.results.map(item => String(item?.recordId || '').trim()).filter(Boolean));
+    if (!usedRecordIds.size) return { prepared: 0, skipped: true, source: 'supabase' };
     const rows = (await getAssessmentsForTestWithClient(client, userId, testId))
         .filter(row => row.is_real_assessment !== false && row.assessment_kind !== 'review')
-        .filter(row => wrongRecordIds.has(String(row.source_word_record_id || '').trim()))
+        .filter(row => usedRecordIds.has(String(row.source_word_record_id || '').trim()))
         .filter(isSubmittedAssessmentRow)
         .filter(row => String(row.question_text || '').trim());
     const user = await requireUserByUsername(client, userId);
@@ -1533,6 +1515,7 @@ async function saveQuizSessionWithClient(client, username, testId, questions, op
         questions: requireQuestions(questions),
         created_at: createdAt,
         expires_at: expiresAt,
+        session_state: options.progress || { currentQuestion: 0, answers: [] },
     };
     const { data, error } = await client
         .from('quiz_sessions')
@@ -1559,6 +1542,44 @@ async function getQuizSessionWithClient(client, username, testId, options = {}) 
         ...data,
         questions: Array.isArray(data.questions) ? data.questions : [],
     };
+}
+
+async function getActiveQuizSessionWithClient(client, username, options = {}) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .select('*')
+        .eq('user_id', user.id)
+        .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    ensureNoError(error, 'getActiveQuizSession');
+    if (!data) return null;
+    return {
+        ...data,
+        questions: Array.isArray(data.questions) ? data.questions : [],
+        progress: data.session_state && typeof data.session_state === 'object' ? data.session_state : { currentQuestion: 0, answers: [] },
+    };
+}
+
+async function updateQuizSessionProgressWithClient(client, username, testId, progress) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const state = {
+        currentQuestion: Math.max(0, Number(progress?.currentQuestion) || 0),
+        answers: Array.isArray(progress?.answers) ? progress.answers : [],
+    };
+    const { data, error } = await client
+        .from('quiz_sessions')
+        .update({ session_state: state })
+        .eq('test_id', requireTestId(testId))
+        .eq('user_id', user.id)
+        .select('*')
+        .maybeSingle();
+    ensureNoError(error, 'updateQuizSessionProgress');
+    return data;
 }
 
 async function deleteQuizSessionWithClient(client, username, testId) {
@@ -1729,6 +1750,10 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             getQuizSessionWithClient(client, username, testId, options),
         deleteQuizSession: (username, testId) =>
             deleteQuizSessionWithClient(client, username, testId),
+        getActiveQuizSession: (username, options) =>
+            getActiveQuizSessionWithClient(client, username, options),
+        updateQuizSessionProgress: (username, testId, progress) =>
+            updateQuizSessionProgressWithClient(client, username, testId, progress),
         cleanupExpiredQuizSessions: options =>
             cleanupExpiredQuizSessionsWithClient(client, options),
         createReviewRound: input => createReviewRoundWithLock(client, input),

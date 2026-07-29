@@ -209,13 +209,16 @@ function rotateOptions(values, seed) {
     return values.map((_, index) => values[(index + offset) % values.length]);
 }
 
-function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId }) {
+function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId, level }) {
     const existingRecordIds = new Set((existingQuestions || []).map(question => String(question.record_id || '').trim()).filter(Boolean));
     const recordsById = new Map((wordRecords || []).map(record => [String(record.record_id || '').trim(), record]));
-    const fallbackWords = (wordRecords || [])
-        .map(record => fieldText(record.fields?.Word).trim().toLowerCase())
-        .filter(validFallbackWord);
+    const fallbackWords = (wordRecords || []).map(record => fieldText(record.fields?.Word).trim().toLowerCase()).filter(validFallbackWord);
     const fallbackDistractors = fallbackWords.filter(validFallbackDistractorWord);
+    const elementary = String.fromCharCode(0x5c0f, 0x5b66);
+    const juniorHigh = String.fromCharCode(0x4e2d, 0x5b66);
+    const normalizedLevel = String(level || '').trim();
+    const typeQuota = normalizedLevel === elementary ? { 1: limit, 3: 0 } : normalizedLevel === juniorHigh ? { 1: Math.min(9, limit), 3: Math.min(1, limit) } : { 1: Math.min(7, limit), 3: Math.min(1, limit) };
+    const counts = { 1: (existingQuestions || []).filter(question => Number(question.type) === 1).length, 3: (existingQuestions || []).filter(question => Number(question.type) === 3).length };
     const usedDistractors = new Set();
     const questions = [];
     for (const recordId of queue || []) {
@@ -233,23 +236,19 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         for (const distractor of distractors) usedDistractors.add(distractor);
         const optionWords = rotateOptions([word, ...distractors], questions.length + word.length);
         const answer = ANSWER_LETTERS[optionWords.indexOf(word)];
-        const question = {
-            type: 3,
-            word,
-            context: meaning,
-            options: optionWords.map((option, index) => `${ANSWER_LETTERS[index]}. ${option}`),
-            answer,
-            correctAnswer: answer,
-            correctMeaning: meaning,
-            record_id: recordId,
-            testId,
-        };
+        const contextPattern = new RegExp('\\b' + word + '\\b', 'ig');
+        const sourceContext = fieldText(record.fields?.Context);
+        const canUseContext = (sourceContext.match(contextPattern) || []).length === 1;
+        const useContext = canUseContext && counts[1] < typeQuota[1];
+        const type = useContext ? 1 : (counts[3] < typeQuota[3] ? 3 : 0);
+        if (!type) continue;
+        const question = { type, word, context: useContext ? sourceContext.replace(contextPattern, '_____') : meaning, options: optionWords.map((option, index) => ANSWER_LETTERS[index] + '. ' + option), answer, correctAnswer: answer, correctMeaning: meaning, record_id: recordId, testId };
         if (!isQuestionQualityAcceptable(question)) continue;
+        counts[type] += 1;
         questions.push(question);
     }
     return questions;
 }
-
 async function generateQuizWithDataSource({
     username,
     level,
@@ -332,6 +331,7 @@ async function generateQuizWithDataSource({
             existingQuestions: questions,
             limit,
             testId,
+            level: effectiveLevel,
         });
         const combinedQuestions = [...questions, ...fallbackQuestions].slice(0, limit);
         if (combinedQuestions.length >= limit) {

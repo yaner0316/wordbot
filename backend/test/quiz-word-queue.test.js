@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildQuizWordQueue, selectCachedQuestionsForWordQueue } = require('../quiz-word-queue');
+const { buildQuizWordQueue, buildRecentQuestionTextsByWord, selectCachedQuestionsForWordQueue } = require('../quiz-word-queue');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse('2026-07-15T04:00:00.000Z');
@@ -117,6 +117,24 @@ test('cached question selection chooses a different primary variant after the pr
     assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-new']);
 });
 
+test('cached question selection excludes only the latest question text so variants can rotate', () => {
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: [
+            cache('prospect-a', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: 'Question A _____.' } }),
+            cache('prospect-b', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: 'Question B _____.' } }),
+        ],
+        queue: ['rec-prospect'],
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        recentQuestionTextsByWord: buildRecentQuestionTextsByWord([
+            { fields: { user: 'student', test_id: 'real-day-one', word: 'prospect', context: 'Question A _____.', test_time: NOW - DAY } },
+            { fields: { user: 'student', test_id: 'real-day-two', word: 'prospect', context: 'Question B _____.', test_time: NOW } },
+        ], { userId: 'student' }),
+        limit: 1,
+    });
+    assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-a']);
+});
 test('word queue skips words already generated today even before submission', () => {
     const wordRecords = Array.from({ length: 20 }, (_, index) => word(index + 1));
     const cacheRows = Array.from({ length: 20 }, (_, index) => cache(index + 1));

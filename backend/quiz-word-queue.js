@@ -114,7 +114,7 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
 }
 
 function buildRecentQuestionTextsByWord(assessmentRecords, { userId } = {}) {
-    const result = new Map();
+    const latestByWord = new Map();
     for (const record of assessmentRecords || []) {
         const fields = record.fields || {};
         if (userId && userKey(fields.user) !== userKey(userId)) continue;
@@ -122,12 +122,12 @@ function buildRecentQuestionTextsByWord(assessmentRecords, { userId } = {}) {
         const word = normalizeWord(fields.word);
         const questionText = normalizeQuestionText(fields.context || fields.question_text);
         if (!word || !questionText) continue;
-        if (!result.has(word)) result.set(word, new Set());
-        result.get(word).add(questionText);
+        const timestamp = Number(fields.test_time || fields.record_time || record.created_time || 0) || 0;
+        const current = latestByWord.get(word);
+        if (!current || timestamp >= current.timestamp) latestByWord.set(word, { timestamp, questionText });
     }
-    return result;
+    return new Map([...latestByWord].map(([word, item]) => [word, new Set([item.questionText])]));
 }
-
 function buildQuizWordQueue({
     cacheRows = [],
     wordRecords,

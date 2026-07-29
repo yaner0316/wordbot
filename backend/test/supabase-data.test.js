@@ -698,6 +698,17 @@ test('quiz session persistence saves and restores unexpired Supabase sessions', 
     assert.equal(client.db.quiz_sessions[0].expires_at, '2026-07-21T00:00:00.000Z');
 });
 
+test('quiz session persistence stores progress and finds the latest unfinished session', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const questions = [{ word: 'Apple', answer: 'A', options: ['A. Apple', 'B. Pear'] }];
+    const progress = { currentQuestion: 1, answers: [0] };
+    await adapter.saveQuizSession('qiuqiu', 'quiz-progress', questions, { progress, now: () => '2026-07-20T00:00:00.000Z' });
+    await adapter.updateQuizSessionProgress('qiuqiu', 'quiz-progress', progress);
+    const session = await adapter.getActiveQuizSession('qiuqiu', { now: () => '2026-07-20T01:00:00.000Z' });
+    assert.deepEqual(session.progress, progress);
+    assert.equal(session.test_id, 'quiz-progress');
+});
 test('quiz session persistence ignores expired sessions and deletes submitted sessions', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -972,7 +983,7 @@ test('rebuildQuestionCacheForUser inherits level and uses word-specific distract
     assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'review').length, 10);
 });
 
-test('rebuildQuestionCacheForUser falls back for an unknown elementary word', async () => {
+test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fabricating a meaning blank', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
     const words = ['corn', 'cheek', 'roll', 'puppy', 'kitten', 'chick', 'climb', 'sweater', 'clap', 'abstract'];
     const client = createFakeSupabase({
@@ -1001,9 +1012,10 @@ test('rebuildQuestionCacheForUser falls back for an unknown elementary word', as
     const result = await adapter.rebuildQuestionCacheForUser('Draggy');
 
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 20);
-    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 10);
-    assert.equal(client.db.question_cache.some(row => row.question_text.includes('Please read')), false);
+    assert.equal(result.count, 16);
+    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 8);
+    assert.equal(client.db.question_cache.some(row => row.word_id === 'word-10'), false)
+    assert.equal(client.db.question_cache.some(row => row.question_text.includes('In class, the word')), false);
 });
 
 test('rebuildQuestionCacheForUser skips middle-school words without natural context and approved distractors', async () => {

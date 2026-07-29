@@ -119,6 +119,7 @@ test('Supabase quiz adapter fills sparse ready cache from queued words instead o
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.diagnostics.returnedQuestionCount, 8);
     assert.equal(quiz.diagnostics.fallbackQuestionCount, 2);
-    assert.equal(quiz.questions.filter(question => question.type === 3).length, 2);
+    assert.equal(quiz.questions.filter(question => question.type === 3).length, 1);
+    assert.equal(quiz.questions.filter(question => question.type === 1).length, 9);
     assert.equal(quiz.questions.some(question => JSON.stringify(question.options).includes('genaine')), false);
 });
