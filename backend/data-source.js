@@ -286,6 +286,13 @@ function loadSupabaseDataSource() {
             dataSource: supabaseData,
             existingAssessments,
         });
+        if (typeof supabaseData.applyQuizCacheLifecycle === 'function') {
+            try {
+                await supabaseData.applyQuizCacheLifecycle({ userId: user, questions, results: result.results || [] });
+            } catch (error) {
+                console.warn('[question_cache] lifecycle update failed: ' + error.message);
+            }
+        }
         quizQuestionsByTestId.delete(key);
         if (typeof supabaseData.deleteQuizSession === 'function') {
             await supabaseData.deleteQuizSession(user, testId);
@@ -307,12 +314,22 @@ function loadSupabaseDataSource() {
         }
     }
 
+    function rebuildCacheAfterWordWrite(username) {
+        if (typeof supabaseData.rebuildQuestionCacheForUser !== 'function') return;
+        Promise.resolve(supabaseData.rebuildQuestionCacheForUser(username)).catch(error => {
+            console.warn('[question_cache] post-entry rebuild failed: ' + error.message);
+        });
+    }
+
     async function addWord(...args) {
+        let result;
         if (args.length === 1 && args[0] && typeof args[0] === 'object') {
-            return supabaseData.addWord(args[0]);
+            result = await supabaseData.addWord(args[0]);
+            rebuildCacheAfterWordWrite(args[0].username);
+            return result;
         }
         const [username, fields = {}] = args;
-        return supabaseData.addWord({
+        result = await supabaseData.addWord({
             username,
             word: fields.Word || fields.word,
             meaning: fields.Meaning || fields.meaning,
@@ -321,8 +338,15 @@ function loadSupabaseDataSource() {
             context: fields.Context || fields.context,
             level: fields.Level || fields.level,
         });
+        rebuildCacheAfterWordWrite(username);
+        return result;
     }
 
+    async function addWords(targetUser, words, options) {
+        const result = await supabaseData.addWords(targetUser, words, options);
+        if (result?.count) rebuildCacheAfterWordWrite(targetUser);
+        return result;
+    }
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
@@ -336,7 +360,7 @@ function loadSupabaseDataSource() {
         generateQuiz,
         submitAnswers,
         addWord,
-        addWords: supabaseData.addWords,
+        addWords,
     };
 }
 

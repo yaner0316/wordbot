@@ -465,7 +465,7 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
 
     assert.equal(result.configured, true);
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 20);
+    assert.equal(result.count, 10);
     const cornQuestion = client.db.question_cache.find(row =>
         row.word_id === 'word-1' && row.round_type === 'primary'
     );
@@ -951,9 +951,9 @@ test('submitReviewRound scores Supabase type-four review rows', async () => {
 });
 
 test('rebuildQuestionCacheForUser inherits level and uses word-specific distractors for unassigned words', async () => {
-    const JUNIOR_HIGH = String.fromCharCode(0x4e2d, 0x5b66);
+    const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
     const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: JUNIOR_HIGH }],
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: ['apple', 'bridge', 'candle', 'dinner', 'engine', 'forest', 'garden', 'hammer', 'island', 'jacket'].map((word, index) => ({
             id: `word-${index + 1}`,
             feishu_record_id: `rec-word-${index + 1}`,
@@ -977,10 +977,9 @@ test('rebuildQuestionCacheForUser inherits level and uses word-specific distract
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
-    assert.equal(result.level, JUNIOR_HIGH);
-    assert.equal(result.count, 20);
-    assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'primary').length, 10);
-    assert.equal(client.db.question_cache.filter(row => row.level === JUNIOR_HIGH && row.round_type === 'review').length, 10);
+    assert.equal(result.level, MIDDLE);
+    assert.equal(result.count, 10);
+    assert.equal(client.db.question_cache.filter(row => row.level === MIDDLE && row.round_type === 'primary').length, 10);
 });
 
 test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fabricating a meaning blank', async () => {
@@ -1012,7 +1011,7 @@ test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fa
     const result = await adapter.rebuildQuestionCacheForUser('Draggy');
 
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 16);
+    assert.equal(result.count, 8);
     assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 8);
     assert.equal(client.db.question_cache.some(row => row.word_id === 'word-10'), false)
     assert.equal(client.db.question_cache.some(row => row.question_text.includes('In class, the word')), false);
@@ -1336,4 +1335,61 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
 
     assert.equal(result.count, 0);
     assert.equal(client.db.question_cache.length, 0);
+});
+
+test('rebuildQuestionCacheForUser creates two distinct ready type-one variants when a context generator is available', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'apple',
+            meaning_en: 'a fruit',
+            meaning_zh: '苹果',
+            level: MIDDLE,
+            context_en: 'The child ate an apple after school.',
+            distractors: ['pear', 'desk', 'chair'],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: '2026-07-30T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, word === 'apple' ? '苹果' : '干扰项'])),
+        generateContext: async (word, meaning, level, previous) =>
+            previous ? 'The child packed an apple for the long trip.' : previous,
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const rows = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+    assert.equal(result.count, 2);
+    assert.equal(rows.length, 2);
+    assert.equal(new Set(rows.map(row => row.question_text)).size, 2);
+    assert.deepEqual(rows.map(row => row.cache_state).sort(), ['active', 'reserved_next_day']);
+    assert.ok(rows.every(row => row.question_type === '1' && row.quality_status === 'ready'));
+});
+test('correct cache answer promotes the reserved next-day variant and retires the current one', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{ id: 'word-1', user_id: 'user-1', word: 'apple', level: MIDDLE }],
+        question_cache: [
+            { id: 'cache-a', feishu_record_id: 'cache-a-ref', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', level: MIDDLE, round_type: 'primary', cache_state: 'active', quality_status: 'ready', question_type: '1', question_text: 'The child ate an apple.', options: [], answer: 'A', option_meanings: [] },
+            { id: 'cache-b', feishu_record_id: 'cache-b-ref', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', level: MIDDLE, round_type: 'primary', cache_state: 'reserved_next_day', available_from: '2026-07-31T00:00:00.000Z', quality_status: 'ready', question_type: '1', question_text: 'The child packed an apple.', options: [], answer: 'A', option_meanings: [] },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    await adapter.applyQuizCacheLifecycle({
+        userId: 'qiuqiu',
+        questions: [{ cacheRecordId: 'cache-a-ref' }],
+        results: [{ correct: true }],
+    });
+
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-a').cache_state, 'retired');
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').cache_state, 'active');
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').available_from, null);
 });

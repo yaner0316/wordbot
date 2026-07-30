@@ -97,6 +97,9 @@ function normalizeCacheRow(row) {
         level: fields.level || '',
         roundType: fields.round_type || 'primary',
         qualityStatus: fields.quality_status || QUESTION_CACHE_STATUS.PENDING,
+        cacheState: fields.cache_state || 'active',
+        variantSlot: Number(fields.variant_slot || 1),
+        availableFrom: fields.available_from || null,
         usedCount: Number(fields.used_count || 0),
         generatedAt: Number(fields.generated_at || 0),
         question: {
@@ -124,6 +127,7 @@ function getCacheQuestionReadinessIssues(row) {
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
+    if (['retired', 'replace_pending'].includes(normalized.cacheState)) issues.push('inactive_cache_state');
     if (normalized.qualityStatus !== QUESTION_CACHE_STATUS.READY) issues.push('not_ready_status');
     if (!question.record_id) issues.push('missing_record_id');
     if (!question.word) issues.push('missing_word');
@@ -214,6 +218,8 @@ function buildSelectableCachePool({ rows, userId, level, roundType = 'primary', 
         .map(normalizeCacheRow)
         .filter(row => userKey(row.user) === targetUserKey && row.level === level && row.roundType === roundType)
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
+        .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
+        .filter(row => row.cacheState !== 'reserved_next_day' || !row.availableFrom || Date.parse(row.availableFrom) <= Date.now())
         .filter(row => isCacheQuestionReady(row))
         .filter(row => !normalizedExcluded.has(String(row.wordRecordId || '').trim()));
     return dedupeSelectableRows(shuffleWithinUsedCount(eligible));

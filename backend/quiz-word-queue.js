@@ -184,6 +184,8 @@ function selectCachedQuestionsForWordQueue({
         .filter(row => !level || row.level === level)
         .filter(row => row.roundType === roundType)
         .filter(row => row.qualityStatus === 'ready')
+        .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
+        .filter(row => row.cacheState !== 'reserved_next_day' || !row.availableFrom || Date.parse(row.availableFrom) <= Date.now())
         .filter(row => isCacheQuestionReady(row));
     const byRecordId = new Map();
     for (const row of normalizedRows) {
