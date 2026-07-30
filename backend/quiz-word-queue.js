@@ -86,8 +86,8 @@ function buildAssessmentSummary(assessmentRecords, { userId, now }) {
             summary.set(recordId, { hasAny: false, hasBeforeToday: false, hasToday: false });
         }
         const item = summary.get(recordId);
-        if (day === today) item.hasToday = true;
         if (!hasSubmittedAnswer(record)) continue;
+        if (day === today) item.hasToday = true;
         item.hasAny = true;
         if (day !== today) item.hasBeforeToday = true;
     }
@@ -158,6 +158,7 @@ function buildQuizWordQueue({
 
     const todayWords = new Set((assessmentRecords || [])
         .filter(record => isRealAssessment(fieldValue(record.fields?.test_id)))
+        .filter(hasSubmittedAnswer)
         .filter(record => learningDay(Number(record.fields?.test_time || 0)) === learningDay(now))
         .map(record => normalizeWord(record.fields?.word))
         .filter(Boolean));

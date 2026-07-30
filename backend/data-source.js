@@ -198,6 +198,23 @@ function loadSupabaseDataSource() {
     }
 
     async function generateQuiz(user, level, mode) {
+        const activeSession = await getActiveQuizSessionBestEffort(supabaseData, user);
+        if (activeSession) {
+            const questions = Array.isArray(activeSession.questions) ? activeSession.questions : [];
+            const isCurrentQuiz = questions.length === QUIZ_QUESTION_COUNT &&
+                questions.every(question => Number(question?.type) === 1);
+            if (isCurrentQuiz) {
+                return {
+                    testId: activeSession.test_id,
+                    mode: mode || 'real',
+                    level: level || null,
+                    source: 'quiz_session',
+                    progress: activeSession.progress || { currentQuestion: 0, answers: [] },
+                    questions,
+                };
+            }
+            await deleteQuizSessionBestEffort(supabaseData, user, activeSession.test_id);
+        }
         const quiz = await generateQuizWithDataSource({
             username: user,
             level,
@@ -331,6 +348,29 @@ function loadFeishuFallbackExports() {
     }
 }
 
+async function getActiveQuizSessionBestEffort(supabaseData, user) {
+    if (typeof supabaseData.getActiveQuizSession !== 'function') return null;
+    try {
+        return await supabaseData.getActiveQuizSession(user);
+    } catch (error) {
+        if (isMissingQuizSessionsTableError(error)) {
+            console.warn('[quiz_sessions] active-session lookup skipped: ' + error.message);
+            return null;
+        }
+        throw error;
+    }
+}
+
+async function deleteQuizSessionBestEffort(supabaseData, user, testId) {
+    if (typeof supabaseData.deleteQuizSession !== 'function' || !testId) return null;
+    try {
+        return await supabaseData.deleteQuizSession(user, testId);
+    } catch (error) {
+        if (isMissingQuizSessionsTableError(error)) return null;
+        throw error;
+    }
+}
+
 async function saveQuizSessionBestEffort(supabaseData, user, testId, questions) {
     if (typeof supabaseData.saveQuizSession !== 'function') return null;
     try {
@@ -354,7 +394,8 @@ function isMissingQuizSessionsTableError(error) {
     return message.includes('quiz_sessions') && (
         error?.code === 'PGRST205' ||
         message.includes('could not find the table') ||
-        message.includes('schema cache')
+        message.includes('schema cache') ||
+        message.includes('session_state')
     );
 }
 

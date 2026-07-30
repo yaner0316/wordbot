@@ -135,7 +135,7 @@ test('cached question selection excludes only the latest question text so varian
     });
     assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-a']);
 });
-test('word queue skips words already generated today even before submission', () => {
+test('word queue allows retrying words generated today when no answer was submitted', () => {
     const wordRecords = Array.from({ length: 20 }, (_, index) => word(index + 1));
     const cacheRows = Array.from({ length: 20 }, (_, index) => cache(index + 1));
     const generatedToday = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(index =>
@@ -157,7 +157,7 @@ test('word queue skips words already generated today even before submission', ()
         minAgeMs: 0,
     });
 
-    assert.deepEqual(queue, ['rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20']);
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
 

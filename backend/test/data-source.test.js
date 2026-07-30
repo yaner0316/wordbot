@@ -72,6 +72,32 @@ function loadDataSource({ envValue, supabaseExports = {}, feishuExports = {} } =
     }
 }
 
+test('generateQuiz resumes an active complete type-one session before building a new quiz', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: 'word' + (index + 1),
+        record_id: 'rec-' + (index + 1),
+        options: ['A. answer', 'B. other', 'C. another', 'D. last'],
+        answer: 'A',
+        context: 'Sentence ' + (index + 1) + '.',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async () => ({
+                test_id: 'real-active',
+                questions,
+                progress: { currentQuestion: 7, answers: Array(7).fill({ option: 0, confidence: 'sure' }) },
+            }),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(quiz.testId, 'real-active');
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.source, 'quiz_session');
+    assert.equal(quiz.progress.currentQuestion, 7);
+});
 test('defaults DATA_SOURCE to supabase and exposes the unified interface', async () => {
     const dataSource = loadDataSource();
 
