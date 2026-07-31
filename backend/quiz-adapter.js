@@ -218,7 +218,17 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
     const elementary = String.fromCharCode(0x5c0f, 0x5b66);
     const juniorHigh = String.fromCharCode(0x4e2d, 0x5b66);
     const normalizedLevel = String(level || '').trim();
-    const typeQuota = normalizedLevel === elementary ? { 1: limit, 3: 0 } : normalizedLevel === juniorHigh ? { 1: Math.min(9, limit), 3: Math.min(1, limit) } : { 1: Math.min(7, limit), 3: Math.min(1, limit) };
+    const hasContextCandidate = (queue || []).some(recordId => {
+        const record = recordsById.get(String(recordId || '').trim());
+        const word = fieldText(record?.fields?.Word).trim().toLowerCase();
+        const context = fieldText(record?.fields?.Context).toLowerCase();
+        return Boolean(word && context.includes(word));
+    });
+    const typeQuota = normalizedLevel === elementary
+        ? { 1: limit, 3: 0 }
+        : normalizedLevel === juniorHigh
+            ? { 1: Math.min(9, limit), 3: hasContextCandidate ? Math.min(1, limit) : limit }
+            : { 1: Math.min(7, limit), 3: Math.min(1, limit) };
     const counts = { 1: (existingQuestions || []).filter(question => Number(question.type) === 1).length, 3: (existingQuestions || []).filter(question => Number(question.type) === 3).length };
     const usedDistractors = new Set();
     const questions = [];

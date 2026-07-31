@@ -130,3 +130,26 @@ test('Supabase quiz adapter fills sparse ready cache from queued words instead o
     assert.equal(quiz.questions.filter(question => question.type === 1).length, 9);
     assert.equal(quiz.questions.some(question => JSON.stringify(question.options).includes('genaine')), false);
 });
+
+test('junior-high fallback fills the set with type-three questions when no candidate has context', async () => {
+    const words = Array.from({ length: 12 }, (_, index) => word(index + 1, { context_en: '' }));
+    const dataSource = {
+        name: 'supabase',
+        getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+        getWordsForUser: async () => words,
+        getAssessmentsForUser: async () => [],
+        getQuestionCache: async () => [],
+    };
+
+    const quiz = await generateQuizWithDataSource({
+        username: 'qiuqiu',
+        level: MIDDLE,
+        dataSource,
+        mode: 'test',
+        createId: () => 'type-three-degraded-fallback',
+    });
+
+    assert.equal(quiz.error, undefined);
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.questions.every(question => question.type === 3), true);
+});
