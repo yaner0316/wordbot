@@ -1401,3 +1401,39 @@ test('correct cache answer promotes the reserved next-day variant and retires th
     assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').cache_state, 'active');
     assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').available_from, null);
 });
+
+
+test('rebuildQuestionCacheForUser seeds ten unique primary words when variants produce multiple rows', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: ['apple', 'brave', 'candle', 'dream', 'eager', 'forest', 'gentle', 'honest', 'island', 'jolly'].map((value, index) => ({
+            id: 'word-' + (index + 1),
+            feishu_record_id: 'rec-word-' + (index + 1),
+            user_id: 'user-1',
+            word: value,
+            meaning_en: 'meaning ' + (index + 1),
+            meaning_zh: '',
+            level: MIDDLE,
+            context_en: 'The first ' + value + ' sentence is ready.',
+            distractors: ['alpha', 'bravo', 'charlie'],
+            old_distractors: [],
+            mastery_status: 'pending',
+            entered_at: '2026-07-19T00:00:' + String(index).padStart(2, '0') + '.000Z',
+        })),
+        assessments: [],
+        question_cache: [{ id: 'existing-cache' }],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        generateContext: async word => 'The second ' + word + ' sentence is ready.',
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+    assert.equal(result.count, 20);
+    assert.equal(primary.length, 20);
+    assert.equal(new Set(primary.map(row => row.source_word_record_id)).size, 10);
+    assert.equal(primary.every(row => row.question_type === '1'), true);
+    assert.equal(primary.every(row => row.correct_meaning === '\u4e2d\u6587\u91ca\u4e49'), true);
+});

@@ -779,7 +779,12 @@ function rotateFallbackDistractors(pool, word) {
 }async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
-    const meaning = cleanChineseMeaningForCache(word);
+    let meaning = cleanChineseMeaningForCache(word);
+    if (!meaning && typeof translateWords === 'function') {
+        const translated = await translateWords([wordText]);
+        const candidate = String(translated?.[wordText] || '').trim();
+        if (hasMeaningfulChineseMeaning(candidate)) meaning = candidate;
+    }
     if (!meaning) return [];
     const distractorPool = uniqueWords([
         ...(word.distractors || []),
@@ -874,15 +879,21 @@ async function buildType1CacheRow({ user, word, level, context, slot, now, trans
 async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, generateContext }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
-    const meaning = word.meaning_zh || word.meaning_en || wordText;
+    let cacheWord = word;
+    if (!cleanChineseMeaningForCache(cacheWord) && typeof translateWords === 'function') {
+        const translated = await translateWords([wordText]);
+        const candidate = String(translated?.[wordText] || '').trim();
+        if (hasMeaningfulChineseMeaning(candidate)) cacheWord = { ...word, meaning_zh: candidate };
+    }
+    const meaning = cacheWord.meaning_zh || cacheWord.meaning_en || wordText;
     let firstContext = level === ELEMENTARY_LEVEL
-        ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
+        ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
     if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
     }
     if (!hasWholeWord(firstContext, wordText)) {
-        if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
+        if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word: cacheWord, level, roundType, now, generateDistractors, translateWords });
         return [];
     }
     let secondContext = firstContext;
@@ -897,9 +908,9 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     }
     const duplicateGeneratedContext = generateContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
-    const first = await buildType1CacheRow({ user, word, level, context: firstContext, slot: 1, now, translateWords });
+    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
     if (!generateContext) return first ? [first] : [];
-    const second = await buildType1CacheRow({ user, word, level, context: secondContext, slot: 2, now, translateWords });
+    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
     if (!first) return [];
     return second ? [first, second] : [first];
 }
@@ -965,6 +976,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         candidateWords.sort((left, right) => rebuildPriority(left) - rebuildPriority(right));
     }
     const rows = [];
+    const seededPrimaryWordIds = new Set();
     const generateDistractors = async input => {
         try {
             return await distractorGenerator(input);
@@ -997,9 +1009,13 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of candidateWords) {
-        if (seedTargetPrimaryCount && rows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length >= seedTargetPrimaryCount) break;
+        if (seedTargetPrimaryCount && seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
-        if (!wordRows.length) continue;
+        const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
+        if (!primaryRows.length) continue;
+        const wordId = String(primaryRows[0].source_word_record_id || primaryRows[0].word_id || '').trim();
+        if (!wordId || seededPrimaryWordIds.has(wordId)) continue;
+        seededPrimaryWordIds.add(wordId);
         rows.push(...wordRows);
     }
 
