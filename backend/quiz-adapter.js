@@ -210,7 +210,7 @@ function rotateOptions(values, seed) {
     return values.map((_, index) => values[(index + offset) % values.length]);
 }
 
-function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId, level, diagnostics = null }) {
+async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId, level, diagnostics = null, meaningOverrides = {} }) {
     const existingRecordIds = new Set((existingQuestions || []).map(question => String(question.record_id || '').trim()).filter(Boolean));
     const recordsById = new Map((wordRecords || []).map(record => [String(record.record_id || '').trim(), record]));
     const fallbackWords = (wordRecords || []).map(record => fieldText(record.fields?.Word).trim().toLowerCase()).filter(validFallbackWord);
@@ -238,7 +238,7 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         const record = recordsById.get(String(recordId || '').trim());
         if (!record) { if (diagnostics) diagnostics.missingRecord = (diagnostics.missingRecord || 0) + 1; continue; }
         const word = fieldText(record.fields?.Word).trim().toLowerCase();
-        const meaning = conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning));
+        const meaning = conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning)) || conciseFallbackMeaning(meaningOverrides[word]);
         if (!validFallbackWord(word)) { if (diagnostics) diagnostics.invalidWord = (diagnostics.invalidWord || 0) + 1; continue; }
         if (!meaning) { if (diagnostics) diagnostics.missingMeaning = (diagnostics.missingMeaning || 0) + 1; continue; }
         const freshDistractors = fallbackDistractors.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
@@ -347,8 +347,17 @@ async function generateQuizWithDataSource({
                 })
                 .map(record => record.record_id),
         ].filter(Boolean))];
+        const fallbackRecordsById = new Map(wordRecords.map(record => [String(record.record_id || '').trim(), record]));
+        const translationTargets = [...new Set(fallbackQueue
+            .map(recordId => fallbackRecordsById.get(String(recordId || '').trim()))
+            .filter(record => record && !conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning)))
+            .map(record => fieldText(record.fields?.Word).trim().toLowerCase())
+            .filter(Boolean))];
+        const meaningOverrides = typeof dataSource.translateWords === 'function' && translationTargets.length
+            ? await dataSource.translateWords(translationTargets).catch(() => ({}))
+            : {};
         const fallbackDiagnostics = {};
-        const fallbackQuestions = buildMeaningFallbackQuestions({
+        const fallbackQuestions = await buildMeaningFallbackQuestions({
             wordRecords,
             queue: fallbackQueue,
             existingQuestions: questions,
@@ -356,6 +365,7 @@ async function generateQuizWithDataSource({
             testId,
             level: effectiveLevel,
             diagnostics: fallbackDiagnostics,
+            meaningOverrides,
         });
         const combinedQuestions = [...questions, ...fallbackQuestions].slice(0, limit);
         if (combinedQuestions.length >= limit) {

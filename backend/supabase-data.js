@@ -1869,6 +1869,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getMasteryAssessmentsForWords: (username, sourceWordRecordIds) =>
             getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds),
         getQuestionCache: (username, level, roundType) => getQuestionCacheWithClient(client, username, level, roundType),
+        translateWords: words => translator(words),
         submitAssessment: input => submitAssessmentWithClient(client, input),
         submitAssessments: inputs => submitAssessmentsWithClient(client, inputs),
         updateWordMastery: (username, word, newMasteryStatus, options) =>
@@ -1920,6 +1921,7 @@ module.exports = {
     getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
     getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,
     getQuestionCache: defaultAdapter.getQuestionCache,
+    translateWords: defaultAdapter.translateWords,
     submitAssessment: defaultAdapter.submitAssessment,
     submitAssessments: defaultAdapter.submitAssessments,
     updateWordMastery: defaultAdapter.updateWordMastery,
