@@ -175,10 +175,8 @@ function buildSubmitResult({ testId, results, correct }) {
 }
 
 function filterSelectableWordRows(wordRows) {
-    return (wordRows || []).filter((row) => {
-        if (isFeishuRecord(row)) return true;
-        return row.mastery_status !== 'mastered';
-    });
+    // Mastery is derived from assessment evidence in buildQuizWordQueue.
+    return wordRows || [];
 }
 
 function fieldText(value) {

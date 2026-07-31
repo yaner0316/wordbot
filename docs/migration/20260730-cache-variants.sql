@@ -1,4 +1,6 @@
 -- Track the two type-one variants and their lifecycle.
+begin;
+
 alter table public.question_cache
     add column if not exists cache_state text not null default 'active',
     add column if not exists variant_slot smallint not null default 1,
@@ -20,9 +22,9 @@ begin
         where conrelid = 'public.question_cache'::regclass
           and conname = 'question_cache_variant_slot_valid'
     ) then
-        alter table public.question_cache
-            add constraint question_cache_variant_slot_valid
-            check (variant_slot > 0);
+            alter table public.question_cache
+                add constraint question_cache_variant_slot_valid
+            check (variant_slot in (1, 2));
     end if;
 end
 $$;
@@ -32,3 +34,5 @@ create index if not exists question_cache_selectable_variant_idx
     where quality_status = 'ready';
 
 notify pgrst, 'reload schema';
+
+commit;
