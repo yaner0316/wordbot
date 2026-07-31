@@ -899,7 +899,8 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const first = await buildType1CacheRow({ user, word, level, context: firstContext, slot: 1, now, translateWords });
     if (!generateContext) return first ? [first] : [];
     const second = await buildType1CacheRow({ user, word, level, context: secondContext, slot: 2, now, translateWords });
-    return first && second ? [first, second] : [];
+    if (!first) return [];
+    return second ? [first, second] : [first];
 }
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
     const user = await getUserByUsernameWithClient(client, username);
