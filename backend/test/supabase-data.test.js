@@ -1086,6 +1086,8 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
     assert.equal(client.db.question_cache.every(row => row.question_type === '3'), true);
     assert.equal(client.db.question_cache.every(row => row.quality_status === 'ready'), true);
     assert.equal(client.db.question_cache.every(row => !String(row.question_text || '').includes('Meaning')), true);
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'active'), true);
+    assert.equal(client.db.question_cache.every(row => row.variant_slot === 1), true);
     assert.deepEqual(
         client.db.question_cache
             .filter(row => row.round_type === 'primary')

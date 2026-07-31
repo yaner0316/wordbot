@@ -815,6 +815,7 @@ function rotateFallbackDistractors(pool, word) {
         used_count: 0,
         generated_at: toIsoString(now),
         last_used_at: null,
+        ...buildInitialVariantMetadata({ slot: 1, now }),
     };
     const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
     return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
