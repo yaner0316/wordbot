@@ -940,7 +940,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
     const existingCacheCount = (existingCacheRows || []).length;
     const hasExistingCache = existingCacheCount > 0;
-    const seedTargetPrimaryCount = existingCacheCount < 20 ? 10 : null;
+    const seedTargetPrimaryCount = existingCacheCount <= 20 ? 10 : null;
     const rows = [];
     const generateDistractors = async input => {
         try {
