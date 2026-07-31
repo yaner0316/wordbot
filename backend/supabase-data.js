@@ -926,15 +926,14 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             return !wordLevel || wordLevel === level;
         })
         .sort((left, right) => toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at));
-    let deleteQuery = client
+    const { data: existingCacheRows, error: existingCacheError } = await client
         .from('question_cache')
-        .delete()
+        .select('id')
         .eq('user_id', user.id)
         .eq('level', level);
-    const { error: deleteError } = await deleteQuery.select('id');
-    ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
+    ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
+    const hasExistingCache = (existingCacheRows || []).length > 0;
     const rows = [];
-    const writtenRows = [];
     const generateDistractors = async input => {
         try {
             return await distractorGenerator(input);
@@ -970,14 +969,34 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
         if (!wordRows.length) continue;
         rows.push(...wordRows);
-        const { error } = await client
-            .from('question_cache')
-            .insert(wordRows)
-            .select('id');
-        ensureNoError(error, 'rebuildQuestionCache.insert');
-        writtenRows.push(...wordRows);
     }
-    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, writtenRows);
+
+    // Keep the current cache available while AI generation is in progress. A
+    // partial rebuild must not turn a usable pool into an empty one.
+    const primaryCount = rows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length;
+    if (hasExistingCache && candidateWords.length >= 10 && primaryCount < 10) {
+        return {
+            configured: true,
+            level,
+            count: 0,
+            retainedExisting: true,
+            generatedCount: rows.length,
+        };
+    }
+
+    const { error: deleteError } = await client
+        .from('question_cache')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('level', level)
+        .select('id');
+    ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
+    const { error: insertError } = await client
+        .from('question_cache')
+        .insert(rows)
+        .select('id');
+    ensureNoError(insertError, 'rebuildQuestionCache.insert');
+    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
     return {
         configured: true,
         level,
