@@ -881,7 +881,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         firstContext = generateContext ? await generateContext(wordText, meaning, level, '').catch(() => '') : '';
     }
     if (!hasWholeWord(firstContext, wordText)) {
-        if (!generateContext && level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
+        if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
         return [];
     }
     let secondContext = firstContext;
