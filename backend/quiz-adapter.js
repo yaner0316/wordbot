@@ -327,10 +327,20 @@ async function generateQuizWithDataSource({
     };
 
     if (questions.length < limit) {
+        const fallbackQueue = [...new Set([
+            ...queue,
+            ...wordRecords
+                .filter(record => {
+                    const status = fieldText(record.fields?.Status).trim().toLowerCase();
+                    const recordLevel = fieldText(record.fields?.Level).trim();
+                    return status !== 'mastered' && (!recordLevel || recordLevel === effectiveLevel);
+                })
+                .map(record => record.record_id),
+        ].filter(Boolean))];
         const fallbackDiagnostics = {};
         const fallbackQuestions = buildMeaningFallbackQuestions({
             wordRecords,
-            queue,
+            queue: fallbackQueue,
             existingQuestions: questions,
             limit,
             testId,
