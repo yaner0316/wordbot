@@ -888,7 +888,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     if (generateContext) {
         const firstContextKey = String(firstContext || '').trim().toLowerCase();
         secondContext = '';
-        for (let attempt = 0; attempt < 2 && !secondContext; attempt++) {
+        for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
             const candidate = await generateContext(wordText, meaning, level, firstContext).catch(() => '');
             const candidateKey = String(candidate || '').trim().toLowerCase();
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
@@ -959,6 +959,13 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         }
         return Object.fromEntries(uniqueWords.map(word => [word, translationCache.get(word) || '']));
     };
+    const translationWords = [...new Set(candidateWords.flatMap(word => [
+        ...(word.distractors || []),
+        ...(word.old_distractors || []),
+    ]).map(word => String(word || "").trim().toLowerCase()).filter(Boolean))];
+    for (let index = 0; index < translationWords.length; index += 40) {
+        await translateWords(translationWords.slice(index, index + 40));
+    }
     for (const word of candidateWords) {
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
         if (!wordRows.length) continue;
