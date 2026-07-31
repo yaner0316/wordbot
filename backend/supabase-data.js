@@ -884,8 +884,18 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         if (!generateContext && level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
         return [];
     }
-    const secondContext = generateContext ? await generateContext(wordText, meaning, level, firstContext).catch(() => '') : firstContext;
-    if (!hasWholeWord(secondContext, wordText)) return [];
+    let secondContext = firstContext;
+    if (generateContext) {
+        const firstContextKey = String(firstContext || '').trim().toLowerCase();
+        secondContext = '';
+        for (let attempt = 0; attempt < 2 && !secondContext; attempt++) {
+            const candidate = await generateContext(wordText, meaning, level, firstContext).catch(() => '');
+            const candidateKey = String(candidate || '').trim().toLowerCase();
+            if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
+        }
+    }
+    const duplicateGeneratedContext = generateContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
+    if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
     const first = await buildType1CacheRow({ user, word, level, context: firstContext, slot: 1, now, translateWords });
     if (!generateContext) return first ? [first] : [];
     const second = await buildType1CacheRow({ user, word, level, context: secondContext, slot: 2, now, translateWords });
@@ -931,12 +941,22 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             return null;
         }
     };
+    const translationCache = new Map();
     const translateWords = async words => {
-        try {
-            return await translator(words);
-        } catch (error) {
-            return {};
+        const uniqueWords = [...new Set((words || []).map(word => String(word || '').trim().toLowerCase()).filter(Boolean))];
+        const missingWords = uniqueWords.filter(word => !translationCache.has(word));
+        if (missingWords.length) {
+            try {
+                const translated = await translator(missingWords);
+                for (const word of missingWords) {
+                    const meaning = String(translated?.[word] || '').trim();
+                    if (meaning) translationCache.set(word, meaning);
+                }
+            } catch (error) {
+                // Keep failed translations uncached so a later row can retry.
+            }
         }
+        return Object.fromEntries(uniqueWords.map(word => [word, translationCache.get(word) || '']));
     };
     for (const word of candidateWords) {
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
