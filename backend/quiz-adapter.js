@@ -210,7 +210,7 @@ function rotateOptions(values, seed) {
     return values.map((_, index) => values[(index + offset) % values.length]);
 }
 
-function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId, level }) {
+function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, limit, testId, level, diagnostics = null }) {
     const existingRecordIds = new Set((existingQuestions || []).map(question => String(question.record_id || '').trim()).filter(Boolean));
     const recordsById = new Map((wordRecords || []).map(record => [String(record.record_id || '').trim(), record]));
     const fallbackWords = (wordRecords || []).map(record => fieldText(record.fields?.Word).trim().toLowerCase()).filter(validFallbackWord);
@@ -226,14 +226,15 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         if (existingQuestions.length + questions.length >= limit) break;
         if (existingRecordIds.has(recordId)) continue;
         const record = recordsById.get(String(recordId || '').trim());
-        if (!record) continue;
+        if (!record) { if (diagnostics) diagnostics.missingRecord = (diagnostics.missingRecord || 0) + 1; continue; }
         const word = fieldText(record.fields?.Word).trim().toLowerCase();
         const meaning = conciseFallbackMeaning(fieldText(record.fields?.CN_Meaning));
-        if (!validFallbackWord(word) || !meaning) continue;
+        if (!validFallbackWord(word)) { if (diagnostics) diagnostics.invalidWord = (diagnostics.invalidWord || 0) + 1; continue; }
+        if (!meaning) { if (diagnostics) diagnostics.missingMeaning = (diagnostics.missingMeaning || 0) + 1; continue; }
         const freshDistractors = fallbackDistractors.filter(candidate => candidate !== word && !usedDistractors.has(candidate));
         const recycledDistractors = fallbackDistractors.filter(candidate => candidate !== word);
         const distractors = [...new Set([...freshDistractors, ...recycledDistractors])].slice(0, 3);
-        if (distractors.length < 3) continue;
+        if (distractors.length < 3) { if (diagnostics) diagnostics.insufficientDistractors = (diagnostics.insufficientDistractors || 0) + 1; continue; }
         for (const distractor of distractors) usedDistractors.add(distractor);
         const optionWords = rotateOptions([word, ...distractors], questions.length + word.length);
         const answer = ANSWER_LETTERS[optionWords.indexOf(word)];
@@ -242,9 +243,9 @@ function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuestions, 
         const canUseContext = (sourceContext.match(contextPattern) || []).length === 1;
         const useContext = canUseContext && counts[1] < typeQuota[1];
         const type = useContext ? 1 : (counts[3] < typeQuota[3] ? 3 : 0);
-        if (!type) continue;
+        if (!type) { if (diagnostics) diagnostics.typeQuotaExhausted = (diagnostics.typeQuotaExhausted || 0) + 1; continue; }
         const question = { type, word, context: useContext ? sourceContext.replace(contextPattern, '_____') : meaning, options: optionWords.map((option, index) => ANSWER_LETTERS[index] + '. ' + option), answer, correctAnswer: answer, correctMeaning: meaning, record_id: recordId, testId };
-        if (!isQuestionQualityAcceptable(question)) continue;
+        if (!isQuestionQualityAcceptable(question)) { if (diagnostics) diagnostics.qualityRejected = (diagnostics.qualityRejected || 0) + 1; continue; }
         counts[type] += 1;
         questions.push(question);
     }
@@ -326,6 +327,7 @@ async function generateQuizWithDataSource({
     };
 
     if (questions.length < limit) {
+        const fallbackDiagnostics = {};
         const fallbackQuestions = buildMeaningFallbackQuestions({
             wordRecords,
             queue,
@@ -333,6 +335,7 @@ async function generateQuizWithDataSource({
             limit,
             testId,
             level: effectiveLevel,
+            diagnostics: fallbackDiagnostics,
         });
         const combinedQuestions = [...questions, ...fallbackQuestions].slice(0, limit);
         if (combinedQuestions.length >= limit) {
@@ -345,6 +348,7 @@ async function generateQuizWithDataSource({
                     ...diagnostics,
                     fallbackUsed: true,
                     fallbackQuestionCount: fallbackQuestions.length,
+                    fallbackDiagnostics,
                     finalQuestionCount: combinedQuestions.length,
                 },
                 questions: combinedQuestions,
@@ -360,6 +364,7 @@ async function generateQuizWithDataSource({
                     ...diagnostics,
                     fallbackUsed: fallbackQuestions.length > 0,
                     fallbackQuestionCount: fallbackQuestions.length,
+                    fallbackDiagnostics,
                     finalQuestionCount: combinedQuestions.length,
                 },
                 questions: combinedQuestions,
@@ -376,6 +381,8 @@ async function generateQuizWithDataSource({
                 ...diagnostics,
                 fallbackUsed: false,
                 fallbackQuestionCount: 0,
+                fallbackDiagnostics,
+                fallbackDiagnostics,
                 finalQuestionCount: 0,
             },
             readyCount: 0,
