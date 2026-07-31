@@ -877,8 +877,8 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     let firstContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
         : word.context_en || '';
-    if (!hasWholeWord(firstContext, wordText)) {
-        firstContext = generateContext ? await generateContext(wordText, meaning, level, '').catch(() => '') : '';
+    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
+        firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
     }
     if (!hasWholeWord(firstContext, wordText)) {
         if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
