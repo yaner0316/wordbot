@@ -1086,9 +1086,7 @@ async function resolveCacheRow(client, cacheId) {
     return data;
 }
 
-async function submitAssessmentWithClient(client, input) {
-    const user = await requireUserByUsername(client, input.username);
-    const [wordRow] = await resolveWordRows(client, user.id, input.word, input);
+function buildAssessmentRow(input, user, wordRow) {
     const assessedAt = toIsoString(input.recordTime);
     const row = {
         user_id: user.id,
@@ -1112,6 +1110,13 @@ async function submitAssessmentWithClient(client, input) {
     };
     if (!row.test_id) throw new Error('TEST_ID_REQUIRED');
     if (!row.word_snapshot) throw new Error('WORD_REQUIRED');
+    return row;
+}
+
+async function submitAssessmentWithClient(client, input) {
+    const user = await requireUserByUsername(client, input.username);
+    const [wordRow] = await resolveWordRows(client, user.id, input.word, input);
+    const row = buildAssessmentRow(input, user, wordRow);
     const { data, error } = await client
         .from('assessments')
         .insert(row)
@@ -1121,6 +1126,24 @@ async function submitAssessmentWithClient(client, input) {
     return data;
 }
 
+async function submitAssessmentsWithClient(client, inputs = []) {
+    if (!Array.isArray(inputs) || !inputs.length) return [];
+    const username = inputs[0]?.username;
+    const user = await requireUserByUsername(client, username);
+    if (inputs.some(input => requireUsername(input.username) !== requireUsername(username))) {
+        throw new Error('BATCH_USERNAME_MISMATCH');
+    }
+    const resolved = await Promise.all(inputs.map(async input => {
+        const [wordRow] = await resolveWordRows(client, user.id, input.word, input);
+        return buildAssessmentRow(input, user, wordRow);
+    }));
+    const { data, error } = await client
+        .from('assessments')
+        .insert(resolved)
+        .select('*');
+    ensureNoError(error, 'submitAssessments');
+    return data || [];
+}
 function isSubmittedAssessmentRow(row) {
     return row && row.submitted_answer !== null && row.submitted_answer !== undefined && row.is_correct;
 }
@@ -1844,6 +1867,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds),
         getQuestionCache: (username, level, roundType) => getQuestionCacheWithClient(client, username, level, roundType),
         submitAssessment: input => submitAssessmentWithClient(client, input),
+        submitAssessments: inputs => submitAssessmentsWithClient(client, inputs),
         updateWordMastery: (username, word, newMasteryStatus, options) =>
             updateWordMasteryWithClient(client, username, word, newMasteryStatus, options),
         incrementCacheUsedCount: cacheId => incrementCacheUsedCountWithClient(client, cacheId),
@@ -1894,6 +1918,7 @@ module.exports = {
     getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,
     getQuestionCache: defaultAdapter.getQuestionCache,
     submitAssessment: defaultAdapter.submitAssessment,
+    submitAssessments: defaultAdapter.submitAssessments,
     updateWordMastery: defaultAdapter.updateWordMastery,
     incrementCacheUsedCount: defaultAdapter.incrementCacheUsedCount,
     applyQuizCacheLifecycle: defaultAdapter.applyQuizCacheLifecycle,

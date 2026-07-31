@@ -72,3 +72,39 @@ test('submitQuizWithDataSource writes assessment, mastery status, and cache usag
     assert.equal(calls[2][0], 'incrementCacheUsedCount');
     assert.equal(calls[2][1], 'cache-1');
 });
+
+test('submitQuizWithDataSource uses one batch assessment write when the data source supports it', async () => {
+    const calls = [];
+    const dataSource = {
+        submitAssessments: async inputs => {
+            calls.push(inputs);
+            return inputs.map((input, index) => ({
+                id: `assessment-${index + 1}`,
+                source_word_record_id: input.sourceWordRecordId,
+                test_id: input.testId,
+                assessed_at: new Date(input.recordTime).toISOString(),
+                question_type: String(input.questionType),
+                word_snapshot: input.word,
+                is_correct: input.correctness,
+                submitted_answer: input.yourAnswer,
+                answer_confidence: input.confidence,
+            }));
+        },
+    };
+    const result = await submitQuizWithDataSource({
+        username: 'student',
+        testId: 'test-batch-submit',
+        answers: [{ option: 0, confidence: 'sure' }, { option: 1, confidence: 'guess' }],
+        questions: [
+            { record_id: 'rec-one', word: 'apple', type: 1, options: ['A. apple', 'B. pear', 'C. desk', 'D. book'], answer: 'A', correctAnswer: 'A' },
+            { record_id: 'rec-two', word: 'book', type: 1, options: ['A. apple', 'B. book', 'C. desk', 'D. pear'], answer: 'B', correctAnswer: 'B' },
+        ],
+        dataSource,
+        now: () => 1784455200000,
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].length, 2);
+    assert.equal(result.correct, 2);
+    assert.equal(result.total, 2);
+});

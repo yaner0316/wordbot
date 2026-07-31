@@ -420,6 +420,7 @@ async function submitQuizWithDataSource({
     let correct = 0;
     const results = [];
     const insertedAssessments = [];
+    const pendingSubmissions = [];
     const existingBySourceRecordId = new Map(
         (existingAssessments || [])
             .filter(row => row?.submitted_answer !== null && row?.submitted_answer !== undefined && row?.is_correct)
@@ -467,11 +468,10 @@ async function submitQuizWithDataSource({
             });
             continue;
         }
+
         const isCorrect = yourAnswer === correctAnswer;
         if (isCorrect) correct++;
-
-        const recordTime = Number(now()) + index;
-        const inserted = await dataSource.submitAssessment({
+        const input = {
             username,
             word: question.word,
             sourceWordRecordId,
@@ -481,14 +481,13 @@ async function submitQuizWithDataSource({
             yourAnswer,
             confidence: submitted.confidence,
             source: question.source || (question.cacheRecordId ? 'question_cache' : 'live_fallback'),
-            recordTime,
+            recordTime: Number(now()) + index,
             level: question.level,
             questionText: question.context || question.questionText || '',
             options: question.options || [],
             correctAnswer,
-        });
-        insertedAssessments.push(inserted);
-
+        };
+        pendingSubmissions.push({ question, sourceWordRecordId, isCorrect, input });
         results.push({
             q: index + 1,
             word: String(question.word || '').toLowerCase(),
@@ -498,35 +497,42 @@ async function submitQuizWithDataSource({
             correct: isCorrect,
             confidence: submitted.confidence,
         });
+    }
 
-        if (shouldUpdateMastery) {
-            const assessmentRows = [...baseAssessmentRows, ...insertedAssessments];
-            const existingAssessmentRecords = assessmentRows.map(row =>
-                toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId })
-            );
-            const assessmentRecords = existingAssessmentRecords;
+    if (pendingSubmissions.length) {
+        const inputs = pendingSubmissions.map(item => item.input);
+        const inserted = typeof dataSource.submitAssessments === 'function'
+            ? await dataSource.submitAssessments(inputs)
+            : await Promise.all(inputs.map(input => dataSource.submitAssessment(input)));
+        insertedAssessments.push(...(inserted || []));
+    }
+
+    if (shouldUpdateMastery) {
+        const assessmentRows = [...baseAssessmentRows, ...insertedAssessments];
+        const assessmentRecords = assessmentRows.map(row =>
+            toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId })
+        );
+        for (const { question, sourceWordRecordId, isCorrect } of pendingSubmissions) {
             const sameSpelling = wordRecords.filter(record =>
                 String(record.fields?.Word || '').trim().toLowerCase() === String(question.word || '').trim().toLowerCase()
             );
             const recordIds = sameSpelling.map(record => record.record_id).filter(Boolean);
-            if (recordIds.length) {
-                const evaluation = evaluateWordMastery(recordIds, assessmentRecords, value =>
-                    isCorrectAssessmentValue(value)
-                );
-                const meaningProgress = evaluation.meanings?.[sourceWordRecordId] || { stage: isCorrect ? 'consolidating' : 'recognized' };
-                const nextStatus = evaluation.mastered ? 'mastered' : masteryStageToStatus(meaningProgress.stage);
-                await dataSource.updateWordMastery(username, question.word, nextStatus, { sourceWordRecordId });
-            }
-        }
-
-        if (question.cacheRecordId && typeof dataSource.incrementCacheUsedCount === 'function') {
-            await dataSource.incrementCacheUsedCount(question.cacheRecordId);
+            if (!recordIds.length) continue;
+            const evaluation = evaluateWordMastery(recordIds, assessmentRecords, value =>
+                isCorrectAssessmentValue(value)
+            );
+            const meaningProgress = evaluation.meanings?.[sourceWordRecordId] || { stage: isCorrect ? 'consolidating' : 'recognized' };
+            const nextStatus = evaluation.mastered ? 'mastered' : masteryStageToStatus(meaningProgress.stage);
+            await dataSource.updateWordMastery(username, question.word, nextStatus, { sourceWordRecordId });
         }
     }
 
+    await Promise.all(pendingSubmissions
+        .filter(({ question }) => question.cacheRecordId && typeof dataSource.incrementCacheUsedCount === 'function')
+        .map(({ question }) => dataSource.incrementCacheUsedCount(question.cacheRecordId)));
+
     return buildSubmitResult({ testId, results, correct });
 }
-
 module.exports = {
     generateQuizWithDataSource,
     submitQuizWithDataSource,
