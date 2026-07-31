@@ -926,7 +926,12 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             const wordLevel = normalizeOptionalLearningLevel(row.level);
             return !wordLevel || wordLevel === level;
         })
-        .sort((left, right) => toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at));
+        .sort((left, right) => {
+            const priority = { pending: 0, recognized: 1, consolidating: 2, mastered: 3 };
+            const leftPriority = priority[String(left.mastery_status || '').trim().toLowerCase()] ?? 1;
+            const rightPriority = priority[String(right.mastery_status || '').trim().toLowerCase()] ?? 1;
+            return leftPriority - rightPriority || toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at);
+        });
     const { data: existingCacheRows, error: existingCacheError } = await client
         .from('question_cache')
         .select('id')
