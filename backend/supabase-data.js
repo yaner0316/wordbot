@@ -932,7 +932,9 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         .eq('user_id', user.id)
         .eq('level', level);
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
-    const hasExistingCache = (existingCacheRows || []).length > 0;
+    const existingCacheCount = (existingCacheRows || []).length;
+    const hasExistingCache = existingCacheCount > 0;
+    const seedTargetPrimaryCount = existingCacheCount > 0 && existingCacheCount < 20 ? 10 : null;
     const rows = [];
     const generateDistractors = async input => {
         try {
@@ -966,6 +968,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of candidateWords) {
+        if (seedTargetPrimaryCount && rows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
         if (!wordRows.length) continue;
         rows.push(...wordRows);
