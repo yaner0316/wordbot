@@ -1337,6 +1337,12 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
     assert.equal(client.db.question_cache.length, 0);
 });
 
+test('rebuildQuestionCacheForUser includes unassessed words with stale mastered status', async () => {
+    const client = createFakeSupabase({ users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }], words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE, context_en: 'The child ate an apple after school.', distractors: ['pear', 'desk', 'chair'], old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-30T00:00:00.000Z' }], assessments: [], question_cache: [] });
+    const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map(word => [word, '\u82f9\u679c'])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous });
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    assert.equal(result.count, 2);
+});
 test('rebuildQuestionCacheForUser creates two distinct ready type-one variants when a context generator is available', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],

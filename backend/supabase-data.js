@@ -914,7 +914,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             const wordLevel = normalizeOptionalLearningLevel(row.level);
             return !wordLevel || wordLevel === level;
         })
-        .filter(row => row.mastery_status !== 'mastered')
         .sort((left, right) => toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at));
     let deleteQuery = client
         .from('question_cache')
