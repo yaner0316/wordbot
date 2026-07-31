@@ -153,3 +153,31 @@ test('junior-high fallback fills the set with type-three questions when no candi
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.questions.every(question => question.type === 3), true);
 });
+
+test('elementary fallback uses approved template contexts when stored context is unusable', async () => {
+    const elementary = String.fromCharCode(0x5c0f, 0x5b66);
+    const words = ['corn', 'cheek', 'roll', 'puppy', 'kitten', 'chick', 'climb', 'sweater', 'clap', 'abstract', 'stomp', 'mad'].map((value, index) => word(index + 1, {
+        word: value,
+        meaning_zh: '\u4e2d\u6587\u91ca\u4e49',
+        context_en: '',
+        level: elementary,
+    }));
+    const dataSource = {
+        name: 'supabase',
+        getUserByUsername: async () => ({ username: 'Draggy', username_key: 'draggy' }),
+        getWordsForUser: async () => words,
+        getAssessmentsForUser: async () => [],
+        getQuestionCache: async () => [],
+    };
+    const quiz = await generateQuizWithDataSource({
+        username: 'Draggy',
+        level: elementary,
+        dataSource,
+        mode: 'test',
+        createId: () => 'elementary-template-fallback',
+    });
+    assert.equal(quiz.error, undefined);
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.questions.every(question => question.type === 1), true);
+    assert.equal(quiz.questions.some(question => question.context.includes('_____')), true);
+});
