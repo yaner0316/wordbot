@@ -940,7 +940,30 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
     const existingCacheCount = (existingCacheRows || []).length;
     const hasExistingCache = existingCacheCount > 0;
-    const seedTargetPrimaryCount = existingCacheCount <= 20 ? 10 : null;
+    const seedTargetPrimaryCount = existingCacheCount <= 20 ? 10 : null;    if (seedTargetPrimaryCount) {
+        const assessmentRows = await getAssessmentsForUserWithClient(client, username);
+        const sourceByWordId = new Map(candidateWords.map(word => [String(word.id || ''), String(word.feishu_record_id || word.id || '').trim()]));
+        const assessmentState = new Map();
+        for (const assessment of assessmentRows) {
+            const testId = String(assessment.test_id || '');
+            if (!testId.startsWith('real-') && testId !== 'real') continue;
+            if (!isSubmittedAssessmentRow(assessment)) continue;
+            const sourceId = String(assessment.source_word_record_id || sourceByWordId.get(String(assessment.word_id || '')) || '').trim();
+            if (!sourceId) continue;
+            const state = assessmentState.get(sourceId) || { hasBeforeToday: false, hasToday: false };
+            if (learningDay(assessment.assessed_at || assessment.created_at) === learningDay(Date.now())) state.hasToday = true;
+            else state.hasBeforeToday = true;
+            assessmentState.set(sourceId, state);
+        }
+        const rebuildPriority = word => {
+            const sourceId = String(word.feishu_record_id || word.id || '').trim();
+            const state = assessmentState.get(sourceId);
+            if (!state || (!state.hasBeforeToday && !state.hasToday)) return 0;
+            if (state.hasBeforeToday && !state.hasToday) return 1;
+            return 2;
+        };
+        candidateWords.sort((left, right) => rebuildPriority(left) - rebuildPriority(right));
+    }
     const rows = [];
     const generateDistractors = async input => {
         try {
