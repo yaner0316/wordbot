@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
+const crypto = require('crypto');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, getGameState, saveGameState, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -103,7 +104,34 @@ function startQuestionCacheRebuild(userId) {
         });
     return { started: true, userId, startedAt: job.startedAt };
 }
-const app = createApp({
+function tokensMatch(left, right) {
+    const expected = Buffer.from(String(left || ''));
+    const actual = Buffer.from(String(right || ''));
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function getAdminTokenFromRequest(req) {
+    return req.get('x-wordbot-admin-token') || '';
+}
+
+const ADMIN_TOKEN_PROTECTED_PATHS = new Set([
+    '/users',
+    '/stats',
+    '/questionCache/rebuildAll',
+    '/questionCache/rebuildAll/status',
+    '/questionCache/diagnostics',
+    '/cleanup',
+    '/backfill',
+    '/backfill/status',
+]);
+
+function requireAdminToken(req, res, next) {
+    const configuredToken = process.env.WORDBOT_ADMIN_TOKEN;
+    if (!configuredToken) return next();
+    if (!ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
+    if (tokensMatch(configuredToken, getAdminTokenFromRequest(req))) return next();
+    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+}const app = createApp({
     submitAnswers,
     getActiveQuizSession,
     updateQuizSessionProgress,
@@ -124,6 +152,7 @@ const app = createApp({
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
 app.use(express.static(publicDir));
+app.use('/api/admin', requireAdminToken);
 
 app.post('/api/quiz', async (req, res) => {
     try {
