@@ -51,39 +51,47 @@ function inspectQuestionCacheRecord(record) {
     return { valid: true, supportingSignals: CACHE_SUPPORTING_FIELDS.filter(name => Object.hasOwn(fields, name)) };
 }
 
-function mapQuestionCacheRecord(record, batch) {
+function mapQuestionCacheRecord(record, batch, lookups = {}) {
     const fields = record?.fields || {};
     const feishuRecordId = String(record?.record_id || record?.recordId || '').trim();
     const originalUser = getOriginalUser(record);
     const userKey = normalizeUserKey(originalUser);
     const word = firstField(fields, ['word', 'Word']);
-    if (!feishuRecordId || !userKey || !word) return null;
+    const sourceWordRecordId = firstField(fields, ['word_record_id', 'wordRecordId']);
+    const user = lookups.usersByUsername?.get(userKey);
+    let wordRow = sourceWordRecordId ? lookups.wordsByRecord?.get(sourceWordRecordId) : null;
+    if (wordRow && user && String(wordRow.user_id) !== String(user.id)) wordRow = null;
+    if (!wordRow && user) wordRow = lookups.wordsByUserWord?.get(String(user.id) + '\u0000' + word.toLowerCase());
+    const options = parseJsonValue(fields.options);
+    const optionMeanings = parseJsonValue(fields.option_meanings);
+    const questionText = firstField(fields, ['question_text', 'questionText']);
+    const answer = firstField(fields, ['answer', 'Answer']);
+    if (!feishuRecordId || !user || !wordRow || !word || !questionText || !answer || !Array.isArray(options) || !Array.isArray(optionMeanings)) return null;
+    const generatedAt = toTimestamp(firstField(fields, ['generated_at', 'generatedAt'])) || batch.syncedAt;
     return {
         feishu_record_id: feishuRecordId,
-        raw_fields: fields,
-        sync_batch: batch.id,
-        synced_at: batch.syncedAt,
-        user_key: userKey,
-        original_user: originalUser,
-        display_name: originalUser,
-        word,
-        word_record_id: firstField(fields, ['word_record_id', 'wordRecordId']) || null,
-        level: firstField(fields, ['level', 'learning_level', 'learningLevel']) || null,
-        round_type: firstField(fields, ['round_type', 'roundType']) || null,
-        quality_status: firstField(fields, ['quality_status', 'qualityStatus']) || null,
-        status: firstField(fields, ['status', 'Status']) || null,
-        question_text: firstField(fields, ['question_text', 'questionText']) || null,
-        options: parseJsonValue(fields.options),
-        answer: firstField(fields, ['answer', 'Answer']) || null,
-        option_meanings: parseJsonValue(fields.option_meanings),
+        user_id: user.id,
+        word_id: wordRow.id,
+        source_word_record_id: sourceWordRecordId || wordRow.feishu_record_id || null,
+        level: firstField(fields, ['level', 'learning_level', 'learningLevel']) || user.learning_level || wordRow.level || '中学',
+        question_type: String(firstField(fields, ['question_type', 'questionType']) || '1'),
+        round_type: firstField(fields, ['round_type', 'roundType']) || 'primary',
+        quality_status: firstField(fields, ['quality_status', 'qualityStatus']) || 'pending',
+        question_text: questionText,
+        context_zh: firstField(fields, ['context_cn', 'context_zh', 'contextZh']) || null,
+        options,
+        answer,
+        option_meanings: optionMeanings,
         correct_meaning: firstField(fields, ['correct_meaning', 'correctMeaning']) || null,
+        ai_audit_status: firstField(fields, ['ai_audit_status', 'aiAuditStatus']) || null,
+        source_version: firstField(fields, ['source_version', 'sourceVersion']) || 'feishu-stage1',
         used_count: Number(firstField(fields, ['used_count', 'usedCount']) || 0) || 0,
-        generated_at: toTimestamp(firstField(fields, ['generated_at', 'generatedAt'])),
+        last_used_at: toTimestamp(firstField(fields, ['last_used_at', 'lastUsedAt'])),
+        generated_at: generatedAt,
         ...(toTimestamp(record.created_time) ? { created_at: toTimestamp(record.created_time) } : {}),
         ...(toTimestamp(record.last_modified_time || record.updated_time) ? { updated_at: toTimestamp(record.last_modified_time || record.updated_time) } : {}),
     };
 }
-
 function collectUserAliases(records) {
     const aliases = new Map();
     for (const record of records || []) {

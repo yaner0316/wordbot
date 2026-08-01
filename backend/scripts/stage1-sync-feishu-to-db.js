@@ -11,7 +11,14 @@ async function loadFeishuSnapshot({ getRecordsImpl = getRecords } = {}) {
 async function runStage1Sync({ db = createSupabaseMirrorClient(), getRecordsImpl, now = () => new Date().toISOString() } = {}) {
     const syncedAt = now(); const batch = { id: 'stage1-cache-' + syncedAt.replace(/[:.]/g, '-'), syncedAt };
     const snapshot = await loadFeishuSnapshot({ getRecordsImpl });
-    const mapped = snapshot.questionCache.map(record => mapQuestionCacheRecord(record, batch));
+    const invalidShapeCount = snapshot.questionCache.filter(record => !inspectQuestionCacheRecord(record).valid).length;
+    if (snapshot.questionCache.length > 0 && invalidShapeCount / snapshot.questionCache.length > 0.2) throw new Error('NOT_QUESTION_CACHE_SOURCE');
+    const [users, words] = await Promise.all([db.select('users', 'id,feishu_record_id,username,learning_level'), db.select('words', 'id,feishu_record_id,user_id,word,level')]);
+    const usersByUsername = new Map(users.map(row => [String(row.username || '').trim().toLowerCase(), row]).filter(([key]) => key));
+    const wordsByRecord = new Map(words.filter(row => row.feishu_record_id).map(row => [String(row.feishu_record_id), row]));
+    const wordsByUserWord = new Map(words.map(row => [String(row.user_id) + String.fromCharCode(0) + String(row.word || '').trim().toLowerCase(), row]));
+    const lookups = { usersByUsername, wordsByRecord, wordsByUserWord };
+    const mapped = snapshot.questionCache.map(record => mapQuestionCacheRecord(record, batch, lookups));
     const invalidRows = snapshot.questionCache.length - mapped.filter(Boolean).length;
     const result = await syncQuestionCacheRows(db, mapped);
     return { batch, result, sourceCount: snapshot.questionCache.length, syncedCount: result.count, invalidRows };

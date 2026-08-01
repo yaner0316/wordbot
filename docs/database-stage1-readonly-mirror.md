@@ -4,7 +4,7 @@ This branch only implements a local/manual Feishu-to-Supabase mirror for the exi
 
 ## Database decision
 
-public.question_cache is an independent, regenerable cache table. It keeps feishu_record_id, raw_fields, sync_batch, and synced_at for lineage. The unique feishu_record_id constraint is the idempotency key. RLS is enabled and currently has no end-user policy, so the write key must remain local and must never be added to Render.
+public.question_cache is an independent, regenerable cache table. Stage 1 writes its existing typed columns and resolves users/words through their Feishu record IDs before upserting. The unique feishu_record_id constraint is the idempotency key. RLS is enabled and currently has no end-user policy, so the write key must remain local and must never be added to Render.
 
 The vocabulary, tests, reviews, learning settings, mastery, and reward tables remain design-only. They are reported as Feishu-only counts and are not written by this Stage 1 tool.
 
@@ -21,7 +21,7 @@ From D:\Projects\04-Wordbot-开发任务\.worktrees\app-db-migration-stage1\back
   node scripts/stage1-sync-feishu-to-db.js
   node scripts/stage1-reconcile-db.js > stage1-reconciliation.json
 
-The sync reads Feishu with getRecords and writes only public.question_cache using an upsert on feishu_record_id. It normalizes Yusi and yusi to yusi, while storing the original user in original_user and display_name. Invalid rows missing a record id, user, or word are skipped and counted.
+The sync reads Feishu and the users/words lookup tables, then writes only public.question_cache using an upsert on feishu_record_id. It normalizes usernames for lookup and requires a confirmed user_id and word_id. Rows without valid cache shape or confirmed foreign-key mappings are skipped and counted.
 
 The report includes per-user cache counts, cache counts by level and quality/status, Feishu-vs-DB cache diffs, Feishu-only word/test counts, case-variant users, duplicate word/meaning rows, and risks.
 
@@ -33,9 +33,9 @@ Do not cut over, dual-write, deploy, alter Render variables, or modify /api/quiz
 
 The readiness fix keeps the cache row shape unchanged. A future DB reader must reproduce the rule that only submitted real assessments answered incorrectly contribute to the recent exclusion set. Unsubmitted, not-started, and correct answers must not be excluded. The cache table alone cannot determine this; the DB adapter must join the mirrored assessment records.
 
-The current table does not have typed columns for question_type, last_used_at, source_version, or source. The mirror preserves these values in raw_fields and reports CACHE_SCHEMA_GAP; no ALTER TABLE is performed in Stage 1.
+The current table has typed columns for question_type, last_used_at, source_version, and the cache question fields. Stage 1 does not alter the schema. Existing rows without feishu_record_id are reported as UNTRACKED_DATABASE_CACHE and are excluded from mirror comparison.
 
-Deleting a word in Feishu can leave a database cache row behind because this stage only upserts and never deletes. The reconciliation report emits ORPHAN_CACHE. A later cleanup policy must be approved separately and must use stable word_record_id/feishu_record_id.
+Deleting a word in Feishu can leave a database cache row behind because this stage only upserts and never deletes. The reconciliation report emits ORPHAN_CACHE when a tracked database row is absent from the current Feishu snapshot. A later cleanup policy must be approved separately and must use stable word_record_id/feishu_record_id.
 
 ## Alignment with app 090e859
 

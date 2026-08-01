@@ -13,20 +13,28 @@ test('normalizes user casing while preserving original aliases', () => {
 
 test('maps a Feishu cache row to the existing question_cache schema', () => {
     const row = mapQuestionCacheRecord({ record_id: 'q1', fields: {
-        user: 'Yusi', word: 'apple', level: 'middle', round_type: 'primary',
-        quality_status: 'ready', question_type: 1, options: ['A. fruit'], used_count: 3, generated_at: 1700000000000,
-    } }, { id: 'batch-1', syncedAt: '2026-07-13T00:00:00.000Z' });
+        user: 'Yusi', word: 'apple', word_record_id: 'w1', level: '中学', round_type: 'primary',
+        quality_status: 'ready', question_type: 1, question_text: '_____ is fruit.',
+        options: ['A. fruit', 'B. stone'], answer: 'A', option_meanings: ['水果', '石头'],
+        used_count: 3, generated_at: 1700000000000,
+    } }, { id: 'batch-1', syncedAt: '2026-07-13T00:00:00.000Z' }, {
+        usersByUsername: new Map([['yusi', { id: 'user-1', username: 'Yusi', learning_level: '中学' }]]),
+        wordsByRecord: new Map([['w1', { id: 'word-1', feishu_record_id: 'w1', user_id: 'user-1', word: 'apple', level: '中学' }]]),
+        wordsByUserWord: new Map(),
+    });
     assert.equal(row.feishu_record_id, 'q1');
-    assert.equal(row.user_key, 'yusi');
-    assert.equal(row.original_user, 'Yusi');
-    assert.equal(row.display_name, 'Yusi');
-    assert.equal(row.sync_batch, 'batch-1');
+    assert.equal(row.user_id, 'user-1');
+    assert.equal(row.word_id, 'word-1');
+    assert.equal(row.source_word_record_id, 'w1');
+    assert.equal(row.level, '中学');
+    assert.equal(row.question_type, '1');
+    assert.equal(row.round_type, 'primary');
+    assert.equal(row.quality_status, 'ready');
     assert.equal(row.used_count, 3);
-    assert.deepEqual(row.raw_fields.options, ['A. fruit']);
-    assert.equal(Object.hasOwn(row, 'created_at'), false);
-    assert.equal(Object.hasOwn(row, 'updated_at'), false);
+    assert.deepEqual(row.options, ['A. fruit', 'B. stone']);
+    assert.equal(row.source_version, 'feishu-stage1');
+    assert.equal(Object.hasOwn(row, 'raw_fields'), false);
 });
-
 test('rejects a vocabulary-shaped row as a non-cache source', () => {
     const validation = inspectQuestionCacheRecord({ record_id: 'w1', fields: { user: 'Yusi', Word: 'apple', Meaning: 'fruit', Distractors: 'x,y,z' } });
     assert.deepEqual(validation, { valid: false, reason: 'NOT_QUESTION_CACHE_SOURCE' });

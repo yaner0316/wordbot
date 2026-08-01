@@ -18,7 +18,7 @@ function createSupabaseMirrorClient({
         upsert: (table, rows, conflictKey) => request('/rest/v1/' + table + '?on_conflict=' + encodeURIComponent(conflictKey), {
             method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify(rows),
         }),
-        select: (table, columns = '*') => request('/rest/v1/' + table + '?select=' + encodeURIComponent(columns), { method: 'GET' }),
+        select: (table, columns = '*', { limit = 1000, offset = 0 } = {}) => request('/rest/v1/' + table + '?select=' + encodeURIComponent(columns) + '&limit=' + encodeURIComponent(limit) + '&offset=' + encodeURIComponent(offset), { method: 'GET' }),
     };
 }
 module.exports = { createSupabaseMirrorClient };
