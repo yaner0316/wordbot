@@ -114,13 +114,24 @@ function getAdminTokenFromRequest(req) {
     return req.get('x-wordbot-admin-token') || '';
 }
 
+const ADMIN_TOKEN_PROTECTED_PATHS = new Set([
+    '/users',
+    '/stats',
+    '/questionCache/rebuildAll',
+    '/questionCache/rebuildAll/status',
+    '/questionCache/diagnostics',
+    '/cleanup',
+    '/backfill',
+    '/backfill/status',
+]);
+
 function requireAdminToken(req, res, next) {
     const configuredToken = process.env.WORDBOT_ADMIN_TOKEN;
     if (!configuredToken) return next();
+    if (!ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
     if (tokensMatch(configuredToken, getAdminTokenFromRequest(req))) return next();
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-}
-const app = createApp({
+}const app = createApp({
     submitAnswers,
     getActiveQuizSession,
     updateQuizSessionProgress,

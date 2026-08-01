@@ -256,21 +256,17 @@ test('parent addWords endpoint preserves payload contract', async () => {
     });
 });
 
-test('admin routes require the configured admin token', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
+test('global admin maintenance routes require the configured admin token', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
     let called = false;
     const app = loadServerWithFeishu(createFakeFeishu({
-        addWords: async () => {
+        getAllUsers: async () => {
             called = true;
-            return { success: true };
+            return ['student'];
         },
     }));
 
     await withServer(app, async baseUrl => {
-        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
-        });
+        const response = await fetch(baseUrl + '/api/admin/users');
         const body = await response.json();
 
         assert.equal(response.status, 401);
@@ -279,28 +275,39 @@ test('admin routes require the configured admin token', async () => withEnv({ WO
     });
 }));
 
-test('admin routes accept the configured admin token in a header', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
+test('global admin maintenance routes accept the configured admin token in a header', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({
-        addWords: async (...args) => {
-            calls.push(args);
-            return { success: true, count: args[1].length };
-        },
+        getAllUsers: async () => calls.push('users') || ['student'],
     }));
 
     await withServer(app, async baseUrl => {
-        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
+        const response = await fetch(baseUrl + '/api/admin/users', {
+            headers: { 'x-wordbot-admin-token': 'admin-secret' },
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { users: 1 });
+        assert.deepEqual(calls, ['users']);
+    });
+}));
+
+test('configured admin token does not break user-scoped parent actions', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWords: async () => ({ success: true, count: 1 }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/admin/addWords', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-wordbot-admin-token': 'admin-secret' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
         });
 
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { success: true, count: 1 });
-        assert.deepEqual(calls, [['student', ['apple'], { confirmNewMeanings: false, skipDuplicateWords: false }]]);
     });
 }));
-
 test('parent addWord endpoint forwards level and parts of speech payload', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({
