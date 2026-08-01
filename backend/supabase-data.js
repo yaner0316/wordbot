@@ -844,7 +844,7 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
     let generatedFirstContext = false;
-    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
+    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext && process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT === '1') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
         generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
