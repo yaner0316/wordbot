@@ -162,6 +162,7 @@ function createQuizBuilder({
             };
             if (info.Context_CN) question.contextCN = info.Context_CN;
         } else if (qType === 2) {
+            return null;
             const meaning = (info.meaning || '').split(';')[0] || info.meaning || '';
             question = {
                 type: 2,
@@ -173,6 +174,7 @@ function createQuizBuilder({
                 correctMeaning: info.CN_Meaning || '',
             };
         } else if (qType === 3) {
+            return null;
             question = {
                 type: 3,
                 word: key,

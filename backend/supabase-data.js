@@ -776,54 +776,8 @@ async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, t
 function rotateFallbackDistractors(pool, word) {
     const offset = stableWordOffset(word, pool.length);
     return [...pool.slice(offset), ...pool.slice(0, offset)];
-}async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords }) {
-    const wordText = String(word.word || '').trim().toLowerCase();
-    if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
-    let meaning = cleanChineseMeaningForCache(word);
-    if (!meaning && typeof translateWords === 'function') {
-        const translated = await translateWords([wordText]);
-        const candidate = String(translated?.[wordText] || '').trim();
-        if (hasMeaningfulChineseMeaning(candidate)) meaning = candidate;
-    }
-    if (!meaning) return [];
-    const distractorPool = uniqueWords([
-        ...(word.distractors || []),
-        ...(word.old_distractors || []),
-    ], wordText).filter(option => !isBadQuizWord(option));
-    const generated = distractorPool.length >= 3
-        ? []
-        : await generateDistractors({ word: wordText, meaning });
-    const distractors = uniqueWords([...distractorPool, ...(generated || [])], wordText).slice(0, 3);
-    if (distractors.length < 3) return [];
-    const optionWords = shuffled([wordText, ...distractors]);
-    const letters = ['A', 'B', 'C', 'D'];
-    const answer = letters[optionWords.indexOf(wordText)];
-    const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
-    const optionMeanings = await buildOptionMeanings({ optionWords, correctWord: wordText, correctMeaning: meaning, translateWords });
-    if (!optionMeanings) return [];
-    const base = {
-        user_id: user.id,
-        word_id: word.id,
-        source_word_record_id: word.feishu_record_id || word.id,
-        level,
-        quality_status: 'ready',
-        question_type: '3',
-        question_text: meaning,
-        context_zh: null,
-        suffix: null,
-        options,
-        answer,
-        option_meanings: optionMeanings,
-        correct_meaning: meaning,
-        ai_audit_status: 'skipped',
-        source_version: 'supabase-rebuild-v1',
-        used_count: 0,
-        generated_at: toIsoString(now),
-        last_used_at: null,
-        ...buildInitialVariantMetadata({ slot: 1, now }),
-    };
-    const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
-    return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+}async function buildType3CacheQuestionRowsForWord() {
+    return [];
 }
 async function buildType1CacheRow({ user, word, level, context, slot, now, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
@@ -889,15 +843,15 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     let firstContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
-    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
+    let generatedFirstContext = false;
+    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext && process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT === '1') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
+        generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
-    if (!hasWholeWord(firstContext, wordText)) {
-        if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word: cacheWord, level, roundType, now, generateDistractors, translateWords });
-        return [];
-    }
+    if (!hasWholeWord(firstContext, wordText)) return [];
+    const shouldGenerateSecondContext = Boolean(generateContext && generatedFirstContext);
     let secondContext = firstContext;
-    if (generateContext) {
+    if (shouldGenerateSecondContext) {
         const firstContextKey = String(firstContext || '').trim().toLowerCase();
         secondContext = '';
         for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
@@ -906,10 +860,10 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
         }
     }
-    const duplicateGeneratedContext = generateContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
+    const duplicateGeneratedContext = shouldGenerateSecondContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
     const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
-    if (!generateContext) return first ? [first] : [];
+    if (!shouldGenerateSecondContext) return first ? [first] : [];
     const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
     if (!first) return [];
     return second ? [first, second] : [first];

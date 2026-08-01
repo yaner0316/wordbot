@@ -1,5 +1,5 @@
 const { evaluateWordMastery } = require('./mastery-evidence');
-const { isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
+const { getTypePolicy, isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
 
 function fieldValue(value) {
     if (value === undefined || value === null) return '';
@@ -178,6 +178,7 @@ function selectCachedQuestionsForWordQueue({
     recentQuestionTextsByWord = new Map(),
 }) {
     const targetUser = userKey(userId);
+    const { quota, allowed } = getTypePolicy(level, limit);
     const normalizedRows = (cacheRows || [])
         .map(normalizeCacheRow)
         .filter(row => userKey(row.user) === targetUser)
@@ -197,10 +198,20 @@ function selectCachedQuestionsForWordQueue({
             byRecordId.set(row.wordRecordId, row);
         }
     }
-    const selected = (queue || [])
-        .map(recordId => byRecordId.get(recordId))
-        .filter(Boolean)
-        .slice(0, limit);
+    const selected = [];
+    const selectedIds = new Set();
+    const counts = { 1: 0, 2: 0, 3: 0 };
+    for (const recordId of queue || []) {
+        if (selected.length >= limit) break;
+        const row = byRecordId.get(recordId);
+        if (!row || !allowed.has(row.type)) continue;
+        const key = row.recordId || row.wordRecordId || `${row.word}:${row.type}`;
+        if (selectedIds.has(key)) continue;
+        if ((counts[row.type] || 0) >= (quota[row.type] || 0)) continue;
+        selected.push(row);
+        selectedIds.add(key);
+        counts[row.type] = (counts[row.type] || 0) + 1;
+    }
     return selected.map(row => ({
             ...row.question,
             cacheRecordId: row.recordId,

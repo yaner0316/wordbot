@@ -836,6 +836,7 @@ function generateQuestion(word, info, distractors, type, allWords) {
             answer: letters[idx]
         };
     }
+    if ([2, 3].includes(type)) return null;
     if (type === 2) {
         return {
             type: 2,
@@ -1229,7 +1230,7 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             const hasGoodCN = hasMeaningfulChineseMeaning(info.CN_Meaning);
             const qType = isElementaryCacheLevel(effectiveLevel)
                 ? 1
-                : (hasGoodCN ? 3 : (isContextUsableForWord(info.word, info.context) ? 1 : 2));
+                : (hasGoodCN ? 0 : (isContextUsableForWord(info.word, info.context) ? 1 : 0));
             const q = buildFreshQuestion(rec.record_id, info, qType);
             if (q) multiQuestions.push(q);
         }
@@ -1709,7 +1710,7 @@ const buildReviewQuestionCore = createReviewQuestionBuilder({
     generateDistractors: generateReviewDistractors,
     chooseType: types => secureRandom(types, 1)[0],
     isContextUsableForWord,
-    preferSourceType: ({ source }) => [1, 2, 3].includes(Number(source?.type)),
+    preferSourceType: ({ source }) => Number(source?.type) === 1,
 });
 
 const reviewService = createReviewService({
@@ -1739,7 +1740,7 @@ const reviewService = createReviewService({
     },
     buildReviewQuestion: async input => {
         const sourceType = Number(input.source?.type) || 1;
-        if ([1, 2, 3].includes(sourceType)) {
+        if (sourceType === 1) {
             try {
                 return await buildReviewQuestionCore(input);
             } catch (error) {
@@ -2038,7 +2039,7 @@ async function getQuestionCacheStatus(userId) {
 
 async function getQuestionCacheDiagnostics(userId) {
     if (!QUESTION_CACHE_TABLE) return { configured: false };
-    const QUOTA = { 1: 7, 2: 2, 3: 1 };
+    const QUOTA = { 1: 10, 2: 0, 3: 0 };
     const allRows = await getQuestionCacheRecords();
     const rows = userId
         ? allRows.filter(record => userMatches(record.fields?.user, userId))
@@ -2076,7 +2077,7 @@ async function getQuestionCacheDiagnostics(userId) {
             type3Ready: t3,
             totalReady: t1 + t2 + t3,
             selectedReady,
-            quotaCanBeMet: t1 >= QUOTA[1] && t2 >= QUOTA[2] && t3 >= QUOTA[3],
+            quotaCanBeMet: t1 >= QUOTA[1],
             willUseFallback: selectedReady < 10,
         };
     }).sort((a, b) =>
@@ -2100,21 +2101,15 @@ function isJuniorHighCacheLevel(level) {
 }
 
 function getPrimaryQuizTypeSlots(level) {
-    if (isElementaryCacheLevel(level)) return Array(10).fill(1);
-    if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];
-    return [1,1,1,1,1,1,1,2,2,3];
+    return Array(10).fill(1);
 }
 
 function getPrimaryQuizTypeTargets(level) {
-    if (isElementaryCacheLevel(level)) return { 1: 10, 2: 0, 3: 0 };
-    if (isJuniorHighCacheLevel(level)) return { 1: 9, 2: 0, 3: 1 };
-    return { 1: 7, 2: 2, 3: 1 };
+    return { 1: 10, 2: 0, 3: 0 };
 }
 
 function getPrimaryFallbackTypeSlots(level) {
-    if (isElementaryCacheLevel(level)) return [1];
-    if (isJuniorHighCacheLevel(level)) return [1, 3];
-    return [1, 2, 3];
+    return [1];
 }
 function retryElementaryFillInContext(question) {
     if (!question || Number(question.type) !== 1 || !isElementaryCacheLevel(question.level)) return false;
@@ -2246,16 +2241,14 @@ async function rebuildQuestionCacheForUser(userId) {
         }
         const availableTypes = [
             ...(isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? [1] : []),
-            ...(contextEnhancedInfo.meaning?.trim() && !isJuniorHighCacheLevel(level) ? [2] : []),
-            ...(hasMeaningfulChineseMeaning(contextEnhancedInfo.CN_Meaning) ? [3] : []),
         ];
         const mustPreferFillIn = preferred === 1 && primaryReadyCounts[1] < PRIMARY_TYPE_TARGETS[1];
         const primaryType = availableTypes.includes(preferred) ? preferred : (mustPreferFillIn ? 1 : (availableTypes[0] || 1));
         wordIndex++;
         const reviewType = primaryType === 1
-            ? (contextEnhancedInfo.meaning?.trim() ? 2 : primaryType)
+            ? primaryType
             : (isContextUsableForWord(contextEnhancedInfo.word, contextEnhancedInfo.context) ? 1 : primaryType);
-        const needsDefinitionTranslation = (primaryType === 2 || reviewType === 2) && contextEnhancedInfo.meaning?.trim();
+        const needsDefinitionTranslation = false;
         if (needsDefinitionTranslation && !contextEnhancedInfo.Meaning_CN && MINIMAX_API_KEY) {
             const definitionText = (contextEnhancedInfo.meaning || '').split(';')[0] || contextEnhancedInfo.meaning || '';
             contextEnhancedInfo.Meaning_CN = await translateContextToCN(definitionText).catch(() => '');

@@ -93,9 +93,9 @@ test('isQuestionQualityAcceptable: type 3 rejects invalid option words', () => {
     assert.equal(isQuestionQualityAcceptable(q), false);
     assert.ok(getQuestionQualityIssues(q).includes('invalid_option_word'));
 });
-test('isQuestionQualityAcceptable: type 3 with clean CN_Meaning is accepted', () => {
+test('isQuestionQualityAcceptable: type 3 is disabled even with clean CN_Meaning', () => {
     const q = { type: 3, context: '固执的', correctMeaning: '固执的', options: ['A. stubborn', 'B. happy', 'C. calm', 'D. sad'], answer: 'A', word: 'stubborn' };
-    assert.equal(isQuestionQualityAcceptable(q), true);
+    assert.equal(isQuestionQualityAcceptable(q), false);
 });
 
 
