@@ -3131,9 +3131,9 @@ async function listUserWords(userId, options = {}) {
     return { words, page: safePage, pageSize, total, totalPages };
 }
 
-async function getWordByRecordId(recordId) {
+async function getWordByRecordId(recordId, userId = '') {
     const records = await getRecords(WORD_TABLE);
-    const record = records.find(record => record.record_id === recordId);
+    const record = records.find(record => record.record_id === recordId && (!userId || userMatches(record.fields?.user, userId)));
     return record ? mapWordRecord(record) : null;
 }
 
@@ -3202,7 +3202,13 @@ async function getReviewWords(userId) {
         .map(mapWordRecord);
 }
 
-async function markWordForReview(recordId, flags, note) {
+async function findOwnedWordRecord(recordId, userId) {
+    const records = await getRecords(WORD_TABLE);
+    return records.find(record => record.record_id === recordId && (!userId || userMatches(record.fields?.user, userId)));
+}
+
+async function markWordForReview(recordId, flags, note, userId = '') {
+    if (!(await findOwnedWordRecord(recordId, userId))) throw new Error('WORD_NOT_FOUND');
     await updateRecord(WORD_TABLE, recordId, {
         Quality_Flags: flags || 'manual_review',
         Quality_Note: note || ''
@@ -3210,7 +3216,8 @@ async function markWordForReview(recordId, flags, note) {
     return { success: true };
 }
 
-async function clearWordReview(recordId) {
+async function clearWordReview(recordId, userId = '') {
+    if (!(await findOwnedWordRecord(recordId, userId))) throw new Error('WORD_NOT_FOUND');
     await updateRecord(WORD_TABLE, recordId, {
         Quality_Flags: '',
         Quality_Note: ''
@@ -3368,7 +3375,7 @@ async function deleteWord(userId, word, options = {}) {
     const recordId = getFieldValue(options.recordId || '').trim();
     const normalizedWord = String(word || '').trim().toLowerCase();
     const record = recordId
-        ? records.find(record => record.record_id === recordId)
+        ? records.find(record => record.record_id === recordId && (!userId || userMatches(record.fields?.user, userId)))
         : records.find(r => userMatches(r.fields.user, userId) && getFieldValue(r.fields.Word).trim().toLowerCase() === normalizedWord);
     if (!record) return { error: 'Word not found' };
     const resolvedUserId = userId || getFieldValue(record.fields.user);
