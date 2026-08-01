@@ -750,3 +750,19 @@ test('word deletion cache cleanup uses stable word record id as well as word tex
         'deleteWord should accept recordId to delete the selected duplicate row'
     );
 });
+
+test('backend scripts do not hardcode Feishu app credentials', () => {
+    const backendDir = path.join(__dirname, '..');
+    const files = fs.readdirSync(backendDir)
+        .filter(file => file.endsWith('.js'))
+        .map(file => path.join(backendDir, file));
+    const offenders = [];
+    for (const file of files) {
+        const source = fs.readFileSync(file, 'utf8');
+        if (/APP_ID\s*=\s*(?:process\.env\.FEISHU_APP_ID\s*\|\|\s*)?['"]cli_[A-Za-z0-9]+['"]/.test(source) ||
+            /APP_SECRET\s*=\s*(?:process\.env\.FEISHU_APP_SECRET\s*\|\|\s*)?['"][A-Za-z0-9]{32}['"]/.test(source)) {
+            offenders.push(path.basename(file));
+        }
+    }
+    assert.deepEqual(offenders, [], 'Feishu credentials must come from environment variables without checked-in fallback secrets');
+});

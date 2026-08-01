@@ -5,6 +5,7 @@ const path = require('node:path');
 const BACKEND_DIR = path.join(__dirname, '..');
 const SERVER_PATH = path.join(BACKEND_DIR, 'server.js');
 const FEISHU_PATH = path.join(BACKEND_DIR, 'feishu.js');
+const DATA_SOURCE_PATH = path.join(BACKEND_DIR, 'data-source.js');
 
 async function withServer(app, run) {
     const server = app.listen(0, '127.0.0.1');
@@ -45,6 +46,34 @@ function loadServerWithFeishu(fakeFeishu) {
         exports: fakeFeishu,
     };
     return require(SERVER_PATH).app;
+}
+
+function loadServerWithDataSource(fakeDataSource) {
+    clearBackendModules();
+    require.cache[DATA_SOURCE_PATH] = {
+        id: DATA_SOURCE_PATH,
+        filename: DATA_SOURCE_PATH,
+        loaded: true,
+        exports: fakeDataSource,
+    };
+    return require(SERVER_PATH).app;
+}
+
+function withEnv(overrides, run) {
+    const previous = {};
+    for (const [key, value] of Object.entries(overrides)) {
+        previous[key] = process.env[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
+    return Promise.resolve()
+        .then(run)
+        .finally(() => {
+            for (const [key, value] of Object.entries(previous)) {
+                if (value === undefined) delete process.env[key];
+                else process.env[key] = value;
+            }
+        });
 }
 
 const protectedRoutes = [
@@ -226,6 +255,51 @@ test('parent addWords endpoint preserves payload contract', async () => {
         assert.deepEqual(calls, [['student', ['apple', 'banana'], { confirmNewMeanings: false, skipDuplicateWords: false }]]);
     });
 });
+
+test('admin routes require the configured admin token', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
+    let called = false;
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWords: async () => {
+            called = true;
+            return { success: true };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 401);
+        assert.equal(body.code, 'UNAUTHORIZED');
+        assert.equal(called, false);
+    });
+}));
+
+test('admin routes accept the configured admin token in a header', async () => withEnv({ WORDBOT_ADMIN_TOKEN: 'admin-secret' }, async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWords: async (...args) => {
+            calls.push(args);
+            return { success: true, count: args[1].length };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-wordbot-admin-token': 'admin-secret' },
+            body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { success: true, count: 1 });
+        assert.deepEqual(calls, [['student', ['apple'], { confirmNewMeanings: false, skipDuplicateWords: false }]]);
+    });
+}));
 
 test('parent addWord endpoint forwards level and parts of speech payload', async () => {
     const calls = [];
@@ -769,5 +843,40 @@ test('review submit endpoint starts the next round prebuild in the background', 
             sourceTestId: 'real-q1',
             parentReviewId: 'real-review-r1',
         }]);
+    });
+});
+
+test('game state endpoint reports unavailable storage instead of throwing when adapter lacks support', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu());
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/game/state/student`);
+        const body = await response.json();
+
+        assert.equal(response.status, 503);
+        assert.match(body.error, /unavailable/i);
+    });
+});
+
+test('game state endpoint delegates to adapters that provide storage', async () => {
+    const calls = [];
+    const app = loadServerWithDataSource({
+        ...createFakeFeishu(),
+        TEST_TABLE: {},
+        WORD_TABLE: {},
+        OPTION_IDS: { IS_CORRECT: 'correct' },
+        getGameState: async user => {
+            calls.push(user);
+            return { minutes: 12, claimIds: ['daily'], garden: { hearts: 2 } };
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/game/state/student`);
+        const body = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, ['student']);
+        assert.equal(body.state.minutes, 12);
     });
 });

@@ -1,7 +1,13 @@
 const https = require('https');
+function requireEnv(name) {
+    const value = process.env[name];
+    if (!value) throw new Error(name + ' is required');
+    return value;
+}
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
-const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+
+const APP_ID = requireEnv('FEISHU_APP_ID');
+const APP_SECRET = requireEnv('FEISHU_APP_SECRET');
 const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
 
 function request(method, path, body, token) {

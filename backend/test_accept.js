@@ -1,9 +1,15 @@
 require('dotenv').config();
 
 const https = require('https');
+function requireEnv(name) {
+    const value = process.env[name];
+    if (!value) throw new Error(name + ' is required');
+    return value;
+}
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
-const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+
+const APP_ID = requireEnv('FEISHU_APP_ID');
+const APP_SECRET = requireEnv('FEISHU_APP_SECRET');
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
