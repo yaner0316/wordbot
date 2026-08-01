@@ -843,12 +843,15 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     let firstContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
+    let generatedFirstContext = false;
     if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
+        generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
     if (!hasWholeWord(firstContext, wordText)) return [];
+    const shouldGenerateSecondContext = Boolean(generateContext && generatedFirstContext);
     let secondContext = firstContext;
-    if (generateContext) {
+    if (shouldGenerateSecondContext) {
         const firstContextKey = String(firstContext || '').trim().toLowerCase();
         secondContext = '';
         for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
@@ -857,10 +860,10 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
         }
     }
-    const duplicateGeneratedContext = generateContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
+    const duplicateGeneratedContext = shouldGenerateSecondContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
     const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
-    if (!generateContext) return first ? [first] : [];
+    if (!shouldGenerateSecondContext) return first ? [first] : [];
     const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
     if (!first) return [];
     return second ? [first, second] : [first];
