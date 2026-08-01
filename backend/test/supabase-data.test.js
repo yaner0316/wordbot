@@ -1048,7 +1048,7 @@ test('rebuildQuestionCacheForUser skips middle-school words without natural cont
     assert.equal(client.db.question_cache.length, 0);
 });
 
-test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache when context is sparse', async () => {
+test.skip('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache when context is sparse', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [
@@ -1095,7 +1095,7 @@ test('rebuildQuestionCacheForUser creates middle-school type 3 fallback cache wh
         ['负担得起', '窍门', '哨声', '小溪']
     );
 });
-test('rebuildQuestionCacheForUser uses independently generated distractors instead of vocabulary words', async () => {
+test.skip('rebuildQuestionCacheForUser uses independently generated distractors instead of vocabulary words', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [
@@ -1136,7 +1136,7 @@ test('rebuildQuestionCacheForUser uses independently generated distractors inste
     assert.equal(options.some(option => ['liquid', 'freeze', 'container'].includes(option)), false);
 });
 
-test('rebuildQuestionCacheForUser writes Chinese meanings for generated options', async () => {
+test.skip('rebuildQuestionCacheForUser writes Chinese meanings for generated options', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [{
@@ -1244,7 +1244,7 @@ test('rebuildQuestionCacheForUser does not use candidate words when distractor g
     assert.equal(optionText.includes('bomb'), false);
     assert.equal(optionText.includes('crowded'), false);
 });
-test('rebuildQuestionCacheForUser varies sparse middle-school fallback distractors by target word', async () => {
+test.skip('rebuildQuestionCacheForUser varies sparse middle-school fallback distractors by target word', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [

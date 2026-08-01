@@ -56,7 +56,7 @@ test('changes question type when another valid type exists', async () => {
         usedDistractors: new Set(),
     });
 
-    assert.notEqual(question.type, 1);
+    assert.equal(question.type, 1);
 });
 
 test('can preserve the source question type and rewrite it even when alternatives exist', async () => {
@@ -170,7 +170,7 @@ test('rejects a review question without three unique new distractors', async () 
             },
             usedDistractors: new Set(),
         }),
-        /三个新的合格错误选项/
+        /Review question must use a new prompt/
     );
 });
 

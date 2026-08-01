@@ -266,6 +266,30 @@ test('cached question selection fills from later ready rows in word queue order'
     );
 });
 
+test('cached question selection rejects all junior-high type 2 rows', () => {
+    const juniorHigh = String.fromCharCode(0x4e2d, 0x5b66);
+    const queue = Array.from({ length: 10 }, (_, index) => `rec-${index + 1}`);
+    const cacheRows = queue.map((recordId, index) => cache(index + 1, {
+        fields: {
+            word_record_id: recordId,
+            level: juniorHigh,
+            question_type: index < 9 ? 1 : 2,
+        },
+    }));
+
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows,
+        queue,
+        userId: 'student',
+        level: juniorHigh,
+        roundType: 'primary',
+        limit: 10,
+    });
+
+    assert.equal(selected.some(question => question.type === 2), false);
+    assert.equal(selected.length, 9);
+});
+
 test('cached question selection does not backfill from ready cache rows outside the queue', () => {
     const queue = Array.from({ length: 12 }, (_, index) => `rec-${index + 1}`);
     const cacheRows = [1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16].map(index => cache(index));

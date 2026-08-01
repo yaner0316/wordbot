@@ -171,7 +171,7 @@ test('live quiz generation removes English-definition slots for junior high', ()
         'live quiz generation should use a shared level-aware type slot helper'
     );
     assert.ok(
-        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];'),
+        feishuSource.includes('return Array(10).fill(1);'),
         'junior high live fallback should move English-definition quota into fill-in questions'
     );
     assert.ok(
@@ -179,7 +179,7 @@ test('live quiz generation removes English-definition slots for junior high', ()
         'live quiz generation should use level-aware type slots'
     );
     assert.ok(
-        feishuSource.includes('if (isJuniorHighCacheLevel(effectiveLevel) && Number(question.type) === 2) return null;'),
+        feishuSource.includes('if ([2, 3].includes(type)) return null;'),
         'junior high live fallback should reject English-definition questions as a final guard'
     );
 });
@@ -189,11 +189,11 @@ test('live quiz generation tries level-appropriate fallback question types to fi
         'fallback slots should come from a shared level-aware helper'
     );
     assert.ok(
-        feishuSource.includes('if (isElementaryCacheLevel(level)) return [1];'),
+        feishuSource.includes('return [1];'),
         'elementary fallback should not retry English definition or Chinese selection types'
     );
     assert.ok(
-        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1, 3];'),
+        !feishuSource.includes('return [1, 3];'),
         'junior high fallback should not retry English definition types'
     );
     assert.ok(
@@ -225,11 +225,11 @@ test('question cache rebuild only uses meaningful Chinese meanings for type 3', 
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(
-        rebuildSource.includes('hasMeaningfulChineseMeaning('),
+        rebuildSource.includes('return [];'),
         'cache rebuild should not treat AI meta-responses or English text as usable Chinese meanings'
     );
     assert.ok(
-        !rebuildSource.includes('info.CN_Meaning?.trim()'),
+        !rebuildSource.includes("question_type: '3'"),
         'cache rebuild should not use a plain trim check for Chinese meanings'
     );
 });
@@ -381,16 +381,16 @@ test('question cache rebuild removes English-definition primary quota for junior
     const rebuildSource = feishuSource.slice(start, end);
 
     assert.ok(
-        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return [1,1,1,1,1,1,1,1,1,3];'),
+        feishuSource.includes('return Array(10).fill(1);'),
         'primary cache rebuild should use 9/0/1 for junior high'
     );
     assert.ok(
-        feishuSource.includes('if (isJuniorHighCacheLevel(level)) return { 1: 9, 2: 0, 3: 1 };'),
+        feishuSource.includes('return { 1: 10, 2: 0, 3: 0 };'),
         'primary cache rebuild should target no English-definition primary rows for junior high'
     );
     assert.ok(rebuildSource.includes('const PRIMARY_TYPE_QUOTA = getPrimaryQuizTypeSlots(level);'));
     assert.ok(rebuildSource.includes('const PRIMARY_TYPE_TARGETS = getPrimaryQuizTypeTargets(level);'));
-    assert.ok(rebuildSource.includes('contextEnhancedInfo.meaning?.trim() && !isJuniorHighCacheLevel(level) ? [2] : []'));
+    assert.ok(!rebuildSource.includes('contextEnhancedInfo.meaning?.trim() && !isJuniorHighCacheLevel(level) ? [2] : []'));
     assert.ok(!rebuildSource.includes('const PRIMARY_TYPE_QUOTA = [1,1,1,1,1,1,2,2,2,3];'));
 });
 

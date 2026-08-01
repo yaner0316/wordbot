@@ -7,8 +7,7 @@ function optionWord(option) {
 function validQuestionTypes(info, isContextUsableForWord) {
     const types = [];
     if (isContextUsableForWord ? isContextUsableForWord(info.word, info.context) : Boolean(info.context)) types.push(1);
-    if (info.meaning) types.push(2);
-    if (hasMeaningfulChineseMeaning(info.CN_Meaning)) types.push(3);
+
     return types;
 }
 

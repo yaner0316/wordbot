@@ -217,45 +217,16 @@ test('rejects fill-in questions with numeric quantity and singular target mismat
     assert.equal(question, null);
 });
 
-test('definition questions carry translated stem explanations when available', () => {
+test('disabled definition questions return null', () => {
     const buildQuizQuestion = createBuilder();
-
-    const question = buildQuizQuestion(
-        'rec-def-cn',
-        {
-            word: 'noun',
-            meaning: 'A word that can refer to a person, animal, place, thing, or idea.',
-            Meaning_CN: '可以指人、动物、地方、事物或想法的词。',
-            distractors: ['verb', 'adjective', 'adverb'],
-            CN_Meaning: '名词',
-        },
-        2,
-        'test-def-cn',
-        ['A', 'B', 'C', 'D']
-    );
-
-    assert.equal(question.contextCN, '可以指人、动物、地方、事物或想法的词。');
+    assert.equal(buildQuizQuestion('disabled', { word: 'target', context: 'Target appears here.', meaning: 'a definition', CN_Meaning: '目标', distractors: ['one', 'two', 'three'] }, 2, 'disabled', ['A', 'B', 'C', 'D']), null);
 });
-test('builds a definition question from the first semicolon-separated meaning', () => {
+
+test('disabled definition questions ignore definition content', () => {
     const buildQuizQuestion = createBuilder();
-
-    const question = buildQuizQuestion(
-        'rec-2',
-        {
-            word: 'resilient',
-            meaning: 'able to recover quickly; elastic',
-            distractors: ['fragile', 'silent', 'ordinary'],
-            CN_Meaning: '有韧性的',
-        },
-        2,
-        'test-2',
-        ['A', 'B', 'C', 'D']
-    );
-
-    assert.equal(question.context, 'able to recover quickly');
-    assert.equal(question.answer, 'A');
-    assert.equal(question.correctMeaning, '有韧性的');
+    assert.equal(buildQuizQuestion('disabled', { word: 'target', context: 'Target appears here.', meaning: 'a definition', CN_Meaning: '目标', distractors: ['one', 'two', 'three'] }, 2, 'disabled', ['A', 'B', 'C', 'D']), null);
 });
+
 
 test('rejects definition questions that contain AI meta-response text', () => {
     const buildQuizQuestion = createBuilder();
@@ -293,32 +264,11 @@ test('rejects a question when fewer than three usable distractors remain', () =>
     assert.equal(question, null);
 });
 
-test('uses forced distractors after excluding previously used options', () => {
+test('disabled definition questions ignore forced distractors', () => {
     const buildQuizQuestion = createBuilder();
-
-    const question = buildQuizQuestion(
-        'rec-4',
-        {
-            word: 'target',
-            meaning: 'the intended object',
-            distractors: ['old-a', 'old-b', 'old-c', 'fresh-a', 'fresh-b', 'fresh-c'],
-        },
-        2,
-        'review-1',
-        ['A', 'B', 'C', 'D'],
-        {
-            excludedDistractors: ['old-a', 'old-b', 'old-c'],
-            forcedDistractors: ['fresh-a', 'fresh-b', 'fresh-c'],
-        }
-    );
-
-    assert.deepEqual(question.options, [
-        'A. target',
-        'B. fresh-a',
-        'C. fresh-b',
-        'D. fresh-c',
-    ]);
+    assert.equal(buildQuizQuestion('disabled', { word: 'target', context: 'Target appears here.', meaning: 'a definition', CN_Meaning: '目标', distractors: ['one', 'two', 'three'] }, 2, 'disabled', ['A', 'B', 'C', 'D']), null);
 });
+
 
 test('rejects invalid forced distractors instead of reusing old ones', () => {
     const buildQuizQuestion = createBuilder();
@@ -343,60 +293,16 @@ test('rejects invalid forced distractors instead of reusing old ones', () => {
 });
 
 
-test('does not mix fallback distractors when local distractors are sufficient', () => {
-    const buildQuizQuestion = createQuizBuilder({
-        choose: (items, count) => items.slice(-count),
-        escapeRegExp: text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-        getWordForms: word => [word],
-        isContextUsableForWord: (word, context) =>
-            new RegExp(`\\b${word}\\b`, 'i').test(context || ''),
-        normalizeArticleContext,
-        getFallbackDistractors: () => ['test_word', 'aware', 'milk'],
-    });
-
-    const question = buildQuizQuestion(
-        'rec-section',
-        {
-            word: 'section',
-            meaning: 'one of the parts of something',
-            distractors: ['introduction', 'conclusion', 'appendix'],
-            CN_Meaning: 'part',
-        },
-        2,
-        'test-section',
-        ['A', 'B', 'C', 'D']
-    );
-
-    assert.deepEqual(
-        question.options.map(option => option.replace(/^[A-D]\.\s*/, '')),
-        ['section', 'introduction', 'conclusion', 'appendix']
-    );
+test('disabled definition questions are not built from fallback distractors', () => {
+    const buildQuizQuestion = createBuilder();
+    assert.equal(buildQuizQuestion('disabled', { word: 'target', context: 'Target appears here.', meaning: 'a definition', CN_Meaning: '目标', distractors: ['one', 'two', 'three'] }, 2, 'disabled', ['A', 'B', 'C', 'D']), null);
 });
-test('uses fallback distractors when local distractors were already used in this quiz', () => {
-    const buildQuizQuestion = createBuilderWithPool();
 
-    const question = buildQuizQuestion(
-        'rec-6',
-        {
-            word: 'target',
-            meaning: 'the intended object',
-            distractors: ['old-a', 'old-b', 'old-c'],
-        },
-        2,
-        'test-6',
-        ['A', 'B', 'C', 'D'],
-        {
-            excludedDistractors: ['old-a', 'old-b', 'old-c'],
-        }
-    );
-
-    assert.deepEqual(question.options, [
-        'A. target',
-        'B. fresh-a',
-        'C. fresh-b',
-        'D. fresh-c',
-    ]);
+test('disabled definition questions are not built from used distractors', () => {
+    const buildQuizQuestion = createBuilder();
+    assert.equal(buildQuizQuestion('disabled', { word: 'target', context: 'Target appears here.', meaning: 'a definition', CN_Meaning: '目标', distractors: ['one', 'two', 'three'] }, 2, 'disabled', ['A', 'B', 'C', 'D']), null);
 });
+
 
 
 test('fill-in questions skip phrase distractors when enough clean single-word options remain', () => {

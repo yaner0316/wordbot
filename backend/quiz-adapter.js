@@ -226,11 +226,7 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
         const context = fieldText(record?.fields?.Context).toLowerCase();
         return Boolean(word && context.includes(word));
     });
-    const typeQuota = normalizedLevel === elementary
-        ? { 1: limit, 3: 0 }
-        : normalizedLevel === juniorHigh
-            ? { 1: Math.min(9, limit), 3: limit }
-            : { 1: Math.min(7, limit), 3: Math.min(1, limit) };
+    const typeQuota = { 1: limit, 3: 0 };
     const counts = { 1: (existingQuestions || []).filter(question => Number(question.type) === 1).length, 3: (existingQuestions || []).filter(question => Number(question.type) === 3).length };
     const usedDistractors = new Set();
     const questions = [];
