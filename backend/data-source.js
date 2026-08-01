@@ -161,6 +161,29 @@ function loadSupabaseDataSource() {
         return new Map(users.map(user => [user.id, user]));
     }
 
+    let feishuCacheDataSource;
+    function getFeishuCacheDataSource() {
+        if (!feishuCacheDataSource) feishuCacheDataSource = loadFeishuDataSource();
+        return feishuCacheDataSource;
+    }
+
+    async function getQuestionCache(username, level, roundType) {
+        const source = CACHE_SOURCE;
+        const dbRead = () => supabaseData.getQuestionCache(username, level, roundType);
+        if (source === 'db') return dbRead();
+
+        const feishuRead = () => getFeishuCacheDataSource().getQuestionCache(username, level, roundType);
+        if (source === 'feishu') return feishuRead();
+
+        const feishuRows = await feishuRead();
+        try {
+            const dbRows = await dbRead();
+            console.warn('[question_cache compare] ' + JSON.stringify(summarizeCacheComparison(dbRows, feishuRows)));
+        } catch (error) {
+            console.warn('[question_cache compare] ' + JSON.stringify({ dbError: error.message, feishuCount: feishuRows.length }));
+        }
+        return feishuRows;
+    }
     async function getRecords(table) {
         if (isTable(table, 'words')) {
             const [rows, usersById] = await Promise.all([
@@ -350,6 +373,7 @@ function loadSupabaseDataSource() {
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
+        getQuestionCache,
         DATA_SOURCE: 'supabase',
         name: 'supabase',
         WORD_TABLE,
@@ -384,6 +408,29 @@ async function getActiveQuizSessionBestEffort(supabaseData, user) {
         throw error;
     }
 }
+
+function normalizeCacheSource(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['db', 'feishu', 'compare'].includes(normalized) ? normalized : 'db';
+}
+
+const CACHE_SOURCE = normalizeCacheSource(process.env.WORDBOT_CACHE_SOURCE);
+
+function cacheRowKey(row) {
+    return String(row?.record_id || row?.feishu_record_id || row?.id || '').trim();
+}
+
+function summarizeCacheComparison(dbRows, feishuRows) {
+    const dbKeys = new Set((dbRows || []).map(cacheRowKey).filter(Boolean));
+    const feishuKeys = new Set((feishuRows || []).map(cacheRowKey).filter(Boolean));
+    return {
+        dbCount: Array.isArray(dbRows) ? dbRows.length : 0,
+        feishuCount: Array.isArray(feishuRows) ? feishuRows.length : 0,
+        dbOnlyCount: [...dbKeys].filter(key => !feishuKeys.has(key)).length,
+        feishuOnlyCount: [...feishuKeys].filter(key => !dbKeys.has(key)).length,
+    };
+}
+
 
 async function deleteQuizSessionBestEffort(supabaseData, user, testId) {
     if (typeof supabaseData.deleteQuizSession !== 'function' || !testId) return null;

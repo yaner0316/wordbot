@@ -14,9 +14,15 @@ function clearBackendModules() {
     }
 }
 
-function loadDataSource({ envValue, supabaseExports = {}, feishuExports = {} } = {}) {
+function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExports = {} } = {}) {
     clearBackendModules();
     const previous = process.env.DATA_SOURCE;
+    const previousCacheSource = process.env.WORDBOT_CACHE_SOURCE;
+    if (cacheSource === undefined) {
+        delete process.env.WORDBOT_CACHE_SOURCE;
+    } else {
+        process.env.WORDBOT_CACHE_SOURCE = cacheSource;
+    }
     if (envValue === undefined) {
         delete process.env.DATA_SOURCE;
     } else {
@@ -46,6 +52,7 @@ function loadDataSource({ envValue, supabaseExports = {}, feishuExports = {} } =
         exports: {
             name: 'feishu',
             getRecords: async () => [],
+            getQuestionCache: async username => [{ source: 'feishu', username }],
             generateQuiz: async (...args) => ({ source: 'feishu-generate', args }),
             submitAnswers: async (...args) => ({ source: 'feishu-submit', args }),
             addWord: async (...args) => ({ source: 'feishu-add', args }),
@@ -67,6 +74,8 @@ function loadDataSource({ envValue, supabaseExports = {}, feishuExports = {} } =
     try {
         return require(DATA_SOURCE_PATH);
     } finally {
+        if (previousCacheSource === undefined) delete process.env.WORDBOT_CACHE_SOURCE;
+        else process.env.WORDBOT_CACHE_SOURCE = previousCacheSource;
         if (previous === undefined) delete process.env.DATA_SOURCE;
         else process.env.DATA_SOURCE = previous;
     }
@@ -113,6 +122,37 @@ test('defaults DATA_SOURCE to supabase and exposes the unified interface', async
     assert.equal((await dataSource.addWord({ username: 'qiuqiu', word: 'apple', meaning: 'fruit' })).source, 'supabase');
 });
 
+test('WORDBOT_CACHE_SOURCE=feishu reads the Feishu cache while keeping Supabase data source', async () => {
+    const dataSource = loadDataSource({ cacheSource: 'feishu', feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] } });
+    assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+});
+
+test('WORDBOT_CACHE_SOURCE=compare returns Feishu cache rows and records a bounded comparison', async () => {
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = message => warnings.push(String(message));
+    try {
+        const dataSource = loadDataSource({
+            cacheSource: 'compare',
+            supabaseExports: { getQuestionCache: async () => [{ id: 'db-1' }] },
+            feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
+        });
+        assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+        assert.match(warnings.join(' '), /question_cache compare/);
+        assert.doesNotMatch(warnings.join(' '), /feishu-1|db-1/);
+    } finally {
+        console.warn = originalWarn;
+    }
+});
+
+test('WORDBOT_CACHE_SOURCE=compare keeps Feishu cache when the DB comparison fails', async () => {
+    const dataSource = loadDataSource({
+        cacheSource: 'compare',
+        supabaseExports: { getQuestionCache: async () => { throw new Error('db unavailable'); } },
+        feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
+    });
+    assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+});
 test('supabase data source reads stats from Supabase instead of Feishu fallback', async () => {
     const dataSource = loadDataSource({
         supabaseExports: {
