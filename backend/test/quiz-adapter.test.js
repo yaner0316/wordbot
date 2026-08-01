@@ -30,7 +30,7 @@ function cacheRow(index) {
     return {
         id: `cache-${index}`,
         word_id: `word-${index}`,
-        source_word_record_id: `rec-${index}`,
+        word_record_id: `rec-${index}`,
         word: WORDS[index - 1],
         username: 'qiuqiu',
         level: MIDDLE,

@@ -105,6 +105,7 @@ function toFeishuCacheRow(row, { username }) {
     const generatedAt = toMillis(row.generated_at || row.created_at);
     const wordRecordId = String(
         row.source_word_record_id ||
+        row.word_record_id ||
         row.word_feishu_record_id ||
         row.word_id ||
         ''
