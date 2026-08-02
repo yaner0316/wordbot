@@ -1,7 +1,11 @@
 const https = require('https');
 const crypto = require('crypto');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
@@ -90,8 +94,8 @@ async function main() {
         if (r.fields.Word) existingDistractors.add(r.fields.Word.toLowerCase());
     }
     
-    console.log(`单词表: ${wordRecords.length} 条记录`);
-    console.log(`已有干扰词: ${existingDistractors.size} 个\n`);
+    console.log(`单词�? ${wordRecords.length} 条记录`);
+    console.log(`已有干扰�? ${existingDistractors.size} 个\n`);
     
     let updated = 0;
     let skipped = 0;
@@ -131,7 +135,7 @@ async function main() {
             const existing = distRecord.fields.Distractors ? distRecord.fields.Distractors.split(',').map(d => d.trim()).filter(d => d) : [];
             const combined = [...new Set([...existing, ...distractors])].slice(0, 5);
             await updateRecord(DIST_TABLE, distRecord.record_id, { Distractors: combined.join(',') });
-            console.log(`  更新干扰词: ${combined.join(', ')}`);
+            console.log(`  更新干扰�? ${combined.join(', ')}`);
         } else {
             await request('POST', `/open-apis/bitable/v1/apps/${DIST_TABLE.appToken}/tables/${DIST_TABLE.tableId}/records`, {
                 fields: {
@@ -141,14 +145,14 @@ async function main() {
                     POS: record.fields.POS || ''
                 }
             }, await getToken());
-            console.log(`  新增干扰词: ${distractors.join(', ')}`);
+            console.log(`  新增干扰�? ${distractors.join(', ')}`);
         }
         
         updated++;
         await new Promise(r => setTimeout(r, 200));
     }
     
-    console.log(`\n完成！更新 ${updated} 条，跳过 ${skipped} 条`);
+    console.log(`\n完成！更�?${updated} 条，跳过 ${skipped} 条`);
 }
 
 main().catch(console.error);

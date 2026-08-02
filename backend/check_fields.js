@@ -2,7 +2,11 @@ require('dotenv').config();
 
 const https = require('https');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('´íÎó£ºÈ±ÉÙ FEISHU_APP_ID »·¾³±äÁ¿');
+    process.exit(1);
+}
 const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -35,12 +39,12 @@ async function getRecords() {
 }
 
 async function main() {
-    console.log('è¯»å–å‰5æ¡è®°å½•...\n');
+    console.log('è¯»å–å‰?æ¡è®°å½?..\n');
     const records = await getRecords();
     
     for (const r of records) {
         console.log(`\nå•è¯: ${r.fields.Word}`);
-        console.log('æ‰€æœ‰å­—æ®µ:', Object.keys(r.fields));
+        console.log('æ‰€æœ‰å­—æ®?', Object.keys(r.fields));
         console.log('CN_Meaning:', r.fields.CN_Meaning);
         console.log('cnMeaning:', r.fields.cnMeaning);
         console.log('meaning:', r.fields.Meaning?.substring(0, 30));

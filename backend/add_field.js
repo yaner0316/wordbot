@@ -1,6 +1,10 @@
 const https = require('https');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('¥ÌŒÛ£∫»±…Ÿ FEISHU_APP_ID ª∑æ≥±‰¡ø');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
@@ -36,7 +40,7 @@ async function addField(table, fieldName) {
         type: 1
     }, token);
     if (res.code === 0) {
-        console.log(`‚úì ${fieldName} Ê∑ªÂä†ÊàêÂäü`);
+        console.log(`‚ú?${fieldName} Ê∑ªÂä†ÊàêÂäü`);
     } else if (res.error?.code === '99991642') {
         console.log(`- ${fieldName} Â∑≤Â≠òÂú®`);
     } else {

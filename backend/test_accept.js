@@ -2,7 +2,11 @@ require('dotenv').config();
 
 const https = require('https');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
@@ -81,7 +85,7 @@ function callMiniMaxAPI(prompt) {
     });
 }
 
-// 测试主流程
+// 测试主流�?
 async function testWord(word) {
     console.log(`\n========== 测试单词: ${word} ==========\n`);
 
@@ -93,11 +97,11 @@ async function testWord(word) {
         return;
     }
     console.log(`   找到记录: ${record.record_id}`);
-    console.log(`   当前状态: ${record.fields.Status || '无'}`);
+    console.log(`   当前状�? ${record.fields.Status || '�?}`);
 
     // 2. 翻译
     console.log('\n2. 翻译...');
-    const translatePrompt = `翻译成中文（只返回翻译结果）：${record.fields.Meaning || word}`;
+    const translatePrompt = `翻译成中文（只返回翻译结果）�?{record.fields.Meaning || word}`;
     try {
         const cnMeaning = await callMiniMaxAPI(translatePrompt);
         console.log(`   英文释义: ${record.fields.Meaning}`);
@@ -109,7 +113,7 @@ async function testWord(word) {
 
     // 3. 生成例句
     console.log('\n3. 生成例句...');
-    const examplePrompt = `为单词 "${word}" 生成一个英文例句，返回JSON：{"example": "例句"}`;
+    const examplePrompt = `为单�?"${word}" 生成一个英文例句，返回JSON：{"example": "例句"}`;
     try {
         const exampleResult = await callMiniMaxAPI(examplePrompt);
         const match = exampleResult.match(/"example"\s*:\s*"([^"]+)"/);
@@ -119,9 +123,9 @@ async function testWord(word) {
         console.log(`   例句生成失败: ${e.message}`);
     }
 
-    // 4. 生成干扰词
-    console.log('\n4. 生成干扰词...');
-    const distPrompt = `为单词 "${word}" 生成3个含义相近的英文干扰词，返回JSON：{"distractors": ["word1", "word2", "word3"]}`;
+    // 4. 生成干扰�?
+    console.log('\n4. 生成干扰�?..');
+    const distPrompt = `为单�?"${word}" 生成3个含义相近的英文干扰词，返回JSON：{"distractors": ["word1", "word2", "word3"]}`;
     try {
         const distResult = await callMiniMaxAPI(distPrompt);
         const match = distResult.match(/"distractors"\s*:\s*\[(.*?)\]/s);
@@ -129,20 +133,20 @@ async function testWord(word) {
             const words = match[1].match(/"([^"]+)"/g);
             if (words) {
                 const distractors = words.map(w => w.replace(/"/g, ''));
-                console.log(`   干扰词: ${distractors.join(', ')}`);
+                console.log(`   干扰�? ${distractors.join(', ')}`);
             }
         }
     } catch (e) {
-        console.log(`   干扰词生成失败: ${e.message}`);
+        console.log(`   干扰词生成失�? ${e.message}`);
     }
 
     // 5. 更新状态为 Mastered
     console.log('\n5. 更新状态为 Mastered...');
     const success = await updateRecord(record.record_id, { Status: 'Mastered' });
     if (success) {
-        console.log('   ✓ 状态已更新为 Mastered');
+        console.log('   �?状态已更新�?Mastered');
     } else {
-        console.log('   ✗ 状态更新失败');
+        console.log('   �?状态更新失�?);
     }
 
     console.log('\n========== 测试完成 ==========');

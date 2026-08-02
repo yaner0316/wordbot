@@ -1,7 +1,11 @@
 const https = require('https');
 const { execSync } = require('child_process');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -52,7 +56,7 @@ async function updateRecord(recordId, fields) {
 }
 
 function generateDistractors(word, meaning) {
-    const prompt = `为单词 ${word} 生成3个含义相近的英文干扰词（必须是英文单词，不是中文），返回JSON：{"distractors": ["word1", "word2", "word3"]}`;
+    const prompt = `为单�?${word} 生成3个含义相近的英文干扰词（必须是英文单词，不是中文），返回JSON：{"distractors": ["word1", "word2", "word3"]}`;
 
     try {
         const escapedPrompt = prompt.replace(/"/g, '\\"');
@@ -77,9 +81,9 @@ function generateDistractors(word, meaning) {
 }
 
 async function main() {
-    console.log('读取飞书单词表...\n');
+    console.log('读取飞书单词�?..\n');
     const records = await getAllRecords();
-    console.log(`共 ${records.length} 条记录\n`);
+    console.log(`�?${records.length} 条记录\n`);
     
     let success = 0;
     let skipped = 0;
@@ -102,19 +106,19 @@ async function main() {
         
         if (distractors && distractors.length >= 3) {
             const distStr = distractors.slice(0, 3).join(', ');
-            console.log(`  生成干扰词: ${distStr}`);
+            console.log(`  生成干扰�? ${distStr}`);
             
             const ok = await updateRecord(record.record_id, { Distractors: distStr });
             if (ok) {
                 success++;
-                console.log(`  ✓ 更新成功`);
+                console.log(`  �?更新成功`);
             } else {
                 failed++;
-                console.log(`  ✗ 更新失败`);
+                console.log(`  �?更新失败`);
             }
         } else {
             failed++;
-            console.log(`  ✗ 生成失败`);
+            console.log(`  �?生成失败`);
         }
         
         await new Promise(r => setTimeout(r, 1500));

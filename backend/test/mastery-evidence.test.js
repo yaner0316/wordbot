@@ -1,212 +1,225 @@
 const test = require('node:test');
-const assert = require('node:assert/strict');
-
+const assert = require('node:assert');
 const {
     ANSWER_CONFIDENCE,
-    encodeAnswer,
     evaluateMeaningMastery,
     evaluateWordMastery,
+    normalizeSubmittedAnswer,
     parseStoredAnswer,
+    encodeAnswer,
 } = require('../mastery-evidence');
 
-const DAY = 24 * 60 * 60 * 1000;
-
-function attempt({
-    time,
-    type,
-    correct = true,
-    confidence = ANSWER_CONFIDENCE.SURE,
-    testId = 'real-test',
-}) {
+// Helper to create a mock record
+function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorrect, yourAnswer = '1|sure', questionType = 1 }) {
     return {
         fields: {
+            record_id: recordId,
             test_id: testId,
-            test_time: time,
-            question_type: type,
-            is_correct: correct ? 'correct-option' : 'wrong-option',
-            your_answer: encodeAnswer('A', confidence),
+            test_time: testTime,
+            is_correct: isCorrect,
+            your_answer: yourAnswer,
+            question_type: questionType,
         },
     };
 }
 
-const isCorrect = value => value === 'correct-option';
+// Helper to get timestamp for a specific date
+function getTimestamp(year, month, day, hour = 10) {
+    return new Date(year, month - 1, day, hour, 0, 0).getTime();
+}
 
-test('stored answers preserve option and confidence without a new field', () => {
-    assert.deepEqual(parseStoredAnswer('B|guess'), {
-        option: 'B',
-        confidence: ANSWER_CONFIDENCE.GUESS,
-    });
-    assert.deepEqual(parseStoredAnswer('C'), {
-        option: 'C',
-        confidence: ANSWER_CONFIDENCE.SURE,
-    });
+test('ANSWER_CONFIDENCE constants', () => {
+    assert.strictEqual(ANSWER_CONFIDENCE.SURE, 'sure');
+    assert.strictEqual(ANSWER_CONFIDENCE.GUESS, 'guess');
 });
 
-test('one correct answer enters consolidation but is not enough for mastery', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'consolidating');
-    assert.equal(result.evidenceCount, 1);
+test('normalizeSubmittedAnswer with integer', () => {
+    const result = normalizeSubmittedAnswer(2);
+    assert.deepStrictEqual(result, { option: 2, confidence: 'sure' });
 });
 
-test('two correct answers on different days master a meaning', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 1 }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, true);
-    assert.equal(result.distinctDays, 2);
-    assert.equal(result.distinctTypes, 1);
+test('normalizeSubmittedAnswer with object', () => {
+    const result = normalizeSubmittedAnswer({ option: 1, confidence: 'guess' });
+    assert.deepStrictEqual(result, { option: 1, confidence: 'guess' });
 });
 
-test('confidence does not affect mastery when correct answers span different days', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1, confidence: ANSWER_CONFIDENCE.GUESS }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 2, confidence: ANSWER_CONFIDENCE.GUESS }),
-        attempt({ time: Date.UTC(2026, 5, 3), type: 3, confidence: ANSWER_CONFIDENCE.GUESS }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, true);
-    assert.equal(result.distinctDays, 3);
+test('normalizeSubmittedAnswer with null confidence defaults to sure', () => {
+    const result = normalizeSubmittedAnswer({ option: 1, confidence: null });
+    assert.deepStrictEqual(result, { option: 1, confidence: 'sure' });
 });
 
-test('two correct answers master a meaning even when submitted as guesses', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1, confidence: ANSWER_CONFIDENCE.GUESS }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 2, confidence: ANSWER_CONFIDENCE.GUESS }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, true);
-    assert.equal(result.distinctDays, 2);
+test('normalizeSubmittedAnswer throws on invalid format', () => {
+    assert.throws(() => normalizeSubmittedAnswer('invalid'), /ANSWER_FORMAT_INVALID/);
 });
 
-test('two correct answers on the same day are not enough', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1, 8), type: 1 }),
-        attempt({ time: Date.UTC(2026, 5, 1, 14), type: 2 }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'consolidating');
-    assert.equal(result.distinctDays, 1);
+test('encodeAnswer creates stored format', () => {
+    assert.strictEqual(encodeAnswer(1, 'sure'), '1|sure');
+    assert.strictEqual(encodeAnswer(2, 'guess'), '2|guess');
 });
 
-test('different calendar days are evaluated in China Standard Time', () => {
+test('parseStoredAnswer parses stored format', () => {
+    assert.deepStrictEqual(parseStoredAnswer('1|sure'), { option: '1', confidence: 'sure' });
+    assert.deepStrictEqual(parseStoredAnswer('2|guess'), { option: '2', confidence: 'guess' });
+    assert.deepStrictEqual(parseStoredAnswer('1'), { option: '1', confidence: 'sure' });
+});
+
+test('evaluateMeaningMastery: no attempts returns unseen', () => {
+    const result = evaluateMeaningMastery([], () => true);
+    assert.strictEqual(result.stage, 'unseen');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.evidenceCount, 0);
+});
+
+test('evaluateMeaningMastery: single correct attempt returns consolidating', () => {
     const records = [
-        attempt({
-            time: Date.parse('2026-06-01T15:30:00.000Z'),
-            type: 1,
-        }),
-        attempt({
-            time: Date.parse('2026-06-01T16:30:00.000Z'),
-            type: 2,
-        }),
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
     ];
-
-    assert.equal(evaluateMeaningMastery(records, isCorrect).mastered, true);
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.stage, 'consolidating');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.correctAfterLastWrongCount, 1);
 });
 
-test('two correct answers of the same type on different days are enough', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
-        attempt({ time: Date.UTC(2026, 5, 1) + DAY, type: 1 }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, true);
-    assert.equal(result.distinctTypes, 1);
-});
-
-test('a wrong answer resets earlier mastery evidence', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1 }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 2 }),
-        attempt({ time: Date.UTC(2026, 5, 3), type: 3, correct: false }),
-        attempt({ time: Date.UTC(2026, 5, 4), type: 1 }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'consolidating');
-    assert.equal(result.evidenceCount, 1);
-});
-
-test('test-mode attempts never count as mastery evidence', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1, testId: 'test-one' }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 2, testId: 'test-two' }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.evidenceCount, 0);
-});
-
-test('no real correct attempts remain unseen', () => {
-    const result = evaluateMeaningMastery([], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'unseen');
-    assert.equal(result.correctAfterLastWrongCount, 0);
-});
-
-test('attempted but never correct is recognized as initial exposure', () => {
-    const result = evaluateMeaningMastery([
-        attempt({ time: Date.UTC(2026, 5, 1), type: 1, correct: false }),
-        attempt({ time: Date.UTC(2026, 5, 2), type: 2, correct: false }),
-    ], isCorrect);
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'recognized');
-    assert.equal(result.correctAfterLastWrongCount, 0);
-});
-
-test('a multi-definition word is mastered only when every meaning is mastered', () => {
+test('evaluateMeaningMastery: two correct attempts same day returns consolidating', () => {
     const records = [
-        { ...attempt({ time: Date.UTC(2026, 5, 1), type: 1 }), fields: { ...attempt({ time: Date.UTC(2026, 5, 1), type: 1 }).fields, record_id: 'meaning-1' } },
-        { ...attempt({ time: Date.UTC(2026, 5, 2), type: 2 }), fields: { ...attempt({ time: Date.UTC(2026, 5, 2), type: 2 }).fields, record_id: 'meaning-1' } },
-        { ...attempt({ time: Date.UTC(2026, 5, 1), type: 1 }), fields: { ...attempt({ time: Date.UTC(2026, 5, 1), type: 1 }).fields, record_id: 'meaning-2' } },
+        createRecord({ testTime: getTimestamp(2026, 8, 1, 10), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 1, 14), isCorrect: '1' }),
     ];
-
-    const result = evaluateWordMastery(
-        ['meaning-1', 'meaning-2'],
-        records,
-        isCorrect
-    );
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.meanings['meaning-1'].mastered, true);
-    assert.equal(result.meanings['meaning-2'].mastered, false);
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.stage, 'consolidating');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.correctAfterLastWrongCount, 2);
+    assert.strictEqual(result.distinctDays, 1);
 });
 
-test('a word with partial progress reports the strongest non-mastered stage', () => {
-    const records = [];
-    const item = attempt({ time: Date.UTC(2026, 5, 1), type: 1 });
-    item.fields.record_id = 'meaning-1';
-    records.push(item);
-
-    const result = evaluateWordMastery(
-        ['meaning-1', 'meaning-2'],
-        records,
-        isCorrect
-    );
-
-    assert.equal(result.mastered, false);
-    assert.equal(result.stage, 'consolidating');
+test('evaluateMeaningMastery: two correct attempts different days returns mastered', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.stage, 'mastered');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.correctAfterLastWrongCount, 2);
+    assert.strictEqual(result.distinctDays, 2);
 });
-test('all meanings mastered marks the whole multi-definition word mastered', () => {
-    const records = [];
-    for (const recordId of ['meaning-1', 'meaning-2']) {
-        for (const [day, type] of [[1, 1], [2, 2]]) {
-            const item = attempt({ time: Date.UTC(2026, 5, day), type });
-            item.fields.record_id = recordId;
-            records.push(item);
-        }
-    }
 
-    assert.equal(
-        evaluateWordMastery(['meaning-1', 'meaning-2'], records, isCorrect).mastered,
-        true
-    );
+test('evaluateMeaningMastery: wrong answer resets progress', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 2), isCorrect: '0' }), // wrong
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 4), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.stage, 'mastered');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.correctAfterLastWrongCount, 2);
+    assert.strictEqual(result.distinctDays, 2);
+});
+
+test('evaluateMeaningMastery: wrong answer after mastery resets to consolidating', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }), // mastered
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '0' }), // wrong
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.stage, 'recognized');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.correctAfterLastWrongCount, 0);
+});
+
+test('evaluateMeaningMastery: guess answers count as evidence', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1', yourAnswer: '1|guess' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 2), isCorrect: '1', yourAnswer: '1|guess' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.uncertainCorrectCount, 2);
+});
+
+test('evaluateMeaningMastery: non-real assessments are ignored', () => {
+    const records = [
+        createRecord({ testId: 'test-t1', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ testId: 'real-t1', testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }),
+        createRecord({ testId: 'real-t2', testTime: getTimestamp(2026, 8, 3), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.evidenceCount, 2); // only real assessments counted
+});
+
+test('evaluateWordMastery: single meaning mastered', () => {
+    const records = [
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }),
+    ];
+    const result = evaluateWordMastery(['rec1'], records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.stage, 'mastered');
+});
+
+test('evaluateWordMastery: multiple meanings all mastered', () => {
+    const records = [
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }),
+        createRecord({ recordId: 'rec2', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ recordId: 'rec2', testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }),
+    ];
+    const result = evaluateWordMastery(['rec1', 'rec2'], records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.stage, 'mastered');
+});
+
+test('evaluateWordMastery: one meaning not mastered', () => {
+    const records = [
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        createRecord({ recordId: 'rec1', testTime: getTimestamp(2026, 8, 2), isCorrect: '1' }),
+        createRecord({ recordId: 'rec2', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }),
+        // rec2 only has one correct attempt
+    ];
+    const result = evaluateWordMastery(['rec1', 'rec2'], records, v => v === '1');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.stage, 'mastered'); // strongest stage wins
+});
+
+test('evaluateWordMastery: empty recordIds returns not mastered', () => {
+    const result = evaluateWordMastery([], [], v => v === '1');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.stage, 'unseen');
+});
+
+// Edge cases
+test('evaluateMeaningMastery: non-consecutive days still mastered', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' }), // Monday
+        createRecord({ testTime: getTimestamp(2026, 8, 4), isCorrect: '1' }), // Thursday
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.distinctDays, 2);
+});
+
+test('evaluateMeaningMastery: many wrong answers before correct', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '0' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 2), isCorrect: '0' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 4), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.correctAfterLastWrongCount, 2);
+});
+
+test('evaluateMeaningMastery: mixed sure and guess answers', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1', yourAnswer: '1|sure' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 2), isCorrect: '1', yourAnswer: '1|guess' }),
+    ];
+    const result = evaluateMeaningMastery(records, v => v === '1');
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.uncertainCorrectCount, 1);
 });

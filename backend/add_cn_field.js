@@ -2,7 +2,11 @@ require('dotenv').config();
 
 const https = require('https');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('´íÎó£ºÈ±ÉÙ FEISHU_APP_ID »·¾³±äÁ¿');
+    process.exit(1);
+}
 const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -44,14 +48,14 @@ async function listFields() {
 }
 
 async function main() {
-    console.log('æ£€æŸ¥çŽ°æœ‰å­—æ®µ...\n');
+    console.log('æ£€æŸ¥çŽ°æœ‰å­—æ®?..\n');
     const fields = await listFields();
     console.log('çŽ°æœ‰å­—æ®µ:');
     fields.forEach(f => console.log(`  - ${f.field_name} (${f.type})`));
     
     const hasCN = fields.some(f => f.field_name === 'CN_Meaning');
     if (hasCN) {
-        console.log('\nCN_Meaning å­—æ®µå·²å­˜åœ¨');
+        console.log('\nCN_Meaning å­—æ®µå·²å­˜åœ?);
     } else {
         console.log('\næ·»åŠ  CN_Meaning å­—æ®µ...');
         const result = await addField('CN_Meaning');

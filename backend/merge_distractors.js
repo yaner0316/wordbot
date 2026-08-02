@@ -1,6 +1,10 @@
 const https = require('https');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
@@ -49,19 +53,19 @@ async function addField(table, fieldName) {
         type: 1
     }, token);
     if (res.code === 0 || res.error?.code === '99991642') {
-        console.log(`✓ 字段 ${fieldName} 已存在或添加成功`);
+        console.log(`�?字段 ${fieldName} 已存在或添加成功`);
     } else {
         console.log(`字段 ${fieldName}:`, JSON.stringify(res).substring(0, 100));
     }
 }
 
 async function main() {
-    console.log('合并干扰词到单词表...\n');
+    console.log('合并干扰词到单词�?..\n');
     
     await addField(WORD_TABLE, 'Distractors');
     
     const records = await getRecords(WORD_TABLE);
-    console.log(`单词表: ${records.length} 条记录\n`);
+    console.log(`单词�? ${records.length} 条记录\n`);
     
     let updated = 0;
     let skipped = 0;
@@ -86,13 +90,13 @@ async function main() {
         const newDistractors = shuffled.slice(0, 3).join(',');
         
         await updateRecord(WORD_TABLE, record.record_id, { Distractors: newDistractors });
-        console.log(`  干扰词: ${newDistractors}`);
+        console.log(`  干扰�? ${newDistractors}`);
         
         updated++;
         await new Promise(r => setTimeout(r, 100));
     }
     
-    console.log(`\n完成！更新 ${updated} 条，跳过 ${skipped} 条`);
+    console.log(`\n完成！更�?${updated} 条，跳过 ${skipped} 条`);
 }
 
 main().catch(console.error);
