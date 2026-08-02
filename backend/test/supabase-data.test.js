@@ -1339,11 +1339,25 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
     assert.equal(client.db.question_cache.length, 0);
 });
 
-test('rebuildQuestionCacheForUser includes unassessed words with stale mastered status', async () => {
+test('rebuildQuestionCacheForUser excludes unassessed words with stale mastered status', async () => {
     const client = createFakeSupabase({ users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }], words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE, context_en: 'The child ate an apple after school.', distractors: ['pear', 'desk', 'chair'], old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-30T00:00:00.000Z' }], assessments: [], question_cache: [] });
     const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map(word => [word, '\u82f9\u679c'])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous });
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-    assert.equal(result.count, 1);
+    assert.equal(result.count, 0);
+});
+test('rebuildQuestionCacheForUser removes existing cache rows for mastered words', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', level: MIDDLE, mastery_status: 'mastered' }],
+        assessments: [],
+        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1', level: MIDDLE, question_type: '1', quality_status: 'ready', cache_state: 'active' }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.length, 0);
 });
 test('rebuildQuestionCacheForUser creates two distinct ready type-one variants when a context generator is available', async () => {
     const client = createFakeSupabase({
@@ -1436,4 +1450,75 @@ test('rebuildQuestionCacheForUser seeds ten unique primary words when variants p
     assert.equal(new Set(primary.map(row => row.source_word_record_id)).size, 10);
     assert.equal(primary.every(row => row.question_type === '1'), true);
     assert.equal(primary.every(row => row.correct_meaning === '\u4e2d\u6587\u91ca\u4e49'), true);
+});
+
+test('rebuildQuestionCacheForUser can backfill middle-school contexts when enabled', async () => {
+    const previous = process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT;
+    process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT = '1';
+    try {
+        const client = createFakeSupabase({
+            users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+            words: ['brake', 'frown'].map((word, index) => ({
+                id: `word-${index + 1}`,
+                feishu_record_id: `rec-word-${index + 1}`,
+                user_id: 'user-1',
+                word,
+                meaning_en: `Meaning ${index + 1}`,
+                meaning_zh: '\u4e2d\u6587\u91ca\u4e49',
+                level: MIDDLE,
+                context_en: null,
+                distractors: ['repair', 'straight', 'attic'],
+                old_distractors: [],
+                mastery_status: 'pending',
+                entered_at: `2026-07-19T00:00:0${index}.000Z`,
+            })),
+            assessments: [],
+            question_cache: [],
+        });
+        const adapter = createSupabaseDataAdapter(client, {
+            generateContext: async (word, meaning, level, previous) => previous ? `The student checked the ${word} before leaving.` : `The teacher asks the student to use ${word} in a sentence.`,
+            translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        });
+
+        const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+        const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+        assert.equal(result.count, 4);
+        assert.equal(primary.length, 4);
+        assert.deepEqual([...new Set(primary.map(row => row.word_id))].sort(), ['word-1', 'word-2']);
+        assert.equal(primary.every(row => row.question_type === '1'), true);
+    } finally {
+        if (previous === undefined) delete process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT;
+        else process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT = previous;
+    }
+});
+
+test('rebuildQuestionCacheForUser never seeds mastered words when pending words are available', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [
+            {
+                id: 'mastered-word', feishu_record_id: 'rec-mastered-word', user_id: 'user-1', word: 'groan',
+                meaning_en: 'make a sound', meaning_zh: '\u4e2d\u6587\u91ca\u4e49', level: MIDDLE,
+                context_en: 'The child began to groan.', distractors: ['repair', 'straight', 'attic'],
+                old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-19T00:00:00.000Z',
+            },
+            {
+                id: 'pending-word', feishu_record_id: 'rec-pending-word', user_id: 'user-1', word: 'brake',
+                meaning_en: 'a device for stopping', meaning_zh: '\u4e2d\u6587\u91ca\u4e49', level: MIDDLE,
+                context_en: 'The driver pressed the brake.', distractors: ['repair', 'straight', 'attic'],
+                old_distractors: [], mastery_status: 'pending', entered_at: '2026-07-20T00:00:00.000Z',
+            },
+        ],
+        assessments: [], question_cache: [{ id: 'existing-cache' }],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+    assert.equal(result.count, 1);
+    assert.deepEqual(primary.map(row => row.word_id), ['pending-word']);
 });

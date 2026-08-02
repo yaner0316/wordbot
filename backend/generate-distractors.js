@@ -32,10 +32,17 @@ Return JSON only, no explanation: {"distractors": ["word1", "word2", "word3"]}`;
     const raw = await callLLM(prompt).catch(() => '');
     if (!raw) return null;
 
-    const match = raw.match(/"distractors"\s*:\s*\[(.*?)\]/s);
-    if (!match) return null;
+    const normalizedRaw = String(raw).replace(/```(?:json)?/gi, '').trim();
+    let parsedDistractors = null;
+    try {
+        const parsed = JSON.parse(normalizedRaw);
+        if (Array.isArray(parsed?.distractors)) parsedDistractors = parsed.distractors.map(String);
+    } catch {}
 
-    const tokens = match[1].match(/"([^"]+)"/g);
+    const match = normalizedRaw.match(/"distractors"\s*:\s*\[(.*?)\]/s);
+    const tokens = parsedDistractors
+        ? parsedDistractors.slice(0, 3).map(token => `"${token}"`)
+        : match?.[1]?.match(/"([^"]+)"/g);
     if (!tokens || tokens.length < 3) return null;
 
     const targetLower = word.toLowerCase();

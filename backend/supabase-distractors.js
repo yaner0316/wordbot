@@ -1,46 +1,24 @@
 const https = require('https');
 const { selectContextualDistractors } = require('./generate-distractors');
 
-function callMiniMax(prompt, timeout = 15000) {
-    return new Promise((resolve, reject) => {
-        const apiKey = process.env.MINIMAX_API_KEY;
-        if (!apiKey) {
-            reject(new Error('MINIMAX_API_KEY not set'));
-            return;
-        }
-        const body = JSON.stringify({
-            model: 'MiniMax-M2.7',
-            messages: [{ role: 'user', content: prompt }],
-        });
-        const request = https.request({
-            hostname: 'api.minimax.chat',
-            path: '/v1/text/chatcompletion_v2',
+async function callMiniMax(prompt, timeout = 15000) {
+    const apiKey = process.env.MINIMAX_API_KEY;
+    if (!apiKey || typeof fetch !== 'function') throw new Error('MiniMax client unavailable');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: 'Bearer ' + apiKey,
-                'Content-Length': Buffer.byteLength(body),
-            },
-        }, response => {
-            const chunks = [];
-            response.on('data', chunk => chunks.push(chunk));
-            response.on('end', () => {
-                try {
-                    const result = JSON.parse(Buffer.concat(chunks).toString());
-                    resolve(result.choices?.[0]?.message?.content || '');
-                } catch (error) {
-                    reject(error);
-                }
-            });
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+            body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: prompt }] }),
+            signal: controller.signal,
         });
-        request.on('error', reject);
-        const timer = setTimeout(() => {
-            request.destroy(new Error('MiniMax request timeout'));
-        }, timeout);
-        request.on('close', () => clearTimeout(timer));
-        request.write(body);
-        request.end();
-    });
+        if (!response.ok) throw new Error('MiniMax HTTP ' + response.status);
+        const result = await response.json();
+        return result.choices?.[0]?.message?.content || '';
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function generateSupabaseDistractors({ word, meaning }) {
