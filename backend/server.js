@@ -2,6 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
+const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
@@ -105,13 +106,7 @@ function startQuestionCacheRebuild(userId) {
         });
     return { started: true, userId, startedAt: job.startedAt };
 }
-const sessionStore = createSessionStore();
-
-function setSessionCookie(res, result, role) {
-    if (!result?.user) return;
-    const token = sessionStore.issue(result.user, role);
-    res.set('Set-Cookie', sessionStore.cookie(token));
-}
+// sessionStore 和 setSessionCookie 已从 auth-middleware 导入，无需重复声明
 
 function requestedUser(req) {
     return normalizeUser(req.body?.userId || req.body?.targetUser || req.query?.userId || req.query?.user || '');
@@ -123,23 +118,9 @@ function tokensMatch(left, right) {
     const b = Buffer.from(String(right || ''));
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
-function requireAdminToken(req, res, next) {
-    if (!ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
-    const configured = process.env.WORDBOT_ADMIN_TOKEN;
-    if (!configured && process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Admin token is not configured', code: 'ADMIN_TOKEN_NOT_CONFIGURED' });
-    if (!configured || tokensMatch(configured, req.get('x-wordbot-admin-token'))) return next();
-    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-}
-function requireUserSession(req, res, next) {
-    if (process.env.NODE_ENV !== 'production') return next();
-    if (ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
-    const session = sessionStore.read(req);
-    if (!session) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-    const target = requestedUser(req);
-    if (target && target !== session.user) return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
-    req.wordbotSession = session;
-    next();
-}
+
+// 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
+// 保留此处的 tokensMatch 函数用于兼容性
 const app = createApp({
     submitAnswers,
     getActiveQuizSession,
@@ -160,9 +141,15 @@ const app = createApp({
     onParentLogin: ({ res, result }) => setSessionCookie(res, result, 'parent'),
 });
 
+// 应用统一的安全中间件
 app.use('/api/admin', requireAdminToken);
 app.use('/api/admin', requireUserSession);
 app.use('/api/word', requireUserSession);
+app.use('/api/quiz', requireUserSession);
+app.use('/api/submit', requireUserSession);
+app.use('/api/stats', requireUserSession);
+app.use('/api/history', requireUserSession);
+app.use('/api/reviews', requireUserSession);
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
