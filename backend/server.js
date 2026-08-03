@@ -142,10 +142,17 @@ const app = createApp({
 });
 
 // 应用统一的安全中间件
-// 注意：/api/admin/userSettings 只需要 session，不需要 admin token（家长访问自己孩子的设置）
+// 前端直接调用的端点只需要 session 验证（用户操作自己的数据）
+const SESSION_ONLY_ADMIN_PATHS = new Set([
+    '/userSettings',           // 学习设置（家长访问自己孩子）
+    '/questionCache/rebuild',  // 重建缓存（前端自动触发）
+    '/questionCache/status',   // 缓存状态查询
+    '/validateWords',          // 验证单词
+    '/addWords',               // 添加单词
+    '/words',                  // 词库列表
+]);
 app.use('/api/admin', (req, res, next) => {
-    // userSettings 端点只需要 session 验证
-    if (req.path === '/userSettings') {
+    if (SESSION_ONLY_ADMIN_PATHS.has(req.path)) {
         return requireUserSession(req, res, next);
     }
     // 其他 admin 端点需要 admin token
