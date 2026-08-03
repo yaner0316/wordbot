@@ -142,8 +142,15 @@ const app = createApp({
 });
 
 // 应用统一的安全中间件
-app.use('/api/admin', requireAdminToken);
-app.use('/api/admin', requireUserSession);
+// 注意：/api/admin/userSettings 只需要 session，不需要 admin token（家长访问自己孩子的设置）
+app.use('/api/admin', (req, res, next) => {
+    // userSettings 端点只需要 session 验证
+    if (req.path === '/userSettings') {
+        return requireUserSession(req, res, next);
+    }
+    // 其他 admin 端点需要 admin token
+    return requireAdminToken(req, res, next);
+});
 app.use('/api/word', requireUserSession);
 app.use('/api/quiz', requireUserSession);
 app.use('/api/submit', requireUserSession);
