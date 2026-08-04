@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "prestart": "node backend/scripts/apply-question-generation-migrations.js",
     "build": "cd backend && npm install",
     "start": "node backend/server.js"
   },
