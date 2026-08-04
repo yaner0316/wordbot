@@ -315,7 +315,7 @@ test('reports not-ready when structurally valid ready cached questions are below
     assert.equal(analysis.exhausted, false);
     assert.deepEqual(analysis.questions, []);
 });
-test('junior-high cached quiz moves English-definition quota into fill-in questions', () => {
+test('junior-high cached quiz excludes disabled English-definition and Chinese-selection rows', () => {
     const rows = [];
     const middleLevel = String.fromCharCode(0x4e2d, 0x5b66);
     const cnApple = String.fromCharCode(0x82f9, 0x679c);
@@ -341,12 +341,12 @@ test('junior-high cached quiz moves English-definition quota into fill-in questi
         return acc;
     }, {});
 
-    assert.equal(selected.length, 10);
-    assert.equal(counts[1], 9);
+    assert.equal(selected.length, 0);
+    assert.equal(counts[1] || 0, 0);
     assert.equal(counts[2] || 0, 0);
-    assert.equal(counts[3], 1);
+    assert.equal(counts[3] || 0, 0);
 });
-test('relaxes cached quiz type caps within the current traversal frontier', () => {
+test('drops all disabled question types from cache selection', () => {
     const rows = [];
     const highSchoolLevel = String.fromCharCode(0x9ad8, 0x4e2d);
     const cnApple = String.fromCharCode(0x82f9, 0x679c);
@@ -372,9 +372,10 @@ test('relaxes cached quiz type caps within the current traversal frontier', () =
         return acc;
     }, {});
 
-    assert.equal(selected.length, 10);
-    assert.equal(counts[1], 3);
-    assert.equal(counts[2] + counts[3], 7);
+    assert.equal(selected.length, 0);
+    assert.equal(counts[1] || 0, 0);
+    assert.equal(counts[2] || 0, 0);
+    assert.equal(counts[3] || 0, 0);
 });
 test('elementary cached quiz selects only fill-in questions', () => {
     const rows = [];

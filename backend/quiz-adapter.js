@@ -9,6 +9,7 @@ const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./a
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
 const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
+const { generateElementaryTemplateContext } = require('./elementary-context');
 const {
     evaluateWordMastery,
     normalizeSubmittedAnswer,
@@ -104,6 +105,7 @@ function toFeishuCacheRow(row, { username }) {
     const generatedAt = toMillis(row.generated_at || row.created_at);
     const wordRecordId = String(
         row.source_word_record_id ||
+        row.word_record_id ||
         row.word_feishu_record_id ||
         row.word_id ||
         ''
@@ -224,11 +226,7 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
         const context = fieldText(record?.fields?.Context).toLowerCase();
         return Boolean(word && context.includes(word));
     });
-    const typeQuota = normalizedLevel === elementary
-        ? { 1: limit, 3: 0 }
-        : normalizedLevel === juniorHigh
-            ? { 1: Math.min(9, limit), 3: limit }
-            : { 1: Math.min(7, limit), 3: Math.min(1, limit) };
+    const typeQuota = { 1: limit, 3: 0 };
     const counts = { 1: (existingQuestions || []).filter(question => Number(question.type) === 1).length, 3: (existingQuestions || []).filter(question => Number(question.type) === 3).length };
     const usedDistractors = new Set();
     const questions = [];
@@ -250,11 +248,16 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
         const answer = ANSWER_LETTERS[optionWords.indexOf(word)];
         const contextPattern = new RegExp('\\b' + word + '\\b', 'ig');
         const sourceContext = fieldText(record.fields?.Context);
-        const canUseContext = (sourceContext.match(contextPattern) || []).length === 1;
+        let fallbackContext = sourceContext;
+        let canUseContext = (fallbackContext.match(contextPattern) || []).length === 1;
+        if (!canUseContext && normalizedLevel === elementary) {
+            fallbackContext = generateElementaryTemplateContext(word, meaning);
+            canUseContext = (fallbackContext.match(contextPattern) || []).length === 1;
+        }
         const useContext = canUseContext && counts[1] < typeQuota[1];
         const type = useContext ? 1 : (counts[3] < typeQuota[3] ? 3 : 0);
         if (!type) { if (diagnostics) diagnostics.typeQuotaExhausted = (diagnostics.typeQuotaExhausted || 0) + 1; continue; }
-        const question = { type, word, context: useContext ? sourceContext.replace(contextPattern, '_____') : meaning, options: optionWords.map((option, index) => ANSWER_LETTERS[index] + '. ' + option), answer, correctAnswer: answer, correctMeaning: meaning, record_id: recordId, testId };
+        const question = { type, word, context: useContext ? fallbackContext.replace(contextPattern, '_____') : meaning, options: optionWords.map((option, index) => ANSWER_LETTERS[index] + '. ' + option), answer, correctAnswer: answer, correctMeaning: meaning, record_id: recordId, testId };
         if (!isQuestionQualityAcceptable(question)) { if (diagnostics) diagnostics.qualityRejected = (diagnostics.qualityRejected || 0) + 1; continue; }
         counts[type] += 1;
         questions.push(question);

@@ -129,6 +129,7 @@ function getCacheQuestionReadinessIssues(row) {
     const issues = [];
     if (['retired', 'replace_pending'].includes(normalized.cacheState)) issues.push('inactive_cache_state');
     if (normalized.qualityStatus !== QUESTION_CACHE_STATUS.READY) issues.push('not_ready_status');
+    if ([2, 3].includes(Number(question.type))) issues.push('disabled_question_type');
     if (!question.record_id) issues.push('missing_record_id');
     if (!question.word) issues.push('missing_word');
     if (!String(question.context || '').trim()) issues.push('missing_context');
@@ -154,12 +155,7 @@ function isCacheQuestionReady(row) {
     return getCacheQuestionReadinessIssues(row).length === 0;
 }
 function getTypePolicy(level, limit) {
-    const elementaryLevel = String.fromCharCode(0x5c0f, 0x5b66);
-    const juniorHighLevel = String.fromCharCode(0x4e2d, 0x5b66);
-    const normalizedLevel = String(level || '').trim();
-    if (normalizedLevel === elementaryLevel) return { quota: { 1: limit, 2: 0, 3: 0 }, allowed: new Set([1]) };
-    if (normalizedLevel === juniorHighLevel) return { quota: { 1: 9, 2: 0, 3: 1 }, allowed: new Set([1, 3]) };
-    return { quota: { 1: 7, 2: 2, 3: 1 }, allowed: new Set([1, 2, 3]) };
+    return { quota: { 1: limit, 2: 0, 3: 0 }, allowed: new Set([1]) };
 }
 
 function questionSignature(row) {
@@ -318,6 +314,7 @@ module.exports = {
     getCacheQuestionReadinessIssues,
     isCacheQuestionReady,
     normalizeCacheRow,
+    getTypePolicy,
     selectReadyCachedQuestions,
     analyzeReadyCachedQuestions,
     stripOptionalQuestionCacheFields,

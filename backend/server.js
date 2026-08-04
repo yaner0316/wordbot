@@ -1,5 +1,7 @@
 const express = require('express');
+const crypto = require('crypto');
 const path = require('path');
+const { createSessionStore, normalizeUser } = require('./session-auth');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
@@ -103,6 +105,41 @@ function startQuestionCacheRebuild(userId) {
         });
     return { started: true, userId, startedAt: job.startedAt };
 }
+const sessionStore = createSessionStore();
+
+function setSessionCookie(res, result, role) {
+    if (!result?.user) return;
+    const token = sessionStore.issue(result.user, role);
+    res.set('Set-Cookie', sessionStore.cookie(token));
+}
+
+function requestedUser(req) {
+    return normalizeUser(req.body?.userId || req.body?.targetUser || req.query?.userId || req.query?.user || '');
+}
+
+const ADMIN_TOKEN_PROTECTED_PATHS = new Set(['/users', '/stats', '/questionCache/rebuildAll', '/questionCache/rebuildAll/status', '/questionCache/diagnostics', '/reviewWords', '/reviewWords/mark', '/reviewWords/clear', '/cleanup', '/backfill', '/backfill/status']);
+function tokensMatch(left, right) {
+    const a = Buffer.from(String(left || ''));
+    const b = Buffer.from(String(right || ''));
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function requireAdminToken(req, res, next) {
+    if (!ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
+    const configured = process.env.WORDBOT_ADMIN_TOKEN;
+    if (!configured && process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Admin token is not configured', code: 'ADMIN_TOKEN_NOT_CONFIGURED' });
+    if (!configured || tokensMatch(configured, req.get('x-wordbot-admin-token'))) return next();
+    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+}
+function requireUserSession(req, res, next) {
+    if (process.env.NODE_ENV !== 'production') return next();
+    if (ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
+    const session = sessionStore.read(req);
+    if (!session) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    const target = requestedUser(req);
+    if (target && target !== session.user) return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
+    req.wordbotSession = session;
+    next();
+}
 const app = createApp({
     submitAnswers,
     getActiveQuizSession,
@@ -119,7 +156,13 @@ const app = createApp({
     deferReviewRound,
     getReviewSummary,
     getRuntimeHealth,
+    onUserLogin: ({ res, result }) => setSessionCookie(res, result, 'user'),
+    onParentLogin: ({ res, result }) => setSessionCookie(res, result, 'parent'),
 });
+
+app.use('/api/admin', requireAdminToken);
+app.use('/api/admin', requireUserSession);
+app.use('/api/word', requireUserSession);
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
@@ -440,12 +483,13 @@ app.get('/api/admin/words', async (req, res) => {
 app.get('/api/word', async (req, res) => {
     try {
         const { userId, word, recordId } = req.query;
+        const effectiveUserId = userId || req.wordbotSession?.user || '';
         if (recordId) {
-            const data = await getWordByRecordId(recordId);
+            const data = await getWordByRecordId(recordId, effectiveUserId);
             return res.json(data || { exists: false });
         }
-        if (!userId || !word) return res.status(400).json({ error: '缺少参数' });
-        const data = await getWord(userId, word);
+        if (!effectiveUserId || !word) return res.status(400).json({ error: '缺少参数' });
+        const data = await getWord(effectiveUserId, word);
         res.json(data || { exists: false });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -455,8 +499,9 @@ app.get('/api/word', async (req, res) => {
 app.put('/api/word', async (req, res) => {
     try {
         const { userId, word, recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote } = req.body;
-        if (!recordId && (!userId || !word)) return res.status(400).json({ error: '缺少参数' });
-        const data = await updateWord(userId, word, { recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote });
+        const effectiveUserId = userId || req.wordbotSession?.user || '';
+        if (!recordId && (!effectiveUserId || !word)) return res.status(400).json({ error: '缺少参数' });
+        const data = await updateWord(effectiveUserId, word, { recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote });
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -476,7 +521,7 @@ app.post('/api/admin/reviewWords/mark', async (req, res) => {
     try {
         const { recordId, flags, note } = req.body;
         if (!recordId) return res.status(400).json({ error: '缺少recordId' });
-        const data = await markWordForReview(recordId, flags, note);
+        const data = await markWordForReview(recordId, flags, note, req.wordbotSession?.user || '');
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -487,7 +532,7 @@ app.post('/api/admin/reviewWords/clear', async (req, res) => {
     try {
         const { recordId } = req.body;
         if (!recordId) return res.status(400).json({ error: '缺少recordId' });
-        const data = await clearWordReview(recordId);
+        const data = await clearWordReview(recordId, req.wordbotSession?.user || '');
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -497,8 +542,9 @@ app.post('/api/admin/reviewWords/clear', async (req, res) => {
 app.delete('/api/word', async (req, res) => {
     try {
         const { userId = '', word = '', recordId = '' } = req.query;
-        if (!recordId && (!userId || !word)) return res.status(400).json({ error: '缺少参数' });
-        const data = await deleteWord(userId, word, { recordId });
+        const effectiveUserId = userId || req.wordbotSession?.user || '';
+        if (!recordId && (!effectiveUserId || !word)) return res.status(400).json({ error: '缺少参数' });
+        const data = await deleteWord(effectiveUserId, word, { recordId });
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

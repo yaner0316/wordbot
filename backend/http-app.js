@@ -95,6 +95,8 @@ function createApp({
     deferReviewRound,
     getReviewSummary,
     getRuntimeHealth,
+    onUserLogin,
+    onParentLogin,
 }) {
     if (typeof submitAnswers !== 'function') {
         throw new Error('createApp requires submitAnswers');
@@ -120,7 +122,9 @@ function createApp({
         app.post('/api/auth/login', async (req, res) => {
             try {
                 const { identifier, username, password } = req.body;
-                res.json(await loginUser({ username: identifier || username, password }));
+                const result = await loginUser({ username: identifier || username, password });
+                if (typeof onUserLogin === 'function') await onUserLogin({ req, res, result });
+                res.json(result);
             } catch (error) {
                 res.status(400).json({ error: error.message });
             }
@@ -130,7 +134,9 @@ function createApp({
         app.post('/api/auth/parent/login', async (req, res) => {
             try {
                 const { user, parentUsername, password } = req.body;
-                res.json(await verifyParentLogin({ user, parentUsername, password }));
+                const result = await verifyParentLogin({ user, parentUsername, password });
+                if (typeof onParentLogin === 'function') await onParentLogin({ req, res, result });
+                res.json(result);
             } catch (error) {
                 res.status(400).json({ error: error.message });
             }

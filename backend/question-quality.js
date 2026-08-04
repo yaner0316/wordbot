@@ -303,6 +303,8 @@ const MATERIAL_CATEGORY_WORDS = new Set([
     'wood', 'glass', 'paper', 'gold', 'silver',
 ]);
 
+const LINE_SHAPE_ADJECTIVE_WORDS = new Set(['curly', 'round', 'bent', 'straight', 'broken', 'dotted', 'long', 'short', 'thick', 'thin']);
+
 const SOUND_ADJECTIVE_WORDS = new Set([
     'strange', 'sudden', 'distant', 'quiet', 'loud', 'soft', 'faint',
     'sharp', 'muffled', 'weird', 'odd', 'unusual', 'clear', 'low', 'high',
@@ -388,6 +390,16 @@ function hasAmbiguousFillInContext(question) {
     if (oceanRouteCount >= 3 && hasOceanRouteContext) {
         return true;
     }
+
+    const lineShapeCount = optionWords.filter(word => LINE_SHAPE_ADJECTIVE_WORDS.has(word)).length;
+    if (lineShapeCount >= 2 && /\b(?:draw|write|make|trace|paint)\s+(?:a|an)\s+_____\s+(?:line|circle|shape|mark)\b/.test(context)) return true;
+
+    const animalOptionCount = optionWords.filter(word => ELEMENTARY_ANIMAL_WORDS.has(word)).length;
+    if (animalOptionCount >= 2 && /\b(?:little|young|small)\s+_____\s+ran\s+(?:next to|beside)\s+its\s+(?:mom|mother)\b/.test(context)) return true;
+
+    const actionWords = new Set([...PLAYGROUND_ACTION_WORDS, 'stomp', 'clap', 'wave', 'dance', 'sing']);
+    const actionOptionCount = optionWords.filter(word => actionWords.has(word)).length;
+    if (actionOptionCount >= 2 && /\bwill\s+_____\s+loudly\s+during\s+(?:the\s+)?dance\b/.test(context)) return true;
 
     const transportRouteCount = optionWords.filter(word => TRANSPORT_ROUTE_WORDS.has(word)).length;
     const hasTransportRouteContext = [
@@ -491,6 +503,7 @@ function getQuestionQualityIssues(question) {
     if (!question) return ['missing_question'];
     const type = Number(question.type);
     if (type === 3) {
+        issues.push('chinese-selection_disabled');
         if (!hasMeaningfulChineseMeaning(question.context)) issues.push('bad_chinese_meaning');
     } else if (hasAiMetaResponse(question.context)) {
         issues.push('ai_meta_context');

@@ -776,49 +776,8 @@ async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, t
 function rotateFallbackDistractors(pool, word) {
     const offset = stableWordOffset(word, pool.length);
     return [...pool.slice(offset), ...pool.slice(0, offset)];
-}async function buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords }) {
-    const wordText = String(word.word || '').trim().toLowerCase();
-    if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
-    const meaning = cleanChineseMeaningForCache(word);
-    if (!meaning) return [];
-    const distractorPool = uniqueWords([
-        ...(word.distractors || []),
-        ...(word.old_distractors || []),
-    ], wordText).filter(option => !isBadQuizWord(option));
-    const generated = distractorPool.length >= 3
-        ? []
-        : await generateDistractors({ word: wordText, meaning });
-    const distractors = uniqueWords([...distractorPool, ...(generated || [])], wordText).slice(0, 3);
-    if (distractors.length < 3) return [];
-    const optionWords = shuffled([wordText, ...distractors]);
-    const letters = ['A', 'B', 'C', 'D'];
-    const answer = letters[optionWords.indexOf(wordText)];
-    const options = optionWords.map((option, index) => `${letters[index]}. ${option}`);
-    const optionMeanings = await buildOptionMeanings({ optionWords, correctWord: wordText, correctMeaning: meaning, translateWords });
-    if (!optionMeanings) return [];
-    const base = {
-        user_id: user.id,
-        word_id: word.id,
-        source_word_record_id: word.feishu_record_id || word.id,
-        level,
-        quality_status: 'ready',
-        question_type: '3',
-        question_text: meaning,
-        context_zh: null,
-        suffix: null,
-        options,
-        answer,
-        option_meanings: optionMeanings,
-        correct_meaning: meaning,
-        ai_audit_status: 'skipped',
-        source_version: 'supabase-rebuild-v1',
-        used_count: 0,
-        generated_at: toIsoString(now),
-        last_used_at: null,
-        ...buildInitialVariantMetadata({ slot: 1, now }),
-    };
-    const rows = ['primary', 'review'].map(type => ({ ...base, round_type: roundType || type }));
-    return rows.filter(row => getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length === 0);
+}async function buildType3CacheQuestionRowsForWord() {
+    return [];
 }
 async function buildType1CacheRow({ user, word, level, context, slot, now, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
@@ -874,19 +833,25 @@ async function buildType1CacheRow({ user, word, level, context, slot, now, trans
 async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, generateContext }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
-    const meaning = word.meaning_zh || word.meaning_en || wordText;
+    let cacheWord = word;
+    if (!cleanChineseMeaningForCache(cacheWord) && typeof translateWords === 'function') {
+        const translated = await translateWords([wordText]);
+        const candidate = String(translated?.[wordText] || '').trim();
+        if (hasMeaningfulChineseMeaning(candidate)) cacheWord = { ...word, meaning_zh: candidate };
+    }
+    const meaning = cacheWord.meaning_zh || cacheWord.meaning_en || wordText;
     let firstContext = level === ELEMENTARY_LEVEL
-        ? generateElementaryTemplateContext(wordText, word.meaning_en || word.meaning_zh || '')
+        ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
-    if (!hasWholeWord(firstContext, wordText) && level === ELEMENTARY_LEVEL && generateContext) {
+    let generatedFirstContext = false;
+    if (!hasWholeWord(firstContext, wordText) && generateContext && process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT === '1') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
+        generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
-    if (!hasWholeWord(firstContext, wordText)) {
-        if (level !== ELEMENTARY_LEVEL) return buildType3CacheQuestionRowsForWord({ user, word, level, roundType, now, generateDistractors, translateWords });
-        return [];
-    }
+    if (!hasWholeWord(firstContext, wordText)) return [];
+    const shouldGenerateSecondContext = Boolean(generateContext && generatedFirstContext);
     let secondContext = firstContext;
-    if (generateContext) {
+    if (shouldGenerateSecondContext) {
         const firstContextKey = String(firstContext || '').trim().toLowerCase();
         secondContext = '';
         for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
@@ -895,11 +860,11 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
         }
     }
-    const duplicateGeneratedContext = generateContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
+    const duplicateGeneratedContext = shouldGenerateSecondContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
-    const first = await buildType1CacheRow({ user, word, level, context: firstContext, slot: 1, now, translateWords });
-    if (!generateContext) return first ? [first] : [];
-    const second = await buildType1CacheRow({ user, word, level, context: secondContext, slot: 2, now, translateWords });
+    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
+    if (!shouldGenerateSecondContext) return first ? [first] : [];
+    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
     if (!first) return [];
     return second ? [first, second] : [first];
 }
@@ -926,6 +891,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             const wordLevel = normalizeOptionalLearningLevel(row.level);
             return !wordLevel || wordLevel === level;
         })
+        .filter(row => String(row.mastery_status || '').trim().toLowerCase() !== 'mastered')
         .sort((left, right) => {
             const priority = { pending: 0, recognized: 1, consolidating: 2, mastered: 3 };
             const leftPriority = priority[String(left.mastery_status || '').trim().toLowerCase()] ?? 1;
@@ -934,11 +900,25 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         });
     const { data: existingCacheRows, error: existingCacheError } = await client
         .from('question_cache')
-        .select('id')
+        .select('id, word_id')
         .eq('user_id', user.id)
         .eq('level', level);
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
-    const existingCacheCount = (existingCacheRows || []).length;
+    const existingCacheWords = await getWordsByIdWithClient(client, (existingCacheRows || []).map(row => row.word_id));
+    const staleMasteredCacheIds = (existingCacheRows || [])
+        .filter(row => String(existingCacheWords.get(row.word_id)?.mastery_status || '').trim().toLowerCase() === 'mastered')
+        .map(row => row.id)
+        .filter(Boolean);
+    if (staleMasteredCacheIds.length) {
+        const { error: staleDeleteError } = await client
+            .from('question_cache')
+            .delete()
+            .eq('user_id', user.id)
+            .in('id', staleMasteredCacheIds)
+            .select('id');
+        ensureNoError(staleDeleteError, 'rebuildQuestionCache.deleteStaleMastered');
+    }
+    const existingCacheCount = (existingCacheRows || []).length - staleMasteredCacheIds.length;
     const hasExistingCache = existingCacheCount > 0;
     const seedTargetPrimaryCount = existingCacheCount <= 20 ? 10 : null;    if (seedTargetPrimaryCount) {
         const assessmentRows = await getAssessmentsForUserWithClient(client, username);
@@ -965,6 +945,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         candidateWords.sort((left, right) => rebuildPriority(left) - rebuildPriority(right));
     }
     const rows = [];
+    const seededPrimaryWordIds = new Set();
     const generateDistractors = async input => {
         try {
             return await distractorGenerator(input);
@@ -997,9 +978,13 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of candidateWords) {
-        if (seedTargetPrimaryCount && rows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length >= seedTargetPrimaryCount) break;
+        if (seedTargetPrimaryCount && seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
-        if (!wordRows.length) continue;
+        const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
+        if (!primaryRows.length) continue;
+        const wordId = String(primaryRows[0].source_word_record_id || primaryRows[0].word_id || '').trim();
+        if (!wordId || seededPrimaryWordIds.has(wordId)) continue;
+        seededPrimaryWordIds.add(wordId);
         rows.push(...wordRows);
     }
 
@@ -1298,9 +1283,9 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     return buildSupabaseReviewRoundResponse(decorateAssessmentRows(data || [], user), reviewId);
 }
 
-function generateReplacementContextWithAI(word, meaning, level, previousContext) {
+async function generateReplacementContextWithAI(word, meaning, level, previousContext) {
     const apiKey = process.env.MINIMAX_API_KEY;
-    if (!apiKey) return Promise.resolve('');
+    if (!apiKey || typeof fetch !== 'function') return '';
     const prompt = [
         'Create one new natural English sentence for a vocabulary fill-in-the-blank quiz.',
         'Target word: "' + String(word || '').trim().toLowerCase() + '"',
@@ -1310,34 +1295,29 @@ function generateReplacementContextWithAI(word, meaning, level, previousContext)
         'Use the target word exactly once. Keep 8 to 16 words. Do not reuse the previous sentence.',
         'Return JSON only: {"context":"sentence"}',
     ].join('\n');
-    return new Promise((resolve, reject) => {
-        const body = JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: prompt }] });
-        const request = https.request({
-            hostname: 'api.minimax.chat',
-            path: '/v1/text/chatcompletion_v2',
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+        const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey, 'Content-Length': Buffer.byteLength(body) },
-        }, response => {
-            const chunks = [];
-            response.on('data', chunk => chunks.push(chunk));
-            response.on('end', () => {
-                try {
-                    const content = JSON.parse(Buffer.concat(chunks).toString()).choices?.[0]?.message?.content || '';
-                    const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-                    const context = match ? match[1].replace(/\\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
-                    const target = String(word || '').trim().toLowerCase();
-                    const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
-                    if (!context || count !== 1 || context.toLowerCase() === String(previousContext || '').trim().toLowerCase()) return resolve('');
-                    resolve(context);
-                } catch (error) { reject(error); }
-            });
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+            body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: prompt }] }),
+            signal: controller.signal,
         });
-        request.on('error', reject);
-        const timer = setTimeout(() => request.destroy(new Error('MiniMax request timeout')), 15000);
-        request.on('close', () => clearTimeout(timer));
-        request.write(body);
-        request.end();
-    });
+        if (!response.ok) return '';
+        const payload = await response.json();
+        const content = payload?.choices?.[0]?.message?.content || '';
+        const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        const context = match ? match[1].replace(/\\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
+        const target = String(word || '').trim().toLowerCase();
+        const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
+        if (!context || count !== 1 || context.toLowerCase() === String(previousContext || '').trim().toLowerCase()) return '';
+        return context;
+    } catch {
+        return '';
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}) {
