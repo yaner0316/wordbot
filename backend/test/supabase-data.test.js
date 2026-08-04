@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createSupabaseDataAdapter } = require('../supabase-data');
+const { createSupabaseDataAdapter, generateReplacementContextWithAI } = require('../supabase-data');
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 const contextualDistractorsForTest = async ({ excludedDistractors = [] }) => excludedDistractors.length
@@ -1674,5 +1674,37 @@ test('wrong-answer cache prebuild uses injected generators for both replacement 
     } finally {
         if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = previousKey;
+    }
+});
+test('context generation uses the shared bounded MiniMax request', async () => {
+    const previousKey = process.env.MINIMAX_API_KEY;
+    const previousModel = process.env.MINIMAX_MODEL;
+    const previousFetch = global.fetch;
+    let request;
+    process.env.MINIMAX_API_KEY = 'test-key';
+    process.env.MINIMAX_MODEL = 'MiniMax-M2.5';
+    global.fetch = async (url, options) => {
+        request = { url, options };
+        return {
+            ok: true,
+            json: async () => ({
+                choices: [{ message: { content: '{"context":"The child used an abacus during math class."}' } }],
+            }),
+        };
+    };
+    try {
+        const result = await generateReplacementContextWithAI('abacus', '算盘', '小学', '');
+        const body = JSON.parse(request.options.body);
+        assert.equal(result, 'The child used an abacus during math class.');
+        assert.equal(body.model, 'MiniMax-M2.5');
+        assert.equal(body.max_tokens, 2048);
+        assert.equal(body.temperature, 0.1);
+        assert.ok(body.messages[0].content.length < 500, 'context prompt must stay compact');
+    } finally {
+        if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
+        else process.env.MINIMAX_API_KEY = previousKey;
+        if (previousModel === undefined) delete process.env.MINIMAX_MODEL;
+        else process.env.MINIMAX_MODEL = previousModel;
+        global.fetch = previousFetch;
     }
 });

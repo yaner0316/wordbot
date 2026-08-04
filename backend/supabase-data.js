@@ -19,6 +19,7 @@ const {
 } = require('./elementary-context');
 const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
+const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
 const { fingerprintQuestion } = require('./question-generation-service');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
@@ -1380,32 +1381,31 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
 async function generateReplacementContextWithAI(word, meaning, level, previousContext) {
     const apiKey = process.env.MINIMAX_API_KEY;
     if (!apiKey || typeof fetch !== 'function') return '';
+    const prior = String(previousContext || '').trim();
     const prompt = [
-        'Create one new natural English sentence for a vocabulary fill-in-the-blank quiz.',
-        'Target word: "' + String(word || '').trim().toLowerCase() + '"',
-        'Required meaning: "' + String(meaning || '').trim() + '"',
-        'Level: "' + String(level || '').trim() + '"',
-        'Previous sentence: "' + String(previousContext || '').trim() + '"',
-        'Use the target word exactly once. Keep 8 to 16 words. Do not reuse the previous sentence.',
-        'Return JSON only: {"context":"sentence"}',
-    ].join('\n');
+        `Write one natural English sentence of 8 to 16 words for level "${String(level || '').trim()}".`,
+        `Use "${String(word || '').trim().toLowerCase()}" exactly once with meaning "${String(meaning || '').trim()}".`,
+        prior ? `Do not copy this sentence: "${prior}"` : '',
+        'Return only JSON with one context key.',
+    ].filter(Boolean).join('\n');
+    const settings = getMiniMaxSettings();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
     try {
         const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-            body: JSON.stringify({ model: 'MiniMax-M2.7', messages: [{ role: 'user', content: prompt }] }),
+            body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
         if (!response.ok) return '';
         const payload = await response.json();
         const content = payload?.choices?.[0]?.message?.content || '';
         const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        const context = match ? match[1].replace(/\\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
+        const context = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
         const target = String(word || '').trim().toLowerCase();
         const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
-        if (!context || count !== 1 || context.toLowerCase() === String(previousContext || '').trim().toLowerCase()) return '';
+        if (!context || count !== 1 || context.toLowerCase() === prior.toLowerCase()) return '';
         return context;
     } catch {
         return '';

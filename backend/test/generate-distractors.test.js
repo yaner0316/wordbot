@@ -28,6 +28,7 @@ test('prompt uses the real stem and asks the model to avoid prior variant distra
     let capturedPrompt = '';
     const result = await selectContextualDistractors({
         word: 'apple',
+        meaning: 'a fruit',
         context: 'The child packed an _____ for the long trip.',
         candidates: ['pear', 'banana'],
         excludedDistractors: ['orange', 'peach', 'plum'],
@@ -39,5 +40,8 @@ test('prompt uses the real stem and asks the model to avoid prior variant distra
 
     assert.deepEqual(result, ['snack', 'sandwich', 'biscuit']);
     assert.match(capturedPrompt, /The child packed an ___ for the long trip\./);
+    assert.match(capturedPrompt, /Required meaning: \"a fruit\"/);
     assert.match(capturedPrompt, /orange, peach, plum/);
+    assert.match(capturedPrompt, /exactly one English word/i);
+    assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
 });

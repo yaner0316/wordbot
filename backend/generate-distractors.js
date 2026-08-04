@@ -1,39 +1,25 @@
 /**
  * LLM-assisted distractor generation for fill-in-the-blank quiz questions.
- *
- * Asks the model to generate 3 semantically appropriate wrong options for the
- * target word in context. The user's vocabulary is provided as a difficulty
- * calibration reference only — the model is free to generate words outside
- * that list to ensure semantic quality.
  */
 
-async function selectContextualDistractors({ word, context, candidates, excludedDistractors = [], callLLM }) {
+async function selectContextualDistractors({ word, meaning, context, candidates, excludedDistractors = [], callLLM }) {
     const referenceList = (candidates || []).slice(0, 8).join(', ');
-    const referenceNote = referenceList
-        ? `Reference vocabulary (use only to gauge the learner's difficulty level): ${referenceList}`
-        : '';
-    const exclusionList = (excludedDistractors || []).map(value => String(value || '').trim()).filter(Boolean).join(', ');
-    const exclusionNote = exclusionList
-        ? `Distractors already used by another stem for this meaning: ${exclusionList}. Avoid reusing them unless one is exceptionally natural in this sentence; never reuse more than one.`
-        : '';
-
-    const prompt = `You are building a vocabulary fill-in-the-blank quiz question.
-
-Correct answer: "${word}"
-Sentence: "${context.replace(/_____/g, '___')}"
-${referenceNote}
-${exclusionNote}
-
-Generate exactly 3 distractor words for this question.
-Rules:
-1. Each distractor must be the same part of speech as "${word}".
-2. Each distractor should be at a similar difficulty level to "${word}"${referenceList ? ' — use the reference vocabulary to calibrate difficulty' : ''}.
-3. Each distractor must be clearly wrong in the given sentence context.
-4. Prefer words in the same semantic category as "${word}" (similar objects, actions, or concepts) to make the question genuinely challenging rather than trivially easy.
-5. Do not repeat the correct answer.
-6. If prior-stem distractors are listed, use at most one of them.
-
-Return JSON only, no explanation: {"distractors": ["word1", "word2", "word3"]}`;
+    const exclusionList = (excludedDistractors || [])
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .join(', ');
+    const prompt = [
+        'Create exactly 3 wrong options for this vocabulary fill-in quiz.',
+        `Correct answer: "${word}"`,
+meaning ? `Required meaning: "${String(meaning).trim()}"` : '',
+        `Sentence: "${context.replace(/_____/g, '___')}"`,
+        referenceList ? `Difficulty reference only: ${referenceList}` : '',
+        exclusionList ? `Prior-stem distractors: ${exclusionList}. Reuse at most one.` : '',
+        'Each distractor must be exactly one English word using letters or one apostrophe; never use a phrase or hyphen.',
+        'Use the same part of speech and similar difficulty as the answer.',
+        'Prefer the same semantic category, but every option must be clearly wrong in this sentence.',
+        `Never repeat "${word}". Return only JSON: {"distractors":["word1","word2","word3"]}`,
+    ].filter(Boolean).join('\n');
 
     const raw = await callLLM(prompt).catch(() => '');
     if (!raw) return null;

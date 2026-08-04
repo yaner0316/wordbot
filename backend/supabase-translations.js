@@ -1,17 +1,16 @@
 const https = require('https');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 
-function callMiniMax(prompt, timeout = 30000) {
+function callMiniMax(prompt, timeout) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.MINIMAX_API_KEY;
         if (!apiKey) {
             reject(new Error('MINIMAX_API_KEY not set'));
             return;
         }
-        const body = JSON.stringify({
-            model: 'MiniMax-M2.7',
-            messages: [{ role: 'user', content: prompt }],
-        });
+        const settings = getMiniMaxSettings();
+        const body = JSON.stringify(buildMiniMaxRequestBody(prompt));
         const request = https.request({
             hostname: 'api.minimax.chat',
             path: '/v1/text/chatcompletion_v2',
@@ -36,7 +35,7 @@ function callMiniMax(prompt, timeout = 30000) {
         request.on('error', reject);
         const timer = setTimeout(() => {
             request.destroy(new Error('MiniMax translation timeout'));
-        }, timeout);
+        }, timeout || settings.timeoutMs);
         request.on('close', () => clearTimeout(timer));
         request.write(body);
         request.end();
@@ -47,10 +46,9 @@ async function translateSupabaseWords(words) {
     const uniqueWords = [...new Set((words || []).map(word => String(word || '').trim().toLowerCase()).filter(Boolean))];
     if (!uniqueWords.length) return {};
     const prompt = [
-        'Translate each English vocabulary word to Simplified Chinese.',
-        'Return ONLY a JSON object mapping each input word to a concise Chinese meaning.',
-        'Do not return English, explanations, or pinyin.',
-        'Words: ' + JSON.stringify(uniqueWords),
+        'Translate these English vocabulary words into concise Simplified Chinese:',
+        JSON.stringify(uniqueWords),
+        'Return only one JSON object mapping each original word to its Chinese meaning.',
     ].join('\n');
     try {
         const raw = await callMiniMax(prompt);
