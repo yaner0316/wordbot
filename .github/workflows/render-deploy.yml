@@ -41,7 +41,10 @@ jobs:
       - name: Run backend tests
         run: npm test
         env:
+          SUPABASE_URL: https://wordbot-ci.invalid
+          SUPABASE_SERVICE_ROLE_KEY: wordbot-ci-service-role
           WORDBOT_WEB_CONTRACT_PATH: ${{ github.workspace }}/web-contract/src/quiz-logic.js
+          WORDBOT_WEB_APP_PATH: ${{ github.workspace }}/web-contract/src/app.js
         working-directory: backend
 
       - name: Trigger Render deploy hook

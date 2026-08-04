@@ -7,10 +7,9 @@ const rnApp = fs.readFileSync(
     path.join(__dirname, '..', '..', 'WordBot', 'App.js'),
     'utf8'
 );
-const webApp = fs.readFileSync(
-    path.join(__dirname, '..', '..', '..', 'web', 'src', 'app.js'),
-    'utf8'
-);
+const webAppPath = process.env.WORDBOT_WEB_APP_PATH
+    || path.join(__dirname, '..', '..', '..', 'web', 'src', 'app.js');
+const webApp = fs.readFileSync(webAppPath, 'utf8');
 
 const rnWordSeparatorPattern = /split\(\/\[\\n,，;；\\s\]\+\//;
 
