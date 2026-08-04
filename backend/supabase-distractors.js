@@ -21,12 +21,14 @@ async function callMiniMax(prompt, timeout = 15000) {
     }
 }
 
-async function generateSupabaseDistractors({ word, meaning }) {
-    const context = 'The target word "' + word + '" means: ' + meaning + '.';
+async function generateSupabaseDistractors({ word, meaning, context, candidates = [], excludedDistractors = [] }) {
+    const actualContext = String(context || '').trim();
+    if (!actualContext) return null;
     return selectContextualDistractors({
         word,
-        context,
-        candidates: [],
+        context: actualContext,
+        candidates,
+        excludedDistractors,
         callLLM: prompt => callMiniMax(prompt),
     });
 }

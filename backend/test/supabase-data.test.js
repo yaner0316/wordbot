@@ -4,6 +4,10 @@ const assert = require('node:assert/strict');
 const { createSupabaseDataAdapter } = require('../supabase-data');
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
+const contextualDistractorsForTest = async ({ excludedDistractors = [] }) => excludedDistractors.length
+    ? ['delta', 'echo', 'foxtrot']
+    : ['alpha', 'bravo', 'charlie'];
+
 test('Supabase stats derive progress and quiz metrics from words and assessments', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -530,6 +534,7 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateContext: async word => `A second friendly sentence uses ${word} today.`,
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -1045,6 +1050,7 @@ test('rebuildQuestionCacheForUser inherits level and uses word-specific distract
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateContext: async word => `A second sentence contains ${word}.`,
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -1079,13 +1085,14 @@ test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fa
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
         generateContext: async word => `A second friendly sentence uses ${word} today.`,
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('Draggy');
 
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 16);
-    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 16);
+    assert.equal(result.count, 18);
+    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 18);
     assert.equal(client.db.question_cache.some(row => row.word_id === 'word-10'), false)
     assert.equal(client.db.question_cache.some(row => row.question_text.includes('In class, the word')), false);
 });
@@ -1456,6 +1463,7 @@ test('rebuildQuestionCacheForUser creates two distinct ready type-one variants f
         translateWords: async words => Object.fromEntries(words.map(word => [word, word === 'apple' ? '苹果' : '干扰项'])),
         generateContext: async (word, meaning, level, previous) =>
             previous ? 'The child packed an apple for the long trip.' : previous,
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -1513,6 +1521,7 @@ test('rebuildQuestionCacheForUser seeds ten unique primary words when variants p
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
         generateContext: async word => 'The second ' + word + ' sentence is ready.',
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -1550,6 +1559,7 @@ test('rebuildQuestionCacheForUser always backfills missing middle-school context
         });
         const adapter = createSupabaseDataAdapter(client, {
             generateContext: async (word, meaning, level, previous) => previous ? `The student checked the ${word} before leaving.` : `The teacher asks the student to use ${word} in a sentence.`,
+            generateDistractors: contextualDistractorsForTest,
             translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
         });
 
@@ -1588,6 +1598,7 @@ test('rebuildQuestionCacheForUser never seeds mastered words when pending words 
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
         generateContext: async word => `A second sentence contains ${word}.`,
+        generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -1621,4 +1632,47 @@ test('addWord persists a generation job for the inserted meaning', async () => {
         attempt_count: 0,
         next_attempt_at: inserted.entered_at,
     });
+});
+
+test('wrong-answer cache prebuild uses injected generators for both replacement stems', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple',
+            meaning_en: 'a fruit', meaning_zh: '苹果', level: MIDDLE, mastery_status: 'pending',
+        }],
+        assessments: [{
+            id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1',
+            test_id: 'real-quiz-1', assessed_at: '2026-08-01T00:00:00.000Z', question_type: '1',
+            question_text: 'The child saw an _____.', is_correct: 'wrong', submitted_answer: 'B|sure',
+        }],
+        question_cache: [{
+            id: 'cache-old', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1',
+            round_type: 'primary', question_text: 'The child saw an _____.',
+        }],
+    });
+    const contextCalls = [];
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, word === 'apple' ? '苹果' : '干扰项'])),
+        generateDistractors: contextualDistractorsForTest,
+        generateContext: async (word, meaning, level, previous) => {
+            contextCalls.push(previous);
+            return contextCalls.length === 1 ? 'The child ate an apple after school.' : 'The child packed an apple for the long trip.';
+        },
+    });
+    const previousKey = process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    try {
+        const result = await adapter.prebuildWrongQuestionCache({
+            userId: 'qiuqiu', testId: 'real-quiz-1',
+            result: { results: [{ recordId: 'rec-word-1', correct: false }] },
+        });
+        assert.equal(result.prepared, 1);
+        assert.equal(contextCalls.length, 2);
+        assert.equal(client.db.question_cache.some(row => row.id === 'cache-old'), false);
+        assert.equal(client.db.question_cache.some(row => row.source_version === 'supabase-wrong-recovery-v1'), true);
+    } finally {
+        if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
+        else process.env.MINIMAX_API_KEY = previousKey;
+    }
 });

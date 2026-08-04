@@ -16,7 +16,7 @@ test('service publishes two distinct quality-approved variants for one meaning',
                 ];
             }
             return [
-                { question_text: 'The bank approved the family loan.', options: ['bank', 'shore', 'desk', 'road'], answer: 'A' },
+                { question_text: 'The bank approved the family loan.', options: ['bank', 'branch', 'coin', 'road'], answer: 'A' },
             ];
         },
         validateCandidate: candidate => candidate.answer === 'A' ? [] : ['answer_invalid'],
@@ -61,7 +61,7 @@ test('service renews the claimed lease immediately before publishing cache rows'
         loadWord: async wordId => ({ id: wordId, word: 'bank', meaning_en: 'a financial institution' }),
         generateCandidates: async () => [
             { question_text: 'She deposited money at the bank.', options: ['bank', 'shore', 'desk', 'road'], answer: 'A' },
-            { question_text: 'The bank approved the family loan.', options: ['bank', 'shore', 'desk', 'road'], answer: 'A' },
+            { question_text: 'The bank approved the family loan.', options: ['bank', 'branch', 'coin', 'road'], answer: 'A' },
         ],
         validateCandidate: () => [],
         beforePublish: async () => { events.push('renew'); },
@@ -72,3 +72,25 @@ test('service renews the claimed lease immediately before publishing cache rows'
     assert.deepEqual(events, ['renew', 'publish']);
 });
 
+
+test('service rejects two variants whose distractors overlap by more than one', async () => {
+    const { createQuestionGenerationService } = require('../question-generation-service');
+    let published = false;
+    const service = createQuestionGenerationService({
+        loadWord: async wordId => ({ id: wordId, word: 'bank', meaning_en: 'a financial institution' }),
+        generateCandidates: async () => [
+            { question_text: 'She deposited money at the bank.', options: ['bank', 'shore', 'desk', 'road'], answer: 'A' },
+            { question_text: 'The bank approved the family loan.', options: ['bank', 'shore', 'desk', 'coin'], answer: 'A' },
+        ],
+        validateCandidate: () => [],
+        publishReadyVariants: async () => { published = true; },
+        maxAttempts: 2,
+    });
+
+    await assert.rejects(
+        service.process({ id: 'job-overlap', user_id: 'user-1', word_id: 'word-bank-bank' }),
+        error => error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
+            && error.rejectionReasons.distractor_overlap === 2
+    );
+    assert.equal(published, false);
+});

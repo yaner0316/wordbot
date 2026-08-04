@@ -264,11 +264,11 @@ function generationJob(overrides = {}) {
     };
 }
 
-function candidate(questionText) {
+function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
     return {
         question_type: '1',
         question_text: questionText,
-        options: ['A. bank', 'B. shore', 'C. desk', 'D. road'],
+        options: ['bank', ...distractors].map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`),
         answer: 'A',
         correct_meaning: '银行',
     };
@@ -440,7 +440,7 @@ test('generation service publishes two variants before retiring old ready primar
             buildCalls.push(input);
             return [
                 candidate('She deposited her savings at the bank.'),
-                candidate('The bank approved the loan yesterday.'),
+                candidate('The bank approved the loan yesterday.', ['branch', 'coin', 'road']),
             ];
         },
     });
@@ -541,7 +541,7 @@ test('runtime does not write cache rows when its lease expired before publish', 
         leaseDurationMs: 10 * 60 * 1000,
         buildCandidates: async () => [
             candidate('She deposited her savings at the bank.'),
-            candidate('The bank approved the loan yesterday.'),
+            candidate('The bank approved the loan yesterday.', ['branch', 'coin', 'road']),
         ],
         runImmediately: false,
     });

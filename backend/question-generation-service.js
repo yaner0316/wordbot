@@ -6,6 +6,22 @@ function normalizeText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function candidateDistractors(candidate) {
+    const options = Array.isArray(candidate?.options) ? candidate.options : [];
+    const answer = String(candidate?.answer || '').trim().toUpperCase();
+    const answerIndex = /^[A-D]$/.test(answer) ? answer.charCodeAt(0) - 65 : -1;
+    if (options.length !== 4 || answerIndex < 0 || answerIndex >= options.length) return [];
+    return options
+        .filter((option, index) => index !== answerIndex)
+        .map(option => normalizeText(String(option || '').replace(/^[A-D]\.\s*/i, '')))
+        .filter(Boolean);
+}
+
+function distractorOverlap(left, right) {
+    const rightSet = new Set(right);
+    return left.filter(value => rightSet.has(value)).length;
+}
+
 function fingerprintQuestion(candidate, wordId) {
     const payload = JSON.stringify({
         wordId: String(wordId || '').trim(),
@@ -83,6 +99,17 @@ function createQuestionGenerationService({
                     const questionFingerprint = fingerprintQuestion(candidate, wordId);
                     if (variantsByFingerprint.has(questionFingerprint)) {
                         rejectionReasons.duplicate_fingerprint = (rejectionReasons.duplicate_fingerprint || 0) + 1;
+                        continue;
+                    }
+                    const distractors = candidateDistractors(candidate);
+                    const overlapsExistingVariant = distractors.length === 3
+                        && [...variantsByFingerprint.values()].some(existing => {
+                            const existingDistractors = candidateDistractors(existing);
+                            return existingDistractors.length === 3
+                                && distractorOverlap(distractors, existingDistractors) > 1;
+                        });
+                    if (overlapsExistingVariant) {
+                        rejectionReasons.distractor_overlap = (rejectionReasons.distractor_overlap || 0) + 1;
                         continue;
                     }
                     variantsByFingerprint.set(questionFingerprint, {

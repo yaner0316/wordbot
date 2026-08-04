@@ -7,10 +7,14 @@
  * that list to ensure semantic quality.
  */
 
-async function selectContextualDistractors({ word, context, candidates, callLLM }) {
+async function selectContextualDistractors({ word, context, candidates, excludedDistractors = [], callLLM }) {
     const referenceList = (candidates || []).slice(0, 8).join(', ');
     const referenceNote = referenceList
         ? `Reference vocabulary (use only to gauge the learner's difficulty level): ${referenceList}`
+        : '';
+    const exclusionList = (excludedDistractors || []).map(value => String(value || '').trim()).filter(Boolean).join(', ');
+    const exclusionNote = exclusionList
+        ? `Distractors already used by another stem for this meaning: ${exclusionList}. Avoid reusing them unless one is exceptionally natural in this sentence; never reuse more than one.`
         : '';
 
     const prompt = `You are building a vocabulary fill-in-the-blank quiz question.
@@ -18,6 +22,7 @@ async function selectContextualDistractors({ word, context, candidates, callLLM 
 Correct answer: "${word}"
 Sentence: "${context.replace(/_____/g, '___')}"
 ${referenceNote}
+${exclusionNote}
 
 Generate exactly 3 distractor words for this question.
 Rules:
@@ -26,6 +31,7 @@ Rules:
 3. Each distractor must be clearly wrong in the given sentence context.
 4. Prefer words in the same semantic category as "${word}" (similar objects, actions, or concepts) to make the question genuinely challenging rather than trivially easy.
 5. Do not repeat the correct answer.
+6. If prior-stem distractors are listed, use at most one of them.
 
 Return JSON only, no explanation: {"distractors": ["word1", "word2", "word3"]}`;
 
