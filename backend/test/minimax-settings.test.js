@@ -12,7 +12,7 @@ const {
 test('MiniMax settings give offline generation enough bounded reasoning budget', () => {
     assert.equal(DEFAULT_MINIMAX_MODEL, 'MiniMax-M2.7');
     assert.equal(DEFAULT_MINIMAX_MAX_TOKENS, 2048);
-    assert.equal(DEFAULT_MINIMAX_TIMEOUT_MS, 45000);
+    assert.equal(DEFAULT_MINIMAX_TIMEOUT_MS, 30000);
     assert.deepEqual(buildMiniMaxRequestBody('prompt', {}), {
         model: 'MiniMax-M2.7',
         messages: [{ role: 'user', content: 'prompt' }],

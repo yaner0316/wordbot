@@ -2,7 +2,7 @@
 
 const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7';
 const DEFAULT_MINIMAX_MAX_TOKENS = 2048;
-const DEFAULT_MINIMAX_TIMEOUT_MS = 45000;
+const DEFAULT_MINIMAX_TIMEOUT_MS = 30000;
 const DEFAULT_MINIMAX_TEMPERATURE = 0.1;
 
 function boundedInteger(value, fallback, minimum, maximum) {
