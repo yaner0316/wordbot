@@ -1,8 +1,12 @@
 {
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
-    "prestart": "node backend/scripts/apply-question-generation-migrations.js",
-    "build": "cd backend && npm install",
-    "start": "node backend/server.js"
+    "build": "npm --prefix backend ci",
+    "postinstall": "npm --prefix backend ci",
+    "start": "node backend/server.js",
+    "prestart": "node backend/scripts/apply-question-generation-migrations.js"
   },
   "dependencies": {
     "dotenv": "^17.4.2",

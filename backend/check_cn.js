@@ -2,7 +2,11 @@ require('dotenv').config();
 
 const https = require('https');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('错误：缺少 FEISHU_APP_ID 环境变量');
+    process.exit(1);
+}
 const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 

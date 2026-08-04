@@ -2,9 +2,11 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
+const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
+const { createDefaultQuestionGenerationRuntime } = require('./question-generation-bootstrap');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -105,13 +107,7 @@ function startQuestionCacheRebuild(userId) {
         });
     return { started: true, userId, startedAt: job.startedAt };
 }
-const sessionStore = createSessionStore();
-
-function setSessionCookie(res, result, role) {
-    if (!result?.user) return;
-    const token = sessionStore.issue(result.user, role);
-    res.set('Set-Cookie', sessionStore.cookie(token));
-}
+// sessionStore 和 setSessionCookie 已从 auth-middleware 导入，无需重复声明
 
 function requestedUser(req) {
     return normalizeUser(req.body?.userId || req.body?.targetUser || req.query?.userId || req.query?.user || '');
@@ -123,23 +119,105 @@ function tokensMatch(left, right) {
     const b = Buffer.from(String(right || ''));
     return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
-function requireAdminToken(req, res, next) {
-    if (!ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
-    const configured = process.env.WORDBOT_ADMIN_TOKEN;
-    if (!configured && process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Admin token is not configured', code: 'ADMIN_TOKEN_NOT_CONFIGURED' });
-    if (!configured || tokensMatch(configured, req.get('x-wordbot-admin-token'))) return next();
-    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+
+// 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
+// 保留此处的 tokensMatch 函数用于兼容性
+const questionGenerationServerStates = new WeakMap();
+
+function getServerRuntimeHealth(state) {
+    const health = getRuntimeHealth();
+    const workerError = state?.workerLastError || '';
+    const runtime = state?.runtime || null;
+    return {
+        ...health,
+        ok: health.ok && !workerError,
+        questionGenerationWorker: {
+            configured: state
+                ? state.workerConfigured
+                : String(process.env.DATA_SOURCE || 'supabase').toLowerCase() !== 'feishu',
+            running: Boolean(runtime?.worker?.isRunning()),
+            lastError: workerError || null,
+            lastSuccessAt: state?.workerLastSuccessAt || null,
+        },
+    };
 }
-function requireUserSession(req, res, next) {
-    if (process.env.NODE_ENV !== 'production') return next();
-    if (ADMIN_TOKEN_PROTECTED_PATHS.has(req.path)) return next();
-    const session = sessionStore.read(req);
-    if (!session) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-    const target = requestedUser(req);
-    if (target && target !== session.user) return res.status(403).json({ error: 'Forbidden', code: 'FORBIDDEN' });
-    req.wordbotSession = session;
-    next();
+
+function stopServerWorker(server) {
+    const state = questionGenerationServerStates.get(server);
+    const worker = state?.runtime?.worker;
+    if (!worker || typeof worker.stop !== 'function') return Promise.resolve();
+    if (state.stopPromise) return state.stopPromise;
+    const stopping = Promise.resolve()
+        .then(() => worker.stop())
+        .finally(() => {
+            if (state.runtime?.worker === worker) state.runtime = null;
+        });
+    state.stopPromise = stopping;
+    return stopping;
 }
+
+function closeServerHttp(server, callback) {
+    const state = questionGenerationServerStates.get(server);
+    if (!server.listening) {
+        if (typeof callback === 'function') callback();
+        return;
+    }
+    const close = state?.originalClose || server.close.bind(server);
+    close(callback);
+}
+
+function installWorkerAwareClose(server) {
+    const state = questionGenerationServerStates.get(server);
+    const originalClose = server.close.bind(server);
+    state.originalClose = originalClose;
+    server.close = function workerAwareClose(callback) {
+        void stopServerWorker(server).then(
+            () => closeServerHttp(server, callback),
+            error => {
+                if (typeof callback === 'function') {
+                    callback(error);
+                    return;
+                }
+                process.nextTick(() => server.emit('error', error));
+            }
+        );
+        return server;
+    };
+}
+
+async function shutdownServer(server) {
+    if (!server || typeof server.close !== 'function') {
+        throw new Error('HTTP_SERVER_REQUIRED');
+    }
+    await stopServerWorker(server);
+    await new Promise((resolve, reject) => {
+        if (!server.listening) {
+            resolve();
+            return;
+        }
+        closeServerHttp(server, error => error ? reject(error) : resolve());
+    });
+}
+
+function installShutdownSignalHandlers(server, { processObject = process } = {}) {
+    if (!processObject || typeof processObject.once !== 'function') throw new Error('PROCESS_OBJECT_REQUIRED');
+    let shuttingDown = false;
+    const handleSignal = () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        shutdownServer(server).catch(error => {
+            console.error('[shutdown] failed:', error.message);
+            processObject.exitCode = 1;
+        });
+    };
+    processObject.once('SIGTERM', handleSignal);
+    processObject.once('SIGINT', handleSignal);
+    return () => {
+        processObject.removeListener('SIGTERM', handleSignal);
+        processObject.removeListener('SIGINT', handleSignal);
+    };
+}
+
 const app = createApp({
     submitAnswers,
     getActiveQuizSession,
@@ -155,14 +233,34 @@ const app = createApp({
     submitReviewRound,
     deferReviewRound,
     getReviewSummary,
-    getRuntimeHealth,
+    getRuntimeHealth: () => getServerRuntimeHealth(),
     onUserLogin: ({ res, result }) => setSessionCookie(res, result, 'user'),
     onParentLogin: ({ res, result }) => setSessionCookie(res, result, 'parent'),
 });
 
-app.use('/api/admin', requireAdminToken);
-app.use('/api/admin', requireUserSession);
+// 应用统一的安全中间件
+// 前端直接调用的端点只需要 session 验证（用户操作自己的数据）
+const SESSION_ONLY_ADMIN_PATHS = new Set([
+    '/userSettings',           // 学习设置（家长访问自己孩子）
+    '/questionCache/rebuild',  // 重建缓存（前端自动触发）
+    '/questionCache/status',   // 缓存状态查询
+    '/validateWords',          // 验证单词
+    '/addWords',               // 添加单词
+    '/words',                  // 词库列表
+]);
+app.use('/api/admin', (req, res, next) => {
+    if (SESSION_ONLY_ADMIN_PATHS.has(req.path)) {
+        return requireUserSession(req, res, next);
+    }
+    // 其他 admin 端点需要 admin token
+    return requireAdminToken(req, res, next);
+});
 app.use('/api/word', requireUserSession);
+app.use('/api/quiz', requireUserSession);
+app.use('/api/submit', requireUserSession);
+app.use('/api/stats', requireUserSession);
+app.use('/api/history', requireUserSession);
+app.use('/api/reviews', requireUserSession);
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
@@ -603,14 +701,63 @@ app.get('/api/admin/backfill/status', async (req, res) => {
 });
 const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
 
-function startServer(port = PORT) {
-    return app.listen(port, '0.0.0.0', () => {
+function createServerApp(state) {
+    const serverApp = express();
+    serverApp.get('/api/health', (req, res) => {
+        const health = getServerRuntimeHealth(state);
+        res.status(health.ok ? 200 : 503).json(health);
+    });
+    serverApp.use(app);
+    return serverApp;
+}
+
+function startServer(port = PORT, options = {}) {
+    const enableQuestionGenerationWorker = options.enableQuestionGenerationWorker
+        ?? String(process.env.DATA_SOURCE || 'supabase').trim().toLowerCase() !== 'feishu';
+    const runtimeFactory = options.runtimeFactory || createDefaultQuestionGenerationRuntime;
+    const state = {
+        workerConfigured: enableQuestionGenerationWorker,
+        runtime: null,
+        workerLastError: '',
+        workerLastSuccessAt: null,
+        stopPromise: null,
+        originalClose: null,
+    };
+    const server = createServerApp(state).listen(port, '0.0.0.0', () => {
         console.log(`后端服务运行在 http://0.0.0.0:${port}`);
     });
+    questionGenerationServerStates.set(server, state);
+    installWorkerAwareClose(server);
+    if (enableQuestionGenerationWorker) {
+        try {
+            const runtime = runtimeFactory({
+                onError: error => {
+                    state.workerLastError = String(error?.message || error || 'worker_failed');
+                    console.error('[question_generation_worker]', state.workerLastError);
+                },
+                onSuccess: () => {
+                    state.workerLastError = '';
+                    state.workerLastSuccessAt = new Date().toISOString();
+                },
+            });
+            state.runtime = runtime;
+            runtime.worker.start();
+        } catch (error) {
+            state.workerLastError = String(error?.message || error || 'worker_start_failed');
+            console.error('[question_generation_worker]', state.workerLastError);
+        }
+    }
+    return server;
 }
 
 if (require.main === module) {
-    startServer();
+    const server = startServer();
+    installShutdownSignalHandlers(server);
 }
 
-module.exports = { app, startServer };
+module.exports = {
+    app,
+    installShutdownSignalHandlers,
+    shutdownServer,
+    startServer,
+};

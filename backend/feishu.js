@@ -1106,25 +1106,26 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
                 questions: randomizedQuestions.map(({ cacheRecordId, testId: _, record_id: __, ...q }) => q),
             };
         }
-        if (!shouldAllowLiveQuizFallback({
-            cacheConfigured: Boolean(QUESTION_CACHE_TABLE),
-            flag: process.env.WORDBOT_ALLOW_LIVE_QUIZ_FALLBACK,
-        })) {
-            return {
-                error: 'Question cache is still preparing. Please rebuild the question cache and try again.',
-                code: 'QUESTION_CACHE_NOT_READY',
-                source: 'question_cache',
-                level: effectiveLevel,
-                diagnostics: {
-                    ...diagnostics,
-                    fallbackUsed: false,
-                },
-                readyCount: cachedQuestions.length,
-                requiredCount: requiredQuestionCount,
-            };
-        }
-        diagnostics.fallbackUsed = true;
     }
+    if (!shouldAllowLiveQuizFallback({
+        cacheConfigured: Boolean(QUESTION_CACHE_TABLE),
+        flag: process.env.WORDBOT_ALLOW_LIVE_QUIZ_FALLBACK,
+        mode: assessmentMode,
+    })) {
+        return {
+            error: 'Question cache is still preparing. Please rebuild the question cache and try again.',
+            code: 'QUESTION_CACHE_NOT_READY',
+            source: 'question_cache',
+            level: effectiveLevel,
+            diagnostics: {
+                ...diagnostics,
+                fallbackUsed: false,
+            },
+            readyCount: Number(diagnostics.readyCount) || 0,
+            requiredCount: requiredQuestionCount,
+        };
+    }
+    diagnostics.fallbackUsed = true;
     const liveGenerationStarted = Date.now();
     const wordRecords = await getRecords(WORD_TABLE);
     if (!effectiveLevel) {

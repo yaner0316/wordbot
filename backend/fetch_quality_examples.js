@@ -1,7 +1,11 @@
 const https = require('https');
 const { execSync } = require('child_process');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -107,10 +111,10 @@ function extractSentences(text, word) {
 }
 
 async function evaluateWithMiniMax(word, meaning, sentence) {
-    const prompt = `评估例句：${sentence}
+    const prompt = `评估例句�?{sentence}
 
-单词：${word}
-释义：${meaning}
+单词�?{word}
+释义�?{meaning}
 
 返回JSON：{"score":1-20,"pass":true/false,"reason":"原因"}`;
 
@@ -153,12 +157,12 @@ async function processWord(word) {
     
     const candidates = [];
     
-    console.log(`  1. 从 DictionaryAPI 获取例句...`);
+    console.log(`  1. �?DictionaryAPI 获取例句...`);
     const apiExamples = await fetchFromFreeDictionary(word);
     candidates.push(...apiExamples);
     console.log(`     找到 ${apiExamples.length} 个例句`);
     
-    console.log(`  2. 从搜索引擎获取例句...`);
+    console.log(`  2. 从搜索引擎获取例�?..`);
     const searches = [
         `define ${word} example sentence English`,
         `use ${word} correctly in a sentence`
@@ -175,7 +179,7 @@ async function processWord(word) {
     }
     
     const uniqueCandidates = [...new Set(candidates)].slice(0, 8);
-    console.log(`  共 ${uniqueCandidates.length} 个候选例句`);
+    console.log(`  �?${uniqueCandidates.length} 个候选例句`);
     
     if (uniqueCandidates.length === 0) {
         console.log(`  无候选例句`);
@@ -199,7 +203,7 @@ async function processWord(word) {
     }
     
     if (bestSentence) {
-        console.log(`  最佳例句: "${bestSentence}"`);
+        console.log(`  最佳例�? "${bestSentence}"`);
         const success = await updateRecord(record.record_id, { Context: bestSentence });
         if (success) {
             console.log(`  更新成功!`);
@@ -220,7 +224,7 @@ async function main() {
         return;
     }
     
-    console.log(`开始处理 ${words.length} 个单词...\n`);
+    console.log(`开始处�?${words.length} 个单�?..\n`);
     
     let success = 0;
     for (const word of words) {
@@ -228,7 +232,7 @@ async function main() {
         if (result) success++;
     }
     
-    console.log(`\n完成！成功 ${success}/${words.length}`);
+    console.log(`\n完成！成�?${success}/${words.length}`);
 }
 
 main().catch(console.error);

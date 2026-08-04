@@ -3,7 +3,11 @@ require('dotenv').config();
 const https = require('https');
 const { execSync } = require('child_process');
 
-const APP_ID = process.env.FEISHU_APP_ID || 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('´íÎó£ºÈ±ÉÙ FEISHU_APP_ID »·¾³±äÁ¿');
+    process.exit(1);
+}
 const APP_SECRET = process.env.FEISHU_APP_SECRET || 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -55,9 +59,9 @@ function translateWithMiniMax(text) {
 }
 
 async function main() {
-    console.log('è¯»å–å•è¯è¡¨...\n');
+    console.log('è¯»å–å•è¯è¡?..\n');
     const records = await getRecords();
-    console.log(`å…± ${records.length} æ¡è®°å½•\n`);
+    console.log(`å…?${records.length} æ¡è®°å½•\n`);
     
     let updated = 0;
     let skipped = 0;
@@ -85,7 +89,7 @@ async function main() {
         
         if (cn) {
             await updateRecord(record.record_id, { CN_Meaning: cn });
-            console.log(`  â†’ ${cn}`);
+            console.log(`  â†?${cn}`);
             updated++;
         } else {
             console.log(`  å¤±è´¥`);
@@ -94,7 +98,7 @@ async function main() {
         await new Promise(r => setTimeout(r, 500));
     }
     
-    console.log(`\nå®Œæˆï¼æ›´æ–° ${updated}ï¼Œè·³è¿‡ ${skipped}`);
+    console.log(`\nå®Œæˆï¼æ›´æ–?${updated}ï¼Œè·³è¿?${skipped}`);
 }
 
 main().catch(console.error);

@@ -1,6 +1,10 @@
 const https = require('https');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('����ȱ�� FEISHU_APP_ID ��������');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const WORD_TABLE = { appToken: 'BWhIb2hjaaDQHdsNhWRcPluBncg', tableId: 'tblyMh69dws6ty6n' };
 
@@ -78,7 +82,7 @@ async function main() {
     console.log('补全单词释义...\n');
     
     const records = await getRecords();
-    console.log(`共 ${records.length} 条记录\n`);
+    console.log(`�?${records.length} 条记录\n`);
     
     let updated = 0;
     let skipped = 0;
@@ -110,7 +114,7 @@ async function main() {
         await new Promise(r => setTimeout(r, 300));
     }
     
-    console.log(`\n完成！更新 ${updated} 条，跳过 ${skipped} 条，失败 ${failed} 条`);
+    console.log(`\n完成！更�?${updated} 条，跳过 ${skipped} 条，失败 ${failed} 条`);
 }
 
 main().catch(console.error);

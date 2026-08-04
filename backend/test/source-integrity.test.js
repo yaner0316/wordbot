@@ -165,6 +165,21 @@ test('assessment record lookup uses quoted Feishu filter fields', () => {
     assert.ok(lookupSource.includes("field_name: 'test_time'"));
 });
 
+test('formal Feishu quiz cannot fall through to live generation', () => {
+    const start = feishuSource.indexOf('async function generateQuiz(userId');
+    const end = feishuSource.indexOf('async function submitAnswers', start);
+    assert.ok(start >= 0 && end > start);
+    const generateQuizSource = feishuSource.slice(start, end);
+
+    assert.match(
+        generateQuizSource,
+        /\r?\n    }\r?\n    if \(!shouldAllowLiveQuizFallback\(\{[\s\S]*?mode: assessmentMode,[\s\S]*?\}\)\) \{[\s\S]*?\r?\n    const liveGenerationStarted/,
+        'formal cache-only policy must guard every path before live generation starts'
+    );
+    assert.ok(generateQuizSource.includes("code: 'QUESTION_CACHE_NOT_READY'"));
+    assert.ok(generateQuizSource.includes('fallbackUsed: false'));
+});
+
 test('live quiz generation removes English-definition slots for junior high', () => {
     assert.ok(
         feishuSource.includes('function getPrimaryQuizTypeSlots(level)'),

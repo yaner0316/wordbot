@@ -1,6 +1,10 @@
 const https = require('https');
 
-const APP_ID = 'cli_a97e125f0ab89cb5';
+const APP_ID = process.env.FEISHU_APP_ID;
+if (!APP_ID) {
+    console.error('错误：缺少 FEISHU_APP_ID 环境变量');
+    process.exit(1);
+}
 const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
 const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
 

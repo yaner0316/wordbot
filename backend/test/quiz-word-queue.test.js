@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildQuizWordQueue, buildRecentQuestionTextsByWord, selectCachedQuestionsForWordQueue } = require('../quiz-word-queue');
+const {
+    buildQuizWordQueue,
+    buildRecentQuestionTextsByWord,
+    countEligibleReadyMeaningsByLevel,
+    selectCachedQuestionsForWordQueue,
+} = require('../quiz-word-queue');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse('2026-07-15T04:00:00.000Z');
@@ -46,6 +51,19 @@ function cache(index, overrides = {}) {
     };
 }
 
+function cacheVariant(wordIndex, variantSlot, overrides = {}) {
+    return cache(`${wordIndex}-${variantSlot}`, {
+        fields: {
+            word_record_id: `rec-${wordIndex}`,
+            word: `word-${wordIndex}`,
+            variant_slot: variantSlot,
+            question_fingerprint: `fp-${wordIndex}-${variantSlot}`,
+            question_text: `Variant ${variantSlot} sentence for word-${wordIndex}.`,
+            ...overrides,
+        },
+    });
+}
+
 function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct = false, answer = 'B|sure' } = {}) {
     return {
         fields: {
@@ -80,7 +98,7 @@ test('word queue prioritizes unmastered touched words and fills with earliest un
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
-test('word queue skips all migrated records for a word already attempted today', () => {
+test('word queue excludes meanings answered correctly today and keeps wrong meanings retryable', () => {
     const wordRecords = Array.from({ length: 100 }, (_, index) => word(index + 1));
     wordRecords[1].fields.Word = wordRecords[0].fields.Word;
     const cacheRows = Array.from({ length: 100 }, (_, index) => cache(index + 1));
@@ -100,7 +118,7 @@ test('word queue skips all migrated records for a word already attempted today',
         minAgeMs: 0,
     });
 
-    assert.deepEqual(queue, ['rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20']);
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17']);
 });
 
 test('cached question selection chooses a different primary variant after the previous normal question', () => {
@@ -334,4 +352,177 @@ test('cached question selection does not backfill bad ready rows outside the que
 
     assert.equal(selected.length, 8);
     assert.equal(selected.some(question => question.word === 'genaine'), false);
+});
+
+test('word queue excludes only the answered meaning and keeps another meaning with the same spelling', () => {
+    const wordRecords = Array.from({ length: 12 }, (_, index) => word(index + 1));
+    wordRecords[0].fields.Word = 'bank';
+    wordRecords[1].fields.Word = 'bank';
+    const cacheRows = Array.from({ length: 12 }, (_, index) => cache(index + 1));
+    cacheRows[0].fields.word = 'bank';
+    cacheRows[1].fields.word = 'bank';
+    const assessmentRecords = [
+        assessment('rec-1', { testId: 'real-today', time: TODAY, correct: true, answer: 'A|sure' }),
+    ];
+    assessmentRecords[0].fields.word = 'bank';
+
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows,
+        assessmentRecords,
+        userId: 'student',
+        level: LEVEL,
+        limit: 3,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-2', 'rec-3', 'rec-4']);
+});
+
+test('review and empty submissions do not exclude a meaning from the formal queue', () => {
+    const wordRecords = Array.from({ length: 12 }, (_, index) => word(index + 1));
+    const cacheRows = Array.from({ length: 12 }, (_, index) => cache(index + 1));
+    const reviewCorrect = assessment('rec-1', {
+        testId: 'real-review-source-round-1',
+        time: TODAY,
+        correct: true,
+        answer: 'A|sure',
+    });
+    reviewCorrect.fields.assessment_kind = 'review';
+    const empty = assessment('rec-2', {
+        testId: 'real-unsubmitted',
+        time: TODAY,
+        correct: false,
+        answer: '',
+    });
+    empty.fields.is_correct = '';
+
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows,
+        assessmentRecords: [reviewCorrect, empty],
+        userId: 'student',
+        level: LEVEL,
+        limit: 3,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3']);
+});
+
+test('word queue keeps a meaning retryable after a submitted wrong answer today', () => {
+    const wordRecords = Array.from({ length: 12 }, (_, index) => word(index + 1));
+    const cacheRows = Array.from({ length: 12 }, (_, index) => cache(index + 1));
+    const assessmentRecords = [
+        assessment('rec-1', { testId: 'real-today', time: TODAY, correct: false, answer: 'B|sure' }),
+    ];
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows,
+        assessmentRecords,
+        userId: 'student',
+        level: LEVEL,
+        limit: 3,
+        now: NOW,
+        minAgeMs: 0,
+    });
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3']);
+});
+
+test('eligible ready meaning count requires two active distinct ready variants', () => {
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1), word(2)],
+        cacheRows: [
+            cacheVariant(1, 1),
+            cacheVariant(1, 2),
+            cacheVariant(2, 1),
+            cacheVariant(2, 2, { cache_state: 'retired' }),
+        ],
+        assessmentRecords: [],
+        userId: 'student',
+        levels: [LEVEL],
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(counts, { [LEVEL]: 1 });
+});
+
+test('eligible ready meaning count excludes variants that are not available yet', () => {
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1)],
+        cacheRows: [
+            cacheVariant(1, 1),
+            cacheVariant(1, 2, {
+                cache_state: 'reserved_next_day',
+                available_from: new Date(NOW + DAY).toISOString(),
+            }),
+        ],
+        assessmentRecords: [],
+        userId: 'student',
+        levels: [LEVEL],
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.equal(counts[LEVEL], 0);
+});
+
+test('eligible ready meaning count is separated by learning level', () => {
+    const otherLevel = 'other';
+    const secondWord = word(2);
+    secondWord.fields.Level = otherLevel;
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1), secondWord],
+        cacheRows: [
+            cacheVariant(1, 1),
+            cacheVariant(1, 2),
+            cacheVariant(2, 1, { level: otherLevel }),
+            cacheVariant(2, 2, { level: otherLevel }),
+        ],
+        assessmentRecords: [],
+        userId: 'student',
+        levels: [LEVEL, otherLevel],
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(counts, { [LEVEL]: 1, [otherLevel]: 1 });
+});
+
+test('eligible ready meaning count enforces the formal cooldown', () => {
+    const recentWord = word(1);
+    recentWord.fields.record_time = NOW - (18 * 60 * 60 * 1000) + 1;
+    recentWord.created_time = recentWord.fields.record_time;
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [recentWord],
+        cacheRows: [cacheVariant(1, 1), cacheVariant(1, 2)],
+        assessmentRecords: [],
+        userId: 'student',
+        levels: [LEVEL],
+        now: NOW,
+        minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.equal(counts[LEVEL], 0);
+});
+
+test('eligible ready meaning count excludes mastered and correct-today meanings', () => {
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1), word(2), word(3)],
+        cacheRows: [1, 2, 3].flatMap(index => [cacheVariant(index, 1), cacheVariant(index, 2)]),
+        assessmentRecords: [
+            assessment('rec-1', { testId: 'real-old-1', time: NOW - (3 * DAY), correct: true }),
+            assessment('rec-1', { testId: 'real-old-2', time: NOW - (2 * DAY), correct: true }),
+            assessment('rec-2', { testId: 'real-today', time: NOW, correct: true }),
+        ],
+        userId: 'student',
+        levels: [LEVEL],
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.equal(counts[LEVEL], 1);
 });

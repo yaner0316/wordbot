@@ -88,6 +88,7 @@ function createApp({
     verifyParentLogin,
     setParentCredentials,
     resetChildPassword,
+    getActiveQuizSession,
     createReviewRound,
     prebuildWrongQuestionCache,
     getActiveReviewRound,
@@ -171,7 +172,22 @@ function createApp({
                 const { user } = req.query;
                 if (!user) return res.status(400).json({ error: '缂哄皯鐢ㄦ埛ID' });
                 const session = await getActiveQuizSession(user);
-                res.json(session ? { active: true, testId: session.test_id, questions: session.questions, progress: session.progress } : { active: false });
+                if (!session) return res.json({ active: false });
+                const questions = Array.isArray(session.questions) ? session.questions : [];
+                res.json({
+                    active: true,
+                    testId: session.test_id,
+                    source: 'question_cache',
+                    mode: 'real',
+                    diagnostics: {
+                        fallbackUsed: false,
+                        resumed: true,
+                        requiredCount: 10,
+                        readyCount: questions.length,
+                    },
+                    questions,
+                    progress: session.progress,
+                });
             } catch (error) {
                 res.status(500).json({ error: error.message });
             }

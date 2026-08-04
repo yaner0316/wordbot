@@ -2,7 +2,8 @@ function shouldRunAiQuizAudit({ enabled, hasApiKey, questionCount }) {
     return Boolean(enabled && hasApiKey && questionCount > 0);
 }
 
-function shouldAllowLiveQuizFallback({ cacheConfigured, flag }) {
+function shouldAllowLiveQuizFallback({ cacheConfigured, flag, mode = 'real' }) {
+    if (String(mode || '').trim().toLowerCase() === 'real') return false;
     if (!cacheConfigured) return true;
     if (flag === '0') return false;
     return true;

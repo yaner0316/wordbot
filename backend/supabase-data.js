@@ -20,6 +20,15 @@ const {
 const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
+const { fingerprintQuestion } = require('./question-generation-service');
+const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
+const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
+const { countEligibleReadyMeaningsByLevel } = require('./quiz-word-queue');
+const {
+    toFeishuWordRecord,
+    toFeishuAssessmentRecord,
+    toFeishuCacheRow,
+} = require('./quiz-adapter');
 const { translateSupabaseWords } = require('./supabase-translations');
 const {
     DEFAULT_LEARNING_LEVEL,
@@ -163,6 +172,10 @@ function hasWholeWord(context, word) {
 
 function blankWordInContext(context, word) {
     return String(context || '').replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i'), '_____');
+}
+
+function normalizeQuestionStem(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function shuffled(values) {
@@ -553,9 +566,49 @@ async function getQuestionCacheStatusWithClient(client, username) {
         'getQuestionCacheStatus'
     );
     const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    const [wordRows, assessmentRows] = await Promise.all([
+        getWordsForUserWithClient(client, username),
+        getAssessmentsForUserWithClient(client, username),
+    ]);
+    const sourceRecordIdByWordId = new Map(
+        wordRows.map(row => [String(row.id || ''), String(row.feishu_record_id || row.id || '')])
+    );
+    const wordsById = new Map(wordRows.map(row => [String(row.id || ''), row]));
+    const wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username: user.username }));
+    const assessmentRecords = assessmentRows.map(row => toFeishuAssessmentRecord(row, {
+        username: user.username,
+        sourceRecordIdByWordId,
+    }));
+    const cacheRecords = rows.map(row => {
+        const word = wordsById.get(String(row.word_id || ''));
+        return toFeishuCacheRow({
+            ...row,
+            word: row.word || word?.word || '',
+            source_word_record_id: row.source_word_record_id || word?.feishu_record_id || word?.id || row.word_id,
+        }, { username: user.username });
+    });
+    const now = Date.now();
+    const eligibleReadyMeaningsByLevel = countEligibleReadyMeaningsByLevel({
+        cacheRows: cacheRecords,
+        wordRecords,
+        assessmentRecords,
+        userId: user.username,
+        levels: LEVELS,
+        now,
+        minAgeMs: WORD_QUIZ_COOLDOWN_MS,
+    });
+    const jobRows = await fetchAllRows(
+        () => client.from('question_generation_jobs').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+        'getQuestionCacheStatus.jobs'
+    );
+    const generation = summarizeQuestionGenerationJobs(jobRows);
+
     return {
         configured: true,
         ...summarizeCacheStatus(statusRows),
+        eligibleReadyMeanings: Number(eligibleReadyMeaningsByLevel[normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL)] || 0),
+        eligibleReadyMeaningsByLevel,
+        generation,
     };
 }
 
@@ -660,6 +713,15 @@ async function getQuestionCacheDiagnosticsWithClient(client, username) {
         () => client.from('users').select('id, username, username_key, learning_level'),
         'getQuestionCacheDiagnostics.users'
     );
+    const jobRows = await fetchAllRows(
+        () => {
+            let query = client.from('question_generation_jobs').select('*').order('created_at', { ascending: true });
+            if (user) query = query.eq('user_id', user.id);
+            return query;
+        },
+        'getQuestionCacheDiagnostics.jobs'
+    );
+    const generation = summarizeQuestionGenerationJobs(jobRows);
     const usersById = new Map(userRows.map(row => [row.id, row]));
     const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
     const groups = new Map();
@@ -695,14 +757,14 @@ async function getQuestionCacheDiagnosticsWithClient(client, username) {
             ...group,
             selectedReady: Math.min(group.totalReady, 10),
             quotaCanBeMet: group.totalReady >= 10,
-            willUseFallback: group.totalReady < 10,
+            willUseFallback: false,
         }))
         .sort((a, b) =>
             String(a.userId).localeCompare(String(b.userId)) ||
             String(a.level).localeCompare(String(b.level)) ||
             String(a.roundType).localeCompare(String(b.roundType))
         );
-    return { configured: true, results };
+    return { configured: true, results, generation };
 }
 
 async function getQuestionCache(username, level, roundType) {
@@ -779,20 +841,17 @@ function rotateFallbackDistractors(pool, word) {
 }async function buildType3CacheQuestionRowsForWord() {
     return [];
 }
-async function buildType1CacheRow({ user, word, level, context, slot, now, translateWords }) {
+function countDistractorOverlap(left, right) {
+    const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
+    return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
+}
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     const blankedContext = blankWordInContext(context, wordText);
-    const levelFallbackDistractors = level === ELEMENTARY_LEVEL
-        ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
-        : [];
-    const distractors = uniqueWords([
-        ...levelFallbackDistractors,
-        ...(word.distractors || []),
-        ...(word.old_distractors || []),
-    ], wordText).slice(0, 3);
-    if (distractors.length < 3) return null;
-    const optionWords = shuffled([wordText, ...distractors]);
+    const approvedDistractors = uniqueWords(distractors || [], wordText).slice(0, 3);
+    if (approvedDistractors.length < 3) return null;
+    const optionWords = shuffled([wordText, ...approvedDistractors]);
     const letters = ['A', 'B', 'C', 'D'];
     const answer = letters[optionWords.indexOf(wordText)];
     const options = optionWords.map((option, index) => letters[index] + '. ' + option);
@@ -819,12 +878,13 @@ async function buildType1CacheRow({ user, word, level, context, slot, now, trans
         option_meanings: optionMeanings,
         correct_meaning: optionMeanings[optionWords.indexOf(wordText)] || String(meaning || ''),
         ai_audit_status: 'skipped',
-        source_version: 'supabase-variant-v1',
+        source_version: 'supabase-contextual-variant-v2',
         used_count: 0,
         generated_at: toIsoString(now),
         last_used_at: null,
         ...buildInitialVariantMetadata({ slot, now }),
     };
+    row.question_fingerprint = fingerprintQuestion(row, word.id);
     return getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length
         ? null
         : row;
@@ -844,29 +904,63 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
     let generatedFirstContext = false;
-    if (!hasWholeWord(firstContext, wordText) && generateContext && process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT === '1') {
+    if (!hasWholeWord(firstContext, wordText) && typeof generateContext === 'function') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
         generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
     if (!hasWholeWord(firstContext, wordText)) return [];
-    const shouldGenerateSecondContext = Boolean(generateContext && generatedFirstContext);
+    const shouldGenerateSecondContext = typeof generateContext === 'function';
     let secondContext = firstContext;
     if (shouldGenerateSecondContext) {
-        const firstContextKey = String(firstContext || '').trim().toLowerCase();
+        const firstContextKey = normalizeQuestionStem(firstContext);
         secondContext = '';
-        for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
+        for (let attempt = 0; attempt < 3 && !secondContext; attempt++) {
             const candidate = await generateContext(wordText, meaning, level, firstContext).catch(() => '');
-            const candidateKey = String(candidate || '').trim().toLowerCase();
+            const candidateKey = normalizeQuestionStem(candidate);
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
         }
     }
-    const duplicateGeneratedContext = shouldGenerateSecondContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
+    const duplicateGeneratedContext = shouldGenerateSecondContext && normalizeQuestionStem(secondContext) === normalizeQuestionStem(firstContext);
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
-    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
-    if (!shouldGenerateSecondContext) return first ? [first] : [];
-    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
+    if (!shouldGenerateSecondContext) return [];
+
+    const levelReferenceDistractors = level === ELEMENTARY_LEVEL
+        ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
+        : [];
+    const candidateDistractors = uniqueWords([
+        ...levelReferenceDistractors,
+        ...(cacheWord.distractors || []),
+        ...(cacheWord.old_distractors || []),
+    ], wordText).slice(0, 8);
+    const generateForContext = async (context, excludedDistractors = []) => {
+        if (typeof generateDistractors !== 'function') return null;
+        const questionStem = blankWordInContext(context, wordText);
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const generated = await generateDistractors({
+                word: wordText,
+                meaning,
+                level,
+                context: questionStem,
+                candidates: candidateDistractors,
+                excludedDistractors: [...excludedDistractors],
+            }).catch(() => null);
+            const normalized = uniqueWords(generated || [], wordText).slice(0, 3);
+            if (normalized.length !== 3) continue;
+            if (countDistractorOverlap(normalized, excludedDistractors) > 1) continue;
+            return normalized;
+        }
+        return null;
+    };
+
+    const firstDistractors = await generateForContext(firstContext);
+    if (!firstDistractors) return [];
+    const secondDistractors = await generateForContext(secondContext, firstDistractors);
+    if (!secondDistractors) return [];
+
+    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords });
+    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords });
     if (!first) return [];
-    return second ? [first, second] : [first];
+    return second ? [first, second] : [];
 }
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
     const user = await getUserByUsernameWithClient(client, username);
@@ -1320,7 +1414,10 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     }
 }
 
-async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}) {
+async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}, distractorGenerator, translator, contextGenerator) {
+    const buildContext = typeof contextGenerator === 'function' ? contextGenerator : generateReplacementContextWithAI;
+    const buildDistractors = typeof distractorGenerator === 'function' ? distractorGenerator : generateSupabaseDistractors;
+    const translateOptions = typeof translator === 'function' ? translator : translateSupabaseWords;
     if (!userId || !testId || !Array.isArray(result?.results)) return { prepared: 0, skipped: true, source: 'supabase' };
     const usedRecordIds = new Set(result.results.filter(item => item?.correct === false).map(item => String(item?.recordId || '').trim()).filter(Boolean));
     if (!usedRecordIds.size) return { prepared: 0, skipped: true, source: 'supabase' };
@@ -1337,14 +1434,15 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
         const level = normalizeOptionalLearningLevel(assessment.level || word.level);
         let context = '';
         for (let attempt = 0; attempt < 2 && !context; attempt++) {
-            context = await generateReplacementContextWithAI(word.word, word.meaning_zh || word.meaning_en, level, assessment.question_text).catch(() => '');
+            context = await buildContext(word.word, word.meaning_zh || word.meaning_en, level, assessment.question_text).catch(() => '');
         }
         if (!context) continue;
         const replacementWord = { ...word, context_en: context, context_zh: null };
         const candidates = await buildCacheQuestionRowsForWord({
             user, word: replacementWord, level, roundType: 'primary',
-            generateDistractors: input => generateSupabaseDistractors(input),
-            translateWords: words => translateSupabaseWords(words),
+            generateDistractors: input => buildDistractors(input),
+            translateWords: words => translateOptions(words),
+            generateContext: buildContext,
         });
         const primary = candidates.find(row => row.round_type === 'primary' && String(row.question_text || '').trim().toLowerCase() !== String(assessment.question_text || '').trim().toLowerCase());
         if (primary) {
@@ -1480,16 +1578,16 @@ async function applyQuizCacheLifecycleWithClient(client, { userId, questions = [
             .maybeSingle();
         ensureNoError(reservedError, 'applyQuizCacheLifecycle.findReserved');
         if (!reserved) continue;
-        const { error: retireError } = await client
-            .from('question_cache')
-            .update({ cache_state: 'retired' })
-            .eq('id', current.id);
-        ensureNoError(retireError, 'applyQuizCacheLifecycle.retireCurrent');
         const { error: promoteError } = await client
             .from('question_cache')
             .update({ cache_state: 'active', available_from: null })
             .eq('id', reserved.id);
         ensureNoError(promoteError, 'applyQuizCacheLifecycle.promoteReserved');
+        const { error: retireError } = await client
+            .from('question_cache')
+            .update({ cache_state: 'retired' })
+            .eq('id', current.id);
+        ensureNoError(retireError, 'applyQuizCacheLifecycle.retireCurrent');
     }
     return { updated: true };
 }
@@ -1602,6 +1700,19 @@ async function addWordWithClient(client, input) {
             .insert(junctionRows);
         ensureNoError(junctionError, 'addWord.wordPartsOfSpeech');
     }
+    const generationJob = {
+        user_id: user.id,
+        word_id: data.id,
+        status: 'pending',
+        reason: 'word_entry',
+        attempt_count: 0,
+        next_attempt_at: row.entered_at,
+    };
+    const { error: generationJobError } = await client
+        .from('question_generation_jobs')
+        .upsert(generationJob, { onConflict: 'word_id' });
+    ensureNoError(generationJobError, 'addWord.questionGenerationJob');
+
     return data;
 }
 
@@ -1909,7 +2020,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getActiveReviewRound: input => getActiveReviewRoundWithClient(client, input),
         deferReviewRound: input => deferReviewRoundWithClient(client, input),
         getReviewSummary: input => getReviewSummaryWithClient(client, input),
-        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input),
+        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input, distractorGenerator, translator, generateContext),
         submitReviewRound: input => submitReviewRoundWithClient(client, input),
     };
 }
@@ -1920,6 +2031,8 @@ module.exports = {
     name: 'supabase',
     canonicalUsernameKey,
     createSupabaseDataAdapter,
+    buildCacheQuestionRowsForWord,
+    generateReplacementContextWithAI,
     getUserByUsername: defaultAdapter.getUserByUsername,
     getStats: defaultAdapter.getStats,
     getAllStats: defaultAdapter.getAllStats,

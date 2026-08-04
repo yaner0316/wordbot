@@ -8,12 +8,11 @@ const {
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
+const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
 const { generateElementaryTemplateContext } = require('./elementary-context');
-const {
-    evaluateWordMastery,
-    normalizeSubmittedAnswer,
-} = require('./mastery-evidence');
+const { normalizeSubmittedAnswer } = require('./mastery-evidence');
+const { evaluateMeaning } = require('./mastery-service');
 
 const ANSWER_LETTERS = ['A', 'B', 'C', 'D'];
 
@@ -85,6 +84,8 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
         fields: {
             user: row.username || username,
             test_id: row.test_id || '',
+            assessment_kind: row.assessment_kind || '',
+            is_real_assessment: row.is_real_assessment !== false,
             record_id: wordRecordId,
             word: row.word_snapshot || '',
             question_type: row.question_type || '',
@@ -120,6 +121,7 @@ function toFeishuCacheRow(row, { username }) {
             level: normalizeOptionalLevel(row.level),
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
+            question_fingerprint: row.question_fingerprint || '',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),
             available_from: row.available_from || null,
@@ -279,6 +281,7 @@ async function generateQuizWithDataSource({
     if (!username) throw new Error('USERNAME_REQUIRED');
     if (!level) throw new Error('LEVEL_REQUIRED');
     const effectiveLevel = normalizeLevel(level);
+    const effectiveMinAgeMs = mode === 'real' ? WORD_QUIZ_COOLDOWN_MS : minAgeMs;
 
     const user = dataSource.getUserByUsername
         ? await dataSource.getUserByUsername(username)
@@ -307,7 +310,7 @@ async function generateQuizWithDataSource({
         level: effectiveLevel,
         limit: wordRecords.length || limit,
         now,
-        minAgeMs,
+        minAgeMs: effectiveMinAgeMs,
     });
 
     const questions = selectCachedQuestionsForWordQueue({
@@ -318,6 +321,7 @@ async function generateQuizWithDataSource({
         roundType,
         limit,
         recentQuestionTextsByWord: buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername }),
+        now,
     }).map((question) => ({
         ...question,
         correctAnswer: question.answer,
@@ -340,6 +344,31 @@ async function generateQuizWithDataSource({
     };
 
     if (questions.length < limit) {
+    if (mode === 'real' && questions.length < limit) {
+        const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
+        return {
+            error: code === 'QUESTION_POOL_EXHAUSTED'
+                ? 'Question pool exhausted for this level.'
+                : 'Question cache is still preparing.',
+            code,
+            source: 'question_cache',
+            level: effectiveLevel,
+            diagnostics: {
+                ...diagnostics,
+                state: code === 'QUESTION_POOL_EXHAUSTED' ? 'exhausted' : 'building',
+                readyCount: questions.length,
+                eligibleReadyMeanings: questions.length,
+                requiredCount: limit,
+                fallbackUsed: false,
+                fallbackQuestionCount: 0,
+                finalQuestionCount: 0,
+            },
+            readyCount: questions.length,
+            requiredCount: limit,
+            questions: [],
+        };
+    }
+
         const fallbackQueue = [...new Set([
             ...queue,
             ...wordRecords
@@ -553,16 +582,15 @@ async function submitQuizWithDataSource({
             toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId })
         );
         for (const { question, sourceWordRecordId, isCorrect } of pendingSubmissions) {
-            const sameSpelling = wordRecords.filter(record =>
-                String(record.fields?.Word || '').trim().toLowerCase() === String(question.word || '').trim().toLowerCase()
+            if (!sourceWordRecordId) continue;
+            const meaningRecords = assessmentRecords.filter(record =>
+                String(record.fields?.record_id || '').trim() === sourceWordRecordId
             );
-            const recordIds = sameSpelling.map(record => record.record_id).filter(Boolean);
-            if (!recordIds.length) continue;
-            const evaluation = evaluateWordMastery(recordIds, assessmentRecords, value =>
+            const evaluation = evaluateMeaning(meaningRecords, value =>
                 isCorrectAssessmentValue(value)
             );
-            const meaningProgress = evaluation.meanings?.[sourceWordRecordId] || { stage: isCorrect ? 'consolidating' : 'recognized' };
-            const nextStatus = evaluation.mastered ? 'mastered' : masteryStageToStatus(meaningProgress.stage);
+            const fallbackStage = isCorrect ? 'consolidating' : 'recognized';
+            const nextStatus = masteryStageToStatus(evaluation.stage || fallbackStage);
             await dataSource.updateWordMastery(username, question.word, nextStatus, { sourceWordRecordId });
         }
     }

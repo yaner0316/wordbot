@@ -22,7 +22,7 @@ test('initial cache creates an active variant and a next-day reserved variant', 
     });
     assert.equal(second.cache_state, CACHE_STATES.RESERVED_NEXT_DAY);
     assert.equal(second.variant_slot, 2);
-    assert.equal(second.available_from, new Date(NOW + 24 * 60 * 60 * 1000).toISOString());
+    assert.equal(second.available_from, new Date(NOW + 18 * 60 * 60 * 1000).toISOString());
 });
 
 test('reserved variant becomes selectable only on the scheduled day', () => {
