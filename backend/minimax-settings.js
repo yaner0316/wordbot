@@ -3,6 +3,7 @@
 const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7';
 const DEFAULT_MINIMAX_MAX_TOKENS = 2048;
 const DEFAULT_MINIMAX_TIMEOUT_MS = 30000;
+const MAX_MINIMAX_TIMEOUT_MS = 45000;
 const DEFAULT_MINIMAX_TEMPERATURE = 0.1;
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -15,7 +16,7 @@ function getMiniMaxSettings(env = process.env) {
     return {
         model: String(env.MINIMAX_MODEL || DEFAULT_MINIMAX_MODEL).trim() || DEFAULT_MINIMAX_MODEL,
         maxTokens: boundedInteger(env.MINIMAX_MAX_TOKENS, DEFAULT_MINIMAX_MAX_TOKENS, 512, 8192),
-        timeoutMs: boundedInteger(env.MINIMAX_TIMEOUT_MS, DEFAULT_MINIMAX_TIMEOUT_MS, 5000, 120000),
+        timeoutMs: boundedInteger(env.MINIMAX_TIMEOUT_MS, DEFAULT_MINIMAX_TIMEOUT_MS, 5000, MAX_MINIMAX_TIMEOUT_MS),
         temperature: DEFAULT_MINIMAX_TEMPERATURE,
     };
 }

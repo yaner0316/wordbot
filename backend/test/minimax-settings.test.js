@@ -21,7 +21,7 @@ test('MiniMax settings give offline generation enough bounded reasoning budget',
     });
 });
 
-test('MiniMax model and budgets are configurable without code changes', () => {
+test('MiniMax model and budgets are configurable within lease-safe bounds', () => {
     const settings = getMiniMaxSettings({
         MINIMAX_MODEL: 'MiniMax-M2.5',
         MINIMAX_MAX_TOKENS: '3072',
@@ -30,7 +30,7 @@ test('MiniMax model and budgets are configurable without code changes', () => {
     assert.deepEqual(settings, {
         model: 'MiniMax-M2.5',
         maxTokens: 3072,
-        timeoutMs: 60000,
+        timeoutMs: 45000,
         temperature: 0.1,
     });
 });
