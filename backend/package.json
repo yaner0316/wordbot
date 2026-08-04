@@ -6,7 +6,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "test": "node --test --test-concurrency=1 --test-isolation=none \"test/**/*.test.js\"",
     "setup:review-fields": "node setup-review-fields.js",
     "check:env": "node check-env.js"
   },

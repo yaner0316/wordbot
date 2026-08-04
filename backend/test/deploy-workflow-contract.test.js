@@ -7,6 +7,7 @@ const { REQUIRED_ENV } = require('../runtime-health');
 const repoRoot = path.join(__dirname, '..', '..');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'render-deploy.yml');
 const backendLockPath = path.join(repoRoot, 'backend', 'package-lock.json');
+const backendPackagePath = path.join(repoRoot, 'backend', 'package.json');
 const gitignorePath = path.join(repoRoot, '.gitignore');
 
 test('deploy workflow keeps the backend npm lockfile available for cache and npm ci', () => {
@@ -45,5 +46,14 @@ test('cross-repository word input contract uses the workflow-provided Web path',
         source,
         /process\.env\.WORDBOT_WEB_APP_PATH/,
         'word input contract must not depend only on a sibling checkout existing locally'
+    );
+});
+test('backend test command disables flaky Node test-file isolation', () => {
+    const packageJson = JSON.parse(fs.readFileSync(backendPackagePath, 'utf8'));
+
+    assert.match(
+        packageJson.scripts.test,
+        /--test-isolation=none/,
+        'GitHub Actions must avoid Node test-runner child-process serialization failures'
     );
 });
