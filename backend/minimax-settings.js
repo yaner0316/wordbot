@@ -1,6 +1,6 @@
 'use strict';
 
-const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7';
+const DEFAULT_MINIMAX_MODEL = 'MiniMax-M3';
 const DEFAULT_MINIMAX_MAX_TOKENS = 2048;
 const DEFAULT_MINIMAX_TIMEOUT_MS = 30000;
 const MAX_MINIMAX_TIMEOUT_MS = 45000;
@@ -23,12 +23,16 @@ function getMiniMaxSettings(env = process.env) {
 
 function buildMiniMaxRequestBody(prompt, env = process.env) {
     const settings = getMiniMaxSettings(env);
-    return {
+    const body = {
         model: settings.model,
         messages: [{ role: 'user', content: String(prompt || '') }],
         max_tokens: settings.maxTokens,
         temperature: settings.temperature,
     };
+    if (/^MiniMax-M3(?:$|-)/i.test(settings.model)) {
+        body.thinking = { type: 'disabled' };
+    }
+    return body;
 }
 
 module.exports = {
