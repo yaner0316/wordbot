@@ -12,6 +12,7 @@ test('deploy workflow keeps the backend npm lockfile available for cache and npm
     const workflow = fs.readFileSync(workflowPath, 'utf8');
     const gitignore = fs.readFileSync(gitignorePath, 'utf8');
 
+    assert.match(workflow, /node-version:\s*24/);
     assert.match(workflow, /cache-dependency-path:\s*backend\/package-lock\.json/);
     assert.match(workflow, /working-directory:\s*backend/);
     assert.match(workflow, /run:\s*npm ci/);
