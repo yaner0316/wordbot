@@ -1,22 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-// Extract the cooldown logic for testing
-const WORD_QUIZ_COOLDOWN_MS = 18 * 60 * 60 * 1000; // 18 hours
-
-function getWordRecordTimestamp(record) {
-    const recordTime = Number(record?.fields?.record_time || 0);
-    if (Number.isFinite(recordTime) && recordTime > 0) return recordTime;
-    const createdTime = Number(record?.created_time || 0);
-    return Number.isFinite(createdTime) && createdTime > 0 ? createdTime : 0;
-}
-
-function isWordRecordPastQuizCooldown(record, { now = Date.now(), minAgeMs = WORD_QUIZ_COOLDOWN_MS } = {}) {
-    if (!minAgeMs) return true;
-    const timestamp = getWordRecordTimestamp(record);
-    if (!timestamp) return true; // Missing timestamp defaults to past cooldown (CONSERVATIVE: should be false)
-    return now - timestamp >= minAgeMs;
-}
+const {
+    WORD_QUIZ_COOLDOWN_MS,
+    getWordRecordTimestamp,
+    isWordRecordPastQuizCooldown,
+} = require('../quiz-cooldown');
 
 // Test helper to create a word record
 function createWordRecord({ recordTime, createdTime } = {}) {
@@ -73,11 +62,9 @@ test('isWordRecordPastQuizCooldown: record exactly 18 hours old passes', () => {
     assert.strictEqual(isWordRecordPastQuizCooldown(record, { now }), true);
 });
 
-test('isWordRecordPastQuizCooldown: missing timestamp defaults to past cooldown (CURRENT BEHAVIOR)', () => {
-    // This test documents the CURRENT behavior, which is RISKY
-    // A word with missing timestamp can bypass the 18-hour cooldown
+test('isWordRecordPastQuizCooldown: missing timestamp fails closed', () => {
     const record = createWordRecord({});
-    assert.strictEqual(isWordRecordPastQuizCooldown(record), true);
+    assert.strictEqual(isWordRecordPastQuizCooldown(record), false);
 });
 
 test('isWordRecordPastQuizCooldown: minAgeMs=0 disables cooldown', () => {
@@ -109,7 +96,7 @@ test('isWordRecordPastQuizCooldown: future timestamp fails', () => {
 test('isWordRecordPastQuizCooldown: negative timestamp treated as missing', () => {
     const record = createWordRecord({ recordTime: -1000 });
     assert.strictEqual(getWordRecordTimestamp(record), 0);
-    assert.strictEqual(isWordRecordPastQuizCooldown(record), true); // defaults to past cooldown
+    assert.strictEqual(isWordRecordPastQuizCooldown(record), false);
 });
 
 test('isWordRecordPastQuizCooldown: string timestamp parsed correctly', () => {
@@ -130,5 +117,5 @@ test('isWordRecordPastQuizCooldown: very old record passes', () => {
 test('isWordRecordPastQuizCooldown: NaN timestamp treated as missing', () => {
     const record = createWordRecord({ recordTime: NaN });
     assert.strictEqual(getWordRecordTimestamp(record), 0);
-    assert.strictEqual(isWordRecordPastQuizCooldown(record), true);
+    assert.strictEqual(isWordRecordPastQuizCooldown(record), false);
 });

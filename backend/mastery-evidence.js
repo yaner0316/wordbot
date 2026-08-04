@@ -62,9 +62,19 @@ function learningDay(time) {
     }).format(new Date(Number(time)));
 }
 
+function isSubmittedFormalQuiz(record) {
+    const fields = record?.fields || {};
+    const testId = fieldValue(fields.test_id).trim();
+    if (!/^real(?:-|$)/.test(testId) || !isRealAssessment(testId)) return false;
+    if (/^real-review(?:-|$)/.test(testId)) return false;
+    const kind = fieldValue(fields.assessment_kind).trim().toLowerCase();
+    if (kind === 'review' || kind === 'test') return false;
+    return fieldValue(fields.is_correct).trim() !== '';
+}
+
 function evaluateMeaningMastery(records, isCorrectValue) {
     const attempts = records
-        .filter(record => isRealAssessment(fieldValue(record.fields?.test_id)))
+        .filter(isSubmittedFormalQuiz)
         .sort((a, b) => Number(a.fields?.test_time || 0) - Number(b.fields?.test_time || 0));
 
     let lastWrongIndex = -1;
@@ -138,6 +148,7 @@ module.exports = {
     encodeAnswer,
     evaluateMeaningMastery,
     evaluateWordMastery,
+    isSubmittedFormalQuiz,
     normalizeSubmittedAnswer,
     parseStoredAnswer,
 };

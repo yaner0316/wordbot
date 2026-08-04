@@ -97,3 +97,15 @@ test('getQuizCooldownExcludedRecordIds: handles null records', () => {
     const excluded = getQuizCooldownExcludedRecordIds(null, 'testuser');
     assert.strictEqual(excluded.size, 0);
 });
+
+test('isWordRecordPastQuizCooldown: exact 18 hour boundary passes', () => {
+    const now = Date.now();
+    const record = createWordRecord({ recordTime: now - WORD_QUIZ_COOLDOWN_MS });
+    assert.strictEqual(isWordRecordPastQuizCooldown(record, { now }), true);
+});
+
+test('isWordRecordPastQuizCooldown: one millisecond before boundary fails', () => {
+    const now = Date.now();
+    const record = createWordRecord({ recordTime: now - WORD_QUIZ_COOLDOWN_MS + 1 });
+    assert.strictEqual(isWordRecordPastQuizCooldown(record, { now }), false);
+});

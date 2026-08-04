@@ -20,6 +20,15 @@ const {
 const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
+const { fingerprintQuestion } = require('./question-generation-service');
+const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
+const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
+const { countEligibleReadyMeaningsByLevel } = require('./quiz-word-queue');
+const {
+    toFeishuWordRecord,
+    toFeishuAssessmentRecord,
+    toFeishuCacheRow,
+} = require('./quiz-adapter');
 const { translateSupabaseWords } = require('./supabase-translations');
 const {
     DEFAULT_LEARNING_LEVEL,
@@ -553,9 +562,49 @@ async function getQuestionCacheStatusWithClient(client, username) {
         'getQuestionCacheStatus'
     );
     const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    const [wordRows, assessmentRows] = await Promise.all([
+        getWordsForUserWithClient(client, username),
+        getAssessmentsForUserWithClient(client, username),
+    ]);
+    const sourceRecordIdByWordId = new Map(
+        wordRows.map(row => [String(row.id || ''), String(row.feishu_record_id || row.id || '')])
+    );
+    const wordsById = new Map(wordRows.map(row => [String(row.id || ''), row]));
+    const wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username: user.username }));
+    const assessmentRecords = assessmentRows.map(row => toFeishuAssessmentRecord(row, {
+        username: user.username,
+        sourceRecordIdByWordId,
+    }));
+    const cacheRecords = rows.map(row => {
+        const word = wordsById.get(String(row.word_id || ''));
+        return toFeishuCacheRow({
+            ...row,
+            word: row.word || word?.word || '',
+            source_word_record_id: row.source_word_record_id || word?.feishu_record_id || word?.id || row.word_id,
+        }, { username: user.username });
+    });
+    const now = Date.now();
+    const eligibleReadyMeaningsByLevel = countEligibleReadyMeaningsByLevel({
+        cacheRows: cacheRecords,
+        wordRecords,
+        assessmentRecords,
+        userId: user.username,
+        levels: LEVELS,
+        now,
+        minAgeMs: WORD_QUIZ_COOLDOWN_MS,
+    });
+    const jobRows = await fetchAllRows(
+        () => client.from('question_generation_jobs').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+        'getQuestionCacheStatus.jobs'
+    );
+    const generation = summarizeQuestionGenerationJobs(jobRows);
+
     return {
         configured: true,
         ...summarizeCacheStatus(statusRows),
+        eligibleReadyMeanings: Number(eligibleReadyMeaningsByLevel[normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL)] || 0),
+        eligibleReadyMeaningsByLevel,
+        generation,
     };
 }
 
@@ -660,6 +709,15 @@ async function getQuestionCacheDiagnosticsWithClient(client, username) {
         () => client.from('users').select('id, username, username_key, learning_level'),
         'getQuestionCacheDiagnostics.users'
     );
+    const jobRows = await fetchAllRows(
+        () => {
+            let query = client.from('question_generation_jobs').select('*').order('created_at', { ascending: true });
+            if (user) query = query.eq('user_id', user.id);
+            return query;
+        },
+        'getQuestionCacheDiagnostics.jobs'
+    );
+    const generation = summarizeQuestionGenerationJobs(jobRows);
     const usersById = new Map(userRows.map(row => [row.id, row]));
     const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
     const groups = new Map();
@@ -695,14 +753,14 @@ async function getQuestionCacheDiagnosticsWithClient(client, username) {
             ...group,
             selectedReady: Math.min(group.totalReady, 10),
             quotaCanBeMet: group.totalReady >= 10,
-            willUseFallback: group.totalReady < 10,
+            willUseFallback: false,
         }))
         .sort((a, b) =>
             String(a.userId).localeCompare(String(b.userId)) ||
             String(a.level).localeCompare(String(b.level)) ||
             String(a.roundType).localeCompare(String(b.roundType))
         );
-    return { configured: true, results };
+    return { configured: true, results, generation };
 }
 
 async function getQuestionCache(username, level, roundType) {
@@ -825,6 +883,7 @@ async function buildType1CacheRow({ user, word, level, context, slot, now, trans
         last_used_at: null,
         ...buildInitialVariantMetadata({ slot, now }),
     };
+    row.question_fingerprint = fingerprintQuestion(row, word.id);
     return getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length
         ? null
         : row;
@@ -844,17 +903,17 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
     let generatedFirstContext = false;
-    if (!hasWholeWord(firstContext, wordText) && generateContext && process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT === '1') {
+    if (!hasWholeWord(firstContext, wordText) && typeof generateContext === 'function') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
         generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
     if (!hasWholeWord(firstContext, wordText)) return [];
-    const shouldGenerateSecondContext = Boolean(generateContext && generatedFirstContext);
+    const shouldGenerateSecondContext = typeof generateContext === 'function';
     let secondContext = firstContext;
     if (shouldGenerateSecondContext) {
         const firstContextKey = String(firstContext || '').trim().toLowerCase();
         secondContext = '';
-        for (let attempt = 0; attempt < 1 && !secondContext; attempt++) {
+        for (let attempt = 0; attempt < 3 && !secondContext; attempt++) {
             const candidate = await generateContext(wordText, meaning, level, firstContext).catch(() => '');
             const candidateKey = String(candidate || '').trim().toLowerCase();
             if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
@@ -863,10 +922,10 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const duplicateGeneratedContext = shouldGenerateSecondContext && String(secondContext).trim().toLowerCase() === String(firstContext).trim().toLowerCase();
     if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
     const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, slot: 1, now, translateWords });
-    if (!shouldGenerateSecondContext) return first ? [first] : [];
+    if (!shouldGenerateSecondContext) return [];
     const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, slot: 2, now, translateWords });
     if (!first) return [];
-    return second ? [first, second] : [first];
+    return second ? [first, second] : [];
 }
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
     const user = await getUserByUsernameWithClient(client, username);
@@ -1480,16 +1539,16 @@ async function applyQuizCacheLifecycleWithClient(client, { userId, questions = [
             .maybeSingle();
         ensureNoError(reservedError, 'applyQuizCacheLifecycle.findReserved');
         if (!reserved) continue;
-        const { error: retireError } = await client
-            .from('question_cache')
-            .update({ cache_state: 'retired' })
-            .eq('id', current.id);
-        ensureNoError(retireError, 'applyQuizCacheLifecycle.retireCurrent');
         const { error: promoteError } = await client
             .from('question_cache')
             .update({ cache_state: 'active', available_from: null })
             .eq('id', reserved.id);
         ensureNoError(promoteError, 'applyQuizCacheLifecycle.promoteReserved');
+        const { error: retireError } = await client
+            .from('question_cache')
+            .update({ cache_state: 'retired' })
+            .eq('id', current.id);
+        ensureNoError(retireError, 'applyQuizCacheLifecycle.retireCurrent');
     }
     return { updated: true };
 }
@@ -1602,6 +1661,19 @@ async function addWordWithClient(client, input) {
             .insert(junctionRows);
         ensureNoError(junctionError, 'addWord.wordPartsOfSpeech');
     }
+    const generationJob = {
+        user_id: user.id,
+        word_id: data.id,
+        status: 'pending',
+        reason: 'word_entry',
+        attempt_count: 0,
+        next_attempt_at: row.entered_at,
+    };
+    const { error: generationJobError } = await client
+        .from('question_generation_jobs')
+        .upsert(generationJob, { onConflict: 'word_id' });
+    ensureNoError(generationJobError, 'addWord.questionGenerationJob');
+
     return data;
 }
 
@@ -1920,6 +1992,8 @@ module.exports = {
     name: 'supabase',
     canonicalUsernameKey,
     createSupabaseDataAdapter,
+    buildCacheQuestionRowsForWord,
+    generateReplacementContextWithAI,
     getUserByUsername: defaultAdapter.getUserByUsername,
     getStats: defaultAdapter.getStats,
     getAllStats: defaultAdapter.getAllStats,

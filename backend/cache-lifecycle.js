@@ -1,4 +1,4 @@
-const DAY_MS = 24 * 60 * 60 * 1000;
+const VARIANT_READY_DELAY_MS = 18 * 60 * 60 * 1000;
 
 const CACHE_STATES = Object.freeze({
     ACTIVE: 'active',
@@ -16,7 +16,7 @@ function buildInitialVariantMetadata({ slot, now = Date.now() }) {
     return {
         cache_state: normalizedSlot === 1 ? CACHE_STATES.ACTIVE : CACHE_STATES.RESERVED_NEXT_DAY,
         variant_slot: normalizedSlot,
-        available_from: iso(Number(now) + (normalizedSlot === 2 ? DAY_MS : 0)),
+        available_from: iso(Number(now) + (normalizedSlot === 2 ? VARIANT_READY_DELAY_MS : 0)),
     };
 }
 
@@ -45,7 +45,7 @@ function planWrongVariantReplacement({ currentCacheId, replacementCacheId }) {
 }
 
 module.exports = {
-    DAY_MS,
+    VARIANT_READY_DELAY_MS,
     CACHE_STATES,
     buildInitialVariantMetadata,
     isCacheVariantSelectable,

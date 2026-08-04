@@ -24,7 +24,8 @@ function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorre
 
 // Helper to get timestamp for a specific date
 function getTimestamp(year, month, day, hour = 10) {
-    return new Date(year, month - 1, day, hour, 0, 0).getTime();
+    // Shanghai is UTC+8 and does not observe daylight saving time.
+    return Date.UTC(year, month - 1, day, hour - 8, 0, 0);
 }
 
 test('evaluateMeaning: no attempts returns unseen', () => {
@@ -123,4 +124,26 @@ test('getWordTimestamp: falls back to created_time', () => {
 test('getWordTimestamp: returns 0 when both missing', () => {
     const record = {};
     assert.strictEqual(getWordTimestamp(record), 0);
+});
+
+test('evaluateMeaning: a wrong answer resets the two-day sequence', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 4), isCorrect: '0' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 5), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaning(records, v => v === '1');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.distinctDays, 1);
+    assert.strictEqual(result.correctAfterLastWrongCount, 1);
+});
+
+test('evaluateMeaning: same-day correct answers count as one learning day', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 3, 9), isCorrect: '1' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 3, 18), isCorrect: '1' }),
+    ];
+    const result = evaluateMeaning(records, v => v === '1');
+    assert.strictEqual(result.mastered, false);
+    assert.strictEqual(result.distinctDays, 1);
 });

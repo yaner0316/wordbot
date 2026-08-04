@@ -1,9 +1,12 @@
 {
   "name": "word-bot-backend",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
     "setup:review-fields": "node setup-review-fields.js",
     "check:env": "node check-env.js"
   },

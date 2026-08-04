@@ -29,10 +29,10 @@ test('Supabase stats derive progress and quiz metrics from words and assessments
         totalMeanings: 4,
         masteredWords: 1,
         recognizedWords: 1,
-        consolidatingWords: 2,
-        unseenWords: 0,
+        consolidatingWords: 1,
+        unseenWords: 1,
         pendingWords: 3,
-        masteryStageCounts: { mastered: 1, consolidating: 2, recognized: 1, unseen: 0 },
+        masteryStageCounts: { mastered: 1, consolidating: 1, recognized: 1, unseen: 1 },
         totalTests: 2,
         totalQuestions: 4,
         correctCount: 3,
@@ -72,6 +72,7 @@ function createFakeSupabase(seed = {}, options = {}) {
         words: [],
         assessments: [],
         question_cache: [],
+        question_generation_jobs: [],
         quiz_sessions: [],
         game_states: [],
         parts_of_speech: [],
@@ -388,6 +389,75 @@ test('question cache status summarizes Supabase rows by level', async () => {
     assert.equal(status.byLevel[MIDDLE].ready, 1);
 });
 
+test('question cache status reports formal eligible meanings by level', async () => {
+    const OTHER = 'CET4_6_TOEFL';
+    const now = Date.now();
+    const oldEnteredAt = new Date(now - (20 * 60 * 60 * 1000)).toISOString();
+    const recentEnteredAt = new Date(now - (17 * 60 * 60 * 1000)).toISOString();
+    const cacheRow = (id, wordId, level, overrides = {}) => {
+        const targetWord = {
+            'word-1': 'bank',
+            'word-2': 'apple',
+            'word-3': 'river',
+            'word-4': 'recent',
+        }[wordId];
+        return {
+            id,
+            user_id: 'user-1',
+            word_id: wordId,
+            word: targetWord,
+            level,
+            round_type: 'primary',
+            quality_status: 'ready',
+            cache_state: 'active',
+            variant_slot: Number(id.slice(-1)),
+            question_fingerprint: `fp-${id}`,
+            question_type: 1,
+            question_text: `We used the word ${targetWord} naturally in example ${id}.`,
+            options: [`A. ${targetWord}`, 'B. chair', 'C. pencil', 'D. window'],
+            answer: 'A',
+            option_meanings: ['正确词义', '错误词义一', '错误词义二', '错误词义三'],
+            correct_meaning: '正确词义',
+            ...overrides,
+        };
+    };
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-1',
+            username: 'qiuqiu',
+            username_key: 'qiuqiu',
+            learning_level: MIDDLE,
+        }],
+        words: [
+            { id: 'word-1', user_id: 'user-1', word: 'bank', meaning_en: 'financial institution', level: MIDDLE, entered_at: oldEnteredAt },
+            { id: 'word-2', user_id: 'user-1', word: 'apple', meaning_en: 'fruit', level: MIDDLE, entered_at: oldEnteredAt },
+            { id: 'word-3', user_id: 'user-1', word: 'river', meaning_en: 'waterway', level: OTHER, entered_at: oldEnteredAt },
+            { id: 'word-4', user_id: 'user-1', word: 'recent', meaning_en: 'new', level: MIDDLE, entered_at: recentEnteredAt },
+        ],
+        question_cache: [
+            cacheRow('cache-11', 'word-1', MIDDLE),
+            cacheRow('cache-12', 'word-1', MIDDLE),
+            cacheRow('cache-21', 'word-2', MIDDLE),
+            cacheRow('cache-22', 'word-2', MIDDLE, { cache_state: 'retired' }),
+            cacheRow('cache-31', 'word-3', OTHER),
+            cacheRow('cache-32', 'word-3', OTHER),
+            cacheRow('cache-41', 'word-4', MIDDLE),
+            cacheRow('cache-42', 'word-4', MIDDLE),
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const status = await adapter.getQuestionCacheStatus('qiuqiu');
+
+    assert.deepEqual(status.eligibleReadyMeaningsByLevel, {
+        [String.fromCharCode(0x5c0f, 0x5b66)]: 0,
+        [MIDDLE]: 1,
+        [String.fromCharCode(0x9ad8, 0x4e2d)]: 0,
+        [OTHER]: 1,
+    });
+    assert.equal(status.eligibleReadyMeanings, 1);
+});
+
 test('getQuestionCache normalizes known elementary mojibake before enum filtering', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
     const MOJIBAKE_ELEMENTARY = String.fromCodePoint(0x0421, 0x0467);
@@ -459,13 +529,14 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+        generateContext: async word => `A second friendly sentence uses ${word} today.`,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
     assert.equal(result.configured, true);
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 10);
+    assert.equal(result.count, 20);
     const cornQuestion = client.db.question_cache.find(row =>
         row.word_id === 'word-1' && row.round_type === 'primary'
     );
@@ -475,7 +546,7 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
         row.level === ELEMENTARY &&
         row.round_type === 'primary' &&
         row.quality_status === 'ready'
-    ).length, 10);
+    ).length, 20);
 });
 
 test('updateUserLearningSettings updates Supabase user level and removes stale cache', async () => {
@@ -973,13 +1044,14 @@ test('rebuildQuestionCacheForUser inherits level and uses word-specific distract
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+        generateContext: async word => `A second sentence contains ${word}.`,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
 
     assert.equal(result.level, MIDDLE);
-    assert.equal(result.count, 10);
-    assert.equal(client.db.question_cache.filter(row => row.level === MIDDLE && row.round_type === 'primary').length, 10);
+    assert.equal(result.count, 20);
+    assert.equal(client.db.question_cache.filter(row => row.level === MIDDLE && row.round_type === 'primary').length, 20);
 });
 
 test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fabricating a meaning blank', async () => {
@@ -1006,13 +1078,14 @@ test('rebuildQuestionCacheForUser skips an unknown elementary word instead of fa
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
+        generateContext: async word => `A second friendly sentence uses ${word} today.`,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('Draggy');
 
     assert.equal(result.level, ELEMENTARY);
-    assert.equal(result.count, 8);
-    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 8);
+    assert.equal(result.count, 16);
+    assert.equal(client.db.question_cache.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length, 16);
     assert.equal(client.db.question_cache.some(row => row.word_id === 'word-10'), false)
     assert.equal(client.db.question_cache.some(row => row.question_text.includes('In class, the word')), false);
 });
@@ -1359,7 +1432,7 @@ test('rebuildQuestionCacheForUser removes existing cache rows for mastered words
     assert.equal(result.count, 0);
     assert.equal(client.db.question_cache.length, 0);
 });
-test('rebuildQuestionCacheForUser creates two distinct ready type-one variants when a context generator is available', async () => {
+test('rebuildQuestionCacheForUser creates two distinct ready type-one variants for every meaning', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [{
@@ -1388,10 +1461,10 @@ test('rebuildQuestionCacheForUser creates two distinct ready type-one variants w
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
     const rows = client.db.question_cache.filter(row => row.round_type === 'primary');
 
-    assert.equal(result.count, 1);
-    assert.equal(rows.length, 1);
-    assert.equal(new Set(rows.map(row => row.question_text)).size, 1);
-    assert.deepEqual(rows.map(row => row.cache_state), ['active']);
+    assert.equal(result.count, 2);
+    assert.equal(rows.length, 2);
+    assert.equal(new Set(rows.map(row => row.question_text)).size, 2);
+    assert.deepEqual(rows.map(row => row.cache_state), ['active', 'reserved_next_day']);
     assert.ok(rows.every(row => row.question_type === '1' && row.quality_status === 'ready'));
 });
 test('correct cache answer promotes the reserved next-day variant and retires the current one', async () => {
@@ -1445,16 +1518,16 @@ test('rebuildQuestionCacheForUser seeds ten unique primary words when variants p
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
     const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
 
-    assert.equal(result.count, 10);
-    assert.equal(primary.length, 10);
+    assert.equal(result.count, 20);
+    assert.equal(primary.length, 20);
     assert.equal(new Set(primary.map(row => row.source_word_record_id)).size, 10);
     assert.equal(primary.every(row => row.question_type === '1'), true);
     assert.equal(primary.every(row => row.correct_meaning === '\u4e2d\u6587\u91ca\u4e49'), true);
 });
 
-test('rebuildQuestionCacheForUser can backfill middle-school contexts when enabled', async () => {
+test('rebuildQuestionCacheForUser always backfills missing middle-school contexts', async () => {
     const previous = process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT;
-    process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT = '1';
+    delete process.env.WORDBOT_CACHE_REBUILD_AI_CONTEXT;
     try {
         const client = createFakeSupabase({
             users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
@@ -1514,11 +1587,38 @@ test('rebuildQuestionCacheForUser never seeds mastered words when pending words 
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        generateContext: async word => `A second sentence contains ${word}.`,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
     const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
 
-    assert.equal(result.count, 1);
-    assert.deepEqual(primary.map(row => row.word_id), ['pending-word']);
+    assert.equal(result.count, 2);
+    assert.deepEqual(primary.map(row => row.word_id), ['pending-word', 'pending-word']);
+});
+
+test('addWord persists a generation job for the inserted meaning', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        question_generation_jobs: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const inserted = await adapter.addWord({
+        username: 'qiuqiu',
+        word: 'bank',
+        meaning: 'a financial institution',
+        meaningZh: '银行',
+        level: MIDDLE,
+    });
+
+    assert.equal(client.db.question_generation_jobs.length, 1);
+    assert.deepEqual(client.db.question_generation_jobs[0], {
+        user_id: 'user-1',
+        word_id: inserted.id,
+        status: 'pending',
+        reason: 'word_entry',
+        attempt_count: 0,
+        next_attempt_at: inserted.entered_at,
+    });
 });

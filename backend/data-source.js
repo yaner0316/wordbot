@@ -6,12 +6,28 @@ const {
     toFeishuCacheRow,
 } = require('./quiz-adapter');
 const { rebuildSubmittedResult } = require('./submission-coordinator');
+const { getAssessmentMode, normalizeAssessmentMode } = require('./assessment-mode');
 
 const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
 const quizQuestionsByTestId = new Map();
 const quizSubmitLocks = new Map();
 let lastQuizSessionCleanupAt = 0;
 const QUIZ_QUESTION_COUNT = 10;
+
+function quizMeaningId(question) {
+    return String(question?.record_id || question?.wordRecordId || question?.sourceRecordId || '').trim();
+}
+
+function isResumableQuizSession(session, requestedMode = 'real') {
+    if (!session || getAssessmentMode(session.test_id) !== normalizeAssessmentMode(requestedMode)) return false;
+    const questions = Array.isArray(session.questions) ? session.questions : [];
+    if (questions.length !== QUIZ_QUESTION_COUNT || questions.some(question => Number(question?.type) !== 1)) return false;
+    if (normalizeAssessmentMode(requestedMode) !== 'real') return true;
+    const meaningIds = questions.map(quizMeaningId);
+    return questions.every(question => String(question?.cacheRecordId || '').trim())
+        && meaningIds.every(Boolean)
+        && new Set(meaningIds).size === QUIZ_QUESTION_COUNT;
+}
 
 function normalizeDataSource(value) {
     const normalized = String(value || '').trim().toLowerCase();
@@ -224,14 +240,13 @@ function loadSupabaseDataSource() {
         const activeSession = await getActiveQuizSessionBestEffort(supabaseData, user);
         if (activeSession) {
             const questions = Array.isArray(activeSession.questions) ? activeSession.questions : [];
-            const isCurrentQuiz = questions.length === QUIZ_QUESTION_COUNT &&
-                questions.every(question => Number(question?.type) === 1);
-            if (isCurrentQuiz) {
+            if (isResumableQuizSession(activeSession, mode || 'real')) {
                 return {
                     testId: activeSession.test_id,
                     mode: mode || 'real',
                     level: level || null,
-                    source: 'quiz_session',
+                    source: 'question_cache',
+                    diagnostics: { fallbackUsed: false, resumed: true, requiredCount: QUIZ_QUESTION_COUNT, readyCount: questions.length },
                     progress: activeSession.progress || { currentQuestion: 0, answers: [] },
                     questions,
                 };
@@ -337,18 +352,11 @@ function loadSupabaseDataSource() {
         }
     }
 
-    function rebuildCacheAfterWordWrite(username) {
-        if (typeof supabaseData.rebuildQuestionCacheForUser !== 'function') return;
-        Promise.resolve(supabaseData.rebuildQuestionCacheForUser(username)).catch(error => {
-            console.warn('[question_cache] post-entry rebuild failed: ' + error.message);
-        });
-    }
 
     async function addWord(...args) {
         let result;
         if (args.length === 1 && args[0] && typeof args[0] === 'object') {
             result = await supabaseData.addWord(args[0]);
-            rebuildCacheAfterWordWrite(args[0].username);
             return result;
         }
         const [username, fields = {}] = args;
@@ -361,19 +369,24 @@ function loadSupabaseDataSource() {
             context: fields.Context || fields.context,
             level: fields.Level || fields.level,
         });
-        rebuildCacheAfterWordWrite(username);
         return result;
     }
 
     async function addWords(targetUser, words, options) {
         const result = await supabaseData.addWords(targetUser, words, options);
-        if (result?.count) rebuildCacheAfterWordWrite(targetUser);
         return result;
+    }
+
+    async function getActiveQuizSession(user, mode = 'real') {
+        const session = await getActiveQuizSessionBestEffort(supabaseData, user);
+        return isResumableQuizSession(session, mode) ? session : null;
     }
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
+        getActiveQuizSession,
         getQuestionCache,
+        isResumableQuizSession,
         DATA_SOURCE: 'supabase',
         name: 'supabase',
         WORD_TABLE,

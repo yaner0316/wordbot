@@ -270,6 +270,56 @@ test('review endpoints return the common bad-request contract', async () => {
     });
 });
 
+test('active formal quiz session response exposes trusted cache-only metadata', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word-${index}`,
+        wordRecordId: `meaning-${index}`,
+        cacheRecordId: `cache-${index}`,
+    }));
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveQuizSession: async user => ({
+            test_id: `real-${user}`,
+            questions,
+            progress: { currentQuestion: 3, answers: ['A'] },
+            source: 'live_fallback',
+            mode: 'test',
+        }),
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz/session?user=student&source=live_fallback&mode=test`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            active: true,
+            testId: 'real-student',
+            source: 'question_cache',
+            mode: 'real',
+            diagnostics: {
+                fallbackUsed: false,
+                resumed: true,
+                requiredCount: 10,
+                readyCount: 10,
+            },
+            questions,
+            progress: { currentQuestion: 3, answers: ['A'] },
+        });
+    });
+});
+
+test('inactive quiz session response does not fabricate formal cache metadata', async () => {
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveQuizSession: async () => null,
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { active: false });
+    });
+});
 test('health endpoint reports runtime and configuration presence', async () => {
     const app = createApp({
         submitAnswers: async () => ({}),

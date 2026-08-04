@@ -1,6 +1,10 @@
 {
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
-    "build": "cd backend && npm install",
+    "build": "npm --prefix backend ci",
+    "postinstall": "npm --prefix backend ci",
     "start": "node backend/server.js"
   },
   "dependencies": {

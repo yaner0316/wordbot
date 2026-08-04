@@ -10,7 +10,40 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Reviewed Web contract; keep pinned to this immutable commit.
+      - name: Check out production frontend contract
+        uses: actions/checkout@v4
+        with:
+          repository: yaner0316/wordbot-web
+          ref: 6a0e92415492f196953559cb1a15a9f74bed5a64
+          path: web-contract
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Run backend tests
+        run: npm test
+        env:
+          WORDBOT_WEB_CONTRACT_PATH: ${{ github.workspace }}/web-contract/src/quiz-logic.js
+        working-directory: backend
+
       - name: Trigger Render deploy hook
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}

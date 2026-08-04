@@ -86,6 +86,7 @@ test('generateQuiz resumes an active complete type-one session before building a
         type: 1,
         word: 'word' + (index + 1),
         record_id: 'rec-' + (index + 1),
+        cacheRecordId: 'cache-' + (index + 1),
         options: ['A. answer', 'B. other', 'C. another', 'D. last'],
         answer: 'A',
         context: 'Sentence ' + (index + 1) + '.',
@@ -104,8 +105,40 @@ test('generateQuiz resumes an active complete type-one session before building a
 
     assert.equal(quiz.testId, 'real-active');
     assert.equal(quiz.questions.length, 10);
-    assert.equal(quiz.source, 'quiz_session');
+    assert.equal(quiz.source, 'question_cache');
+    assert.deepEqual(quiz.diagnostics, { fallbackUsed: false, resumed: true, requiredCount: 10, readyCount: 10 });
     assert.equal(quiz.progress.currentQuestion, 7);
+});
+
+test('formal session recovery rejects test, live, incomplete, and duplicate-meaning sessions', () => {
+    const dataSource = loadDataSource();
+    const cachedQuestions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: 'word-' + index,
+        record_id: 'meaning-' + index,
+        cacheRecordId: 'cache-' + index,
+    }));
+
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-valid',
+        questions: cachedQuestions,
+    }, 'real'), true);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'test-old-live',
+        questions: cachedQuestions,
+    }, 'real'), false);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-live',
+        questions: cachedQuestions.map(({ cacheRecordId, ...question }) => question),
+    }, 'real'), false);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-short',
+        questions: cachedQuestions.slice(0, 9),
+    }, 'real'), false);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-duplicate',
+        questions: cachedQuestions.map(question => ({ ...question, record_id: 'same-meaning' })),
+    }, 'real'), false);
 });
 test('defaults DATA_SOURCE to supabase and exposes the unified interface', async () => {
     const dataSource = loadDataSource();
@@ -215,6 +248,7 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
                 word: `word${index + 1}`,
                 meaning_en: `meaning ${index + 1}`,
                 level: 'middle',
+                entered_at: '2026-01-01T00:00:00.000Z',
             })),
             getAssessmentsForUser: async () => [],
             getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
@@ -264,6 +298,7 @@ test('supabase quiz generation falls back to memory when quiz_sessions table is 
                 word: `word${index + 1}`,
                 meaning_en: `meaning ${index + 1}`,
                 level: 'middle',
+                entered_at: '2026-01-01T00:00:00.000Z',
             })),
             getAssessmentsForUser: async () => [],
             getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
@@ -357,6 +392,7 @@ test('supabase quiz session survives data-source module reload smoke path', asyn
             word: `word${index + 1}`,
             meaning_en: `meaning ${index + 1}`,
             level: 'middle',
+            entered_at: '2026-01-01T00:00:00.000Z',
         })),
         getAssessmentsForUser: async () => [],
         getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
