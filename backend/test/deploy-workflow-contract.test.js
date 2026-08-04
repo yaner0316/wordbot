@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { REQUIRED_ENV } = require('../runtime-health');
 
 const repoRoot = path.join(__dirname, '..', '..');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'render-deploy.yml');
@@ -20,6 +21,12 @@ test('deploy workflow keeps the backend npm lockfile available for cache and npm
     assert.match(workflow, /SUPABASE_SERVICE_ROLE_KEY:\s*wordbot-ci-service-role/);
     assert.match(workflow, /WORDBOT_WEB_CONTRACT_PATH:.*web-contract\/src\/quiz-logic\.js/);
     assert.match(workflow, /WORDBOT_WEB_APP_PATH:.*web-contract\/src\/app\.js/);
+    for (const name of REQUIRED_ENV) {
+        assert.match(
+            workflow,
+            new RegExp(`${name}:\\s*wordbot-ci-placeholder`)
+        );
+    }
     assert.equal(
         fs.existsSync(backendLockPath),
         true,
