@@ -613,11 +613,27 @@ async function getQuestionCacheStatusWithClient(client, username) {
     };
 }
 
+async function getReadyQuestionCacheCountForLevelWithClient(client, userId, level) {
+    const { data, error } = await client
+        .from('question_cache')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('level', normalizeLearningLevel(level))
+        .eq('quality_status', 'ready')
+        .in('cache_state', ['active', 'reserved_next_day'])
+        .limit(10);
+    ensureNoError(error, 'getUserLearningSettings.questionCache');
+    return Array.isArray(data) ? data.length : 0;
+}
+
 async function getUserLearningSettingsWithClient(client, username) {
     const user = await requireUserByUsername(client, username);
     const settings = buildLearningSettingsFromUser(user);
-    const status = await getQuestionCacheStatusWithClient(client, username);
-    const readyForLevel = Number(status?.byLevel?.[settings.learningLevel]?.ready || 0);
+    const readyForLevel = await getReadyQuestionCacheCountForLevelWithClient(
+        client,
+        user.id,
+        settings.learningLevel
+    );
     return {
         ...settings,
         questionCacheStatus: readyForLevel >= 10 ? 'ready' : (readyForLevel > 0 ? 'partial' : 'not_started'),

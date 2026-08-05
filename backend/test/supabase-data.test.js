@@ -205,7 +205,9 @@ function createFakeSupabase(seed = {}, options = {}) {
 
     return {
         db,
+        queries: [],
         from(table) {
+            this.queries.push(table);
             return new Query(table);
         },
     };
@@ -391,6 +393,33 @@ test('question cache status summarizes Supabase rows by level', async () => {
     assert.equal(status.total, 1);
     assert.equal(status.ready, 1);
     assert.equal(status.byLevel[MIDDLE].ready, 1);
+});
+
+test('learning settings checks only the selected level cache without scanning quiz history', async () => {
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-1',
+            username: 'qiuqiu',
+            username_key: 'qiuqiu',
+            learning_level: MIDDLE,
+        }],
+        words: [{ id: 'word-1', user_id: 'user-1', word: 'apple', level: MIDDLE }],
+        assessments: [{ id: 'assessment-1', user_id: 'user-1', word_id: 'word-1' }],
+        question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', status: 'ready' }],
+        question_cache: Array.from({ length: 12 }, (_, index) => ({
+            id: 'cache-' + (index + 1),
+            user_id: 'user-1',
+            level: index === 11 ? String.fromCharCode(0x9ad8, 0x4e2d) : MIDDLE,
+            quality_status: 'ready',
+            cache_state: 'active',
+        })),
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const settings = await adapter.getUserLearningSettings('qiuqiu');
+
+    assert.equal(settings.questionCacheStatus, 'ready');
+    assert.deepEqual(client.queries, ['users', 'question_cache']);
 });
 
 test('question cache status reports formal eligible meanings by level', async () => {
