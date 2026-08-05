@@ -7,7 +7,6 @@ const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParen
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const { createDefaultQuestionGenerationRuntime } = require('./question-generation-bootstrap');
-const { applyQuestionGenerationMigrations } = require('./scripts/apply-question-generation-migrations');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -751,21 +750,9 @@ function startServer(port = PORT, options = {}) {
     return server;
 }
 
-async function startServerAfterMigrations({
-    applyMigrations = applyQuestionGenerationMigrations,
-    startServerImpl = startServer,
-} = {}) {
-    await applyMigrations();
-    return startServerImpl();
-}
-
 if (require.main === module) {
-    startServerAfterMigrations()
-        .then(server => installShutdownSignalHandlers(server))
-        .catch(() => {
-            console.error('[startup] database migration failed');
-            process.exitCode = 1;
-        });
+    const server = startServer();
+    installShutdownSignalHandlers(server);
 }
 
 module.exports = {
@@ -773,5 +760,4 @@ module.exports = {
     installShutdownSignalHandlers,
     shutdownServer,
     startServer,
-    startServerAfterMigrations,
 };
