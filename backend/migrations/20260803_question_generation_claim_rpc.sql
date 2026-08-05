@@ -4,6 +4,22 @@ drop function if exists public.claim_question_generation_jobs(
     text, integer, timestamptz, timestamptz, timestamptz, text, text[], text[], boolean
 );
 
+update public.question_generation_jobs as job
+set status = 'needs_manual_review',
+    lease_owner = null,
+    lease_expires_at = null,
+    last_error_code = 'invalid_word',
+    last_error_detail = 'Invalid English word excluded from question generation',
+    updated_at = clock_timestamp()
+from public.words as word
+where word.id = job.word_id
+  and word.user_id = job.user_id
+  and (
+      lower(btrim(word.word)) = 'genaine'
+      or btrim(word.word) !~* '^[a-z]+([ ''-][a-z]+)*$'
+  )
+  and job.status in ('pending', 'retry_wait', 'generating', 'validating', 'repairing');
+
 create or replace function public.claim_question_generation_jobs(
     p_worker_id text,
     p_limit integer,
@@ -29,13 +45,20 @@ begin
     with due as (
         select job.id
         from public.question_generation_jobs as job
+        join public.words as word
+          on word.id = job.word_id
+         and word.user_id = job.user_id
         where (
-            job.status in ('pending', 'retry_wait')
-            and job.next_attempt_at <= v_now
-        ) or (
-            job.status in ('generating', 'validating', 'repairing')
-            and (job.lease_expires_at is null or job.lease_expires_at <= v_now)
+            (
+                job.status in ('pending', 'retry_wait')
+                and job.next_attempt_at <= v_now
+            ) or (
+                job.status in ('generating', 'validating', 'repairing')
+                and (job.lease_expires_at is null or job.lease_expires_at <= v_now)
+            )
         )
+          and lower(btrim(word.word)) <> 'genaine'
+          and btrim(word.word) ~* '^[a-z]+([ ''-][a-z]+)*$'
         order by job.next_attempt_at asc, job.created_at asc, job.id asc
         for update skip locked
         limit greatest(0, least(coalesce(p_limit, 0), 100))
@@ -327,6 +350,7 @@ declare
     v_word public.words%rowtype;
     v_ready_fingerprints integer := 0;
     v_ready_questions integer := 0;
+    v_affected integer := 0;
     v_applied boolean := false;
 begin
     select word.*
@@ -334,9 +358,18 @@ begin
     from public.words as word
     where word.id = p_word_id
       and word.user_id = p_user_id
-      and word.mastery_status <> 'mastered'
     for update;
     if not found then
+        return false;
+    end if;
+
+    if v_word.mastery_status = 'mastered'
+       and coalesce(nullif(p_reason, ''), '') <> 'cache_backfill' then
+        return false;
+    end if;
+
+    if lower(btrim(v_word.word)) = 'genaine'
+       or btrim(v_word.word) !~* '^[a-z]+([ ''-][a-z]+)*$' then
         return false;
     end if;
 
@@ -357,21 +390,42 @@ begin
       and jsonb_array_length(option_meanings) = 4
       and answer in ('A', 'B', 'C', 'D')
       and btrim(question_text) <> ''
+      and not exists (
+          select 1
+          from jsonb_array_elements_text(options) as option_value(value)
+          where option_value.value !~ '^[A-D]\.\s+\S'
+      )
+      and not exists (
+          select 1
+          from jsonb_array_elements_text(option_meanings) as meaning_value(value)
+          where btrim(meaning_value.value) = ''
+             or meaning_value.value !~ U&'[\4E00-\9FFF]'
+      )
+      and btrim(correct_meaning) <> ''
       and question_fingerprint is not null;
 
-    if v_ready_fingerprints < 2 or v_ready_questions < 2 then
-        if not exists (
-            select 1
-            from public.question_generation_jobs
-            where word_id = p_word_id
-        ) then
-            insert into public.question_generation_jobs (
-                user_id, word_id, status, reason, next_attempt_at
-            ) values (
-                p_user_id, p_word_id, 'pending', coalesce(nullif(p_reason, ''), 'backfill'), clock_timestamp()
-            );
-            v_applied := true;
-        end if;
+    if coalesce(nullif(p_reason, ''), '') = 'cache_backfill'
+       or v_ready_fingerprints < 2
+       or v_ready_questions < 2 then
+        insert into public.question_generation_jobs (
+            user_id, word_id, status, reason, next_attempt_at
+        ) values (
+            p_user_id, p_word_id, 'pending', coalesce(nullif(p_reason, ''), 'backfill'), clock_timestamp()
+        )
+        on conflict (word_id) do update
+        set status = 'pending',
+            reason = excluded.reason,
+            attempt_count = 0,
+            next_attempt_at = clock_timestamp(),
+            lease_owner = null,
+            lease_expires_at = null,
+            last_error_code = null,
+            last_error_detail = null,
+            rejection_reasons = '{}'::jsonb,
+            updated_at = clock_timestamp()
+        where question_generation_jobs.status in ('ready', 'needs_manual_review');
+        get diagnostics v_affected = row_count;
+        v_applied := v_affected > 0;
     end if;
     return v_applied;
 end;

@@ -29,9 +29,27 @@ function cache(overrides = {}) {
         round_type: 'primary',
         quality_status: 'ready',
         question_fingerprint: 'fingerprint-1',
+        cache_state: 'active',
+        question_type: '1',
+        question_text: 'The bank opens early on weekdays.',
+        word: 'bank',
+        source_word_record_id: 'word-1',
+        options: ['A. bank', 'B. river', 'C. school', 'D. garden'],
+        option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u82b1\u56ed'],
+        answer: 'A',
+        correct_meaning: '\u94f6\u884c',
         ...overrides,
     };
 }
+function assessment(overrides = {}) {
+    return {
+        id: 'assessment-1', user_id: 'user-1', word_id: 'word-1',
+        source_word_record_id: 'word-1', test_id: 'real-quiz-1',
+        assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1',
+        is_correct: 'correct', submitted_answer: 'A|sure', ...overrides,
+    };
+}
+
 
 test('plans jobs only for unmastered meanings with fewer than two distinct ready primary fingerprints', () => {
     const words = [
@@ -44,14 +62,22 @@ test('plans jobs only for unmastered meanings with fewer than two distinct ready
         cache(),
         cache({ question_fingerprint: 'fingerprint-1' }),
         cache({ word_id: 'word-2', question_fingerprint: 'fingerprint-a' }),
-        cache({ word_id: 'word-2', question_fingerprint: 'fingerprint-b' }),
+        cache({ word_id: 'word-2', question_fingerprint: 'fingerprint-b', question_text: 'The river bank was covered with grass.' }),
         cache({ word_id: 'word-3', question_fingerprint: 'fingerprint-a' }),
         cache({ word_id: 'word-4', round_type: 'review', question_fingerprint: 'fingerprint-a' }),
         cache({ word_id: 'word-4', quality_status: 'rejected', question_fingerprint: 'fingerprint-b' }),
         cache({ word_id: 'word-4', question_fingerprint: '' }),
     ];
 
-    const plan = planQuestionGenerationJobBackfill({ words, cacheRows, jobs: [] });
+    const plan = planQuestionGenerationJobBackfill({
+        words,
+        assessments: [
+            assessment({ id: 'word-3-a', word_id: 'word-3', source_word_record_id: 'word-3', test_id: 'real-word-3-a', assessed_at: '2026-07-20T00:00:00.000Z' }),
+            assessment({ id: 'word-3-b', word_id: 'word-3', source_word_record_id: 'word-3', test_id: 'real-word-3-b', assessed_at: '2026-07-21T00:00:00.000Z' }),
+        ],
+        cacheRows,
+        jobs: [],
+    });
 
     assert.deepEqual(plan.jobs.map(job => [job.user_id, job.word_id]), [
         ['user-1', 'word-1'],
@@ -62,6 +88,107 @@ test('plans jobs only for unmastered meanings with fewer than two distinct ready
     assert.equal(plan.summary.alreadyQueued, 0);
 });
 
+test('uses assessment evidence instead of stale stored mastery status', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word({ id: 'stale-mastered', mastery_status: 'mastered' }), word({ id: 'evidence-mastered', mastery_status: 'pending' })],
+        assessments: [
+            assessment({ id: 'assessment-1', word_id: 'evidence-mastered', source_word_record_id: 'evidence-mastered', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z' }),
+            assessment({ id: 'assessment-2', word_id: 'evidence-mastered', source_word_record_id: 'evidence-mastered', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z' }),
+        ], cacheRows: [], jobs: [],
+    });
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['stale-mastered']);
+    assert.equal(plan.summary.masteredByEvidence, 1);
+});
+
+test('plans every valid unmastered meaning without a ten-meaning cap', () => {
+    const words = Array.from({ length: 12 }, (_, index) => word({ id: 'word-' + (index + 1), word: index === 10 ? 'brand-new' : 'word-' + String.fromCharCode(97 + index) }));
+    words.push(word({ id: 'bad-spelling', word: 'genaine' }), word({ id: 'not-english', word: '\u56fa\u4f53' }));
+    const plan = planQuestionGenerationJobBackfill({ words, assessments: [], cacheRows: [], jobs: [] });
+    assert.equal(plan.jobs.length, 12);
+    assert.equal(plan.jobs.some(job => job.word_id === 'word-11'), true);
+    assert.equal(plan.jobs.some(job => job.word_id === 'bad-spelling'), false);
+    assert.equal(plan.jobs.some(job => job.word_id === 'not-english'), false);
+    assert.equal(plan.summary.invalidMeanings, 2);
+});
+
+test('does not treat malformed or duplicate-stem cache rows as a complete pair', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            cache({ question_fingerprint: 'fingerprint-2' }),
+            cache({ question_fingerprint: 'fingerprint-retired', question_text: 'A different valid stem.', cache_state: 'retired' }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.alreadyReady, 0);
+});
+
+test('does not treat a cache pair with a blank Chinese answer as ready', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.', correct_meaning: '' }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+});
+
+test('does not treat English option meanings as a formally ready cache pair', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.', option_meanings: ['bank', 'river', 'school', 'garden'] }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+});
+
+test('requeues a completed job when its cache pair is no longer complete', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [cache()],
+        jobs: [{ user_id: 'user-1', word_id: 'word-1', status: 'ready' }],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.requeuedReady, 1);
+});
+
+test('keeps active jobs out of duplicate backfill', () => {
+    for (const status of ['pending', 'generating', 'retry_wait']) {
+        const plan = planQuestionGenerationJobBackfill({
+            words: [word()], assessments: [], cacheRows: [],
+            jobs: [{ user_id: 'user-1', word_id: 'word-1', status }],
+        });
+        assert.equal(plan.jobs.length, 0, status);
+    }
+});
+
+test('requeues a manual-review job only through the reviewed backfill plan', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [],
+        jobs: [{ user_id: 'user-1', word_id: 'word-1', status: 'needs_manual_review' }],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.requeuedManualReview, 1);
+});
+
 test('treats same spelling meanings as independent user_id + word_id identities', () => {
     const plan = planQuestionGenerationJobBackfill({
         words: [
@@ -70,7 +197,7 @@ test('treats same spelling meanings as independent user_id + word_id identities'
         ],
         cacheRows: [
             cache({ word_id: 'bank-bank', question_fingerprint: 'bank-a' }),
-            cache({ word_id: 'bank-bank', question_fingerprint: 'bank-b' }),
+            cache({ word_id: 'bank-bank', question_fingerprint: 'bank-b', question_text: 'She deposited money at the bank.' }),
         ],
         jobs: [],
     });
@@ -264,6 +391,21 @@ test('rejects reusing an old fingerprint after a partially failed apply', async 
     );
 });
 
+test('backfill passes loaded assessment evidence to the planner in the correct slot', async () => {
+    const result = await backfillQuestionGenerationJobs({
+        loadWords: async () => [word({ mastery_status: 'mastered' })],
+        loadAssessments: async () => [
+            assessment({ id: 'proof-1', test_id: 'real-proof-1', assessed_at: '2026-07-20T00:00:00.000Z' }),
+            assessment({ id: 'proof-2', test_id: 'real-proof-2', assessed_at: '2026-07-21T00:00:00.000Z' }),
+        ],
+        loadQuestionCache: async () => [],
+        loadJobs: async () => [],
+    });
+
+    assert.equal(result.planned, 0);
+    assert.equal(result.summary.masteredByEvidence, 1);
+});
+
 test('defaults to dry-run and never calls enqueueJob', async () => {
     let writes = 0;
     const result = await backfillQuestionGenerationJobs({
@@ -379,4 +521,35 @@ test('parses safe CLI defaults and requires an exact --apply flag to write', () 
     assert.throws(() => parseArgs(['--apply=true']), /UNKNOWN_ARGUMENT/);
     assert.throws(() => parseArgs(['--user-id']), /USER_ID_VALUE_REQUIRED/);
     assert.throws(() => parseArgs(['--plan-fingerprint']), /PLAN_FINGERPRINT_VALUE_REQUIRED/);
+});
+
+test('uses word records and context_zh when database cache rows omit denormalized fields', () => {
+    const rows = [
+        cache({ word: undefined, context_cn: undefined, context_zh: 'Chinese context', question_fingerprint: 'fingerprint-1' }),
+        cache({ word: undefined, context_cn: undefined, context_zh: 'Another context', question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
+    ];
+    const plan = planQuestionGenerationJobBackfill({ words: [word()], assessments: [], cacheRows: rows, jobs: [] });
+
+    assert.deepEqual(plan.jobs, []);
+    assert.equal(plan.summary.alreadyReady, 1);
+});
+
+test('loads question_cache using only physical database columns', async () => {
+    let selectedColumns = '';
+    const client = {
+        from(table) {
+            return {
+                select(columns) { if (table === 'question_cache') selectedColumns = columns; return this; },
+                order() { return this; },
+                limit() { return this; },
+                then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject); },
+            };
+        },
+    };
+
+    await createSupabaseDependencies(client).loadQuestionCache();
+
+    assert.match(selectedColumns, /context_zh/);
+    assert.doesNotMatch(selectedColumns, /(?:^|,)word(?:,|$)/);
+    assert.doesNotMatch(selectedColumns, /context_cn/);
 });

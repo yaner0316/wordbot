@@ -54,6 +54,7 @@ function normalizeSelectableCacheRows(cacheRows, {
     level,
     roundType = 'primary',
     now = Date.now(),
+    requireAvailable = true,
 }) {
     const targetUser = userKey(userId);
     return (cacheRows || [])
@@ -69,7 +70,8 @@ function normalizeSelectableCacheRows(cacheRows, {
         .filter(row => row.roundType === roundType)
         .filter(row => row.qualityStatus === 'ready')
         .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
-        .filter(row => row.cacheState !== 'reserved_next_day'
+        .filter(row => !requireAvailable
+            || row.cacheState !== 'reserved_next_day'
             || !row.availableFrom
             || Date.parse(row.availableFrom) <= Number(now))
         .filter(row => isCacheQuestionReady(row));
@@ -196,7 +198,7 @@ function countEligibleReadyMeaningsByLevel({
         });
         const queuedRecordIds = new Set(queue);
         const groups = new Map();
-        for (const row of normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now })) {
+        for (const row of normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now, requireAvailable: false })) {
             if (!queuedRecordIds.has(row.wordRecordId)) continue;
             const fingerprint = String(row.questionFingerprint || '').trim();
             const stem = normalizeQuestionText(row.question?.context);

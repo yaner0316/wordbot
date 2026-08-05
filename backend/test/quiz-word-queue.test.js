@@ -43,6 +43,7 @@ function cache(index, overrides = {}) {
             question_text: `A clear sentence for word-${index}.`,
             options: JSON.stringify(['A. word', 'B. bad', 'C. wrong', 'D. no']),
             answer: 'A',
+            correct_meaning: String.fromCharCode(0x91ca, 0x4e49),
             option_meanings: JSON.stringify(['释义', '错误', '错误的', '没有']),
             used_count: 0,
             ...fieldOverrides,
@@ -450,7 +451,7 @@ test('eligible ready meaning count requires two active distinct ready variants',
     assert.deepEqual(counts, { [LEVEL]: 1 });
 });
 
-test('eligible ready meaning count excludes variants that are not available yet', () => {
+test('eligible ready meaning count accepts a stored pair when the reserved variant is for the next learning day', () => {
     const counts = countEligibleReadyMeaningsByLevel({
         wordRecords: [word(1)],
         cacheRows: [
@@ -467,7 +468,15 @@ test('eligible ready meaning count excludes variants that are not available yet'
         minAgeMs: 0,
     });
 
-    assert.equal(counts[LEVEL], 0);
+    assert.equal(counts[LEVEL], 1);
+});
+
+test('future reserved variant counts as stored readiness but cannot be selected today', () => {
+    const rows = [cacheVariant(1, 1), cacheVariant(1, 2, { cache_state: 'reserved_next_day', available_from: new Date(NOW + DAY).toISOString() })];
+    const counts = countEligibleReadyMeaningsByLevel({ wordRecords: [word(1)], cacheRows: rows, assessmentRecords: [], userId: 'student', levels: [LEVEL], now: NOW, minAgeMs: 0 });
+    const selected = selectCachedQuestionsForWordQueue({ cacheRows: rows, queue: ['rec-1'], userId: 'student', level: LEVEL, roundType: 'primary', limit: 2, now: NOW });
+    assert.equal(counts[LEVEL], 1);
+    assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-1-1']);
 });
 
 test('eligible ready meaning count is separated by learning level', () => {

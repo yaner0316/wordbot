@@ -94,25 +94,36 @@ test('conditional enqueue applies the same minimum cache quality and active-stat
     assert.match(body, /jsonb_array_length\s*\(\s*options\s*\)\s*=\s*4/i);
     assert.match(body, /jsonb_array_length\s*\(\s*option_meanings\s*\)\s*=\s*4/i);
     assert.match(body, /answer\s+in\s*\(\s*'A'\s*,\s*'B'\s*,\s*'C'\s*,\s*'D'\s*\)/i);
+    assert.match(body, /btrim\s*\(\s*correct_meaning\s*\)\s*<>\s*''/i);
+    assert.match(body, /jsonb_array_elements_text\s*\(\s*options\s*\)/i);
+    assert.match(body, /jsonb_array_elements_text\s*\(\s*option_meanings\s*\)/i);
 });
 
 test('both migrations notify PostgREST to reload its schema cache', () => {
     assert.match(migration, /notify\s+pgrst\s*,\s*'reload schema'/i);
     assert.match(claimMigration, /notify\s+pgrst\s*,\s*'reload schema'/i);
 });
-test('conditional enqueue RPC locks and rechecks ownership, mastery, cache readiness, and job absence', () => {
+test('conditional enqueue RPC locks and rechecks ownership, mastery, cache readiness, and recoverable job state', () => {
     const body = functionBody('enqueue_question_generation_job_if_needed');
     const lockIndex = body.search(/from public\.words[\s\S]*for update/i);
     const insertIndex = body.search(/insert into public\.question_generation_jobs/i);
     assert.ok(lockIndex >= 0 && insertIndex > lockIndex);
     assert.match(body, /user_id\s*=\s*p_user_id/i);
-    assert.match(body, /mastery_status\s*(?:<>|!=)\s*'mastered'/i);
+    assert.match(body, /mastery_status\s*=\s*'mastered'[\s\S]*p_reason[\s\S]*(?:<>|!=)\s*'cache_backfill'/i);
     assert.match(body, /count\s*\(\s*distinct\s+question_fingerprint\s*\)[\s\S]*<\s*2/i);
     assert.match(body, /round_type\s*=\s*'primary'/i);
     assert.match(body, /quality_status\s*=\s*'ready'/i);
     assert.match(body, /question_fingerprint\s+is not null/i);
-    assert.match(body, /not exists\s*\([\s\S]*from public\.question_generation_jobs/i);
     assert.match(body, /return\s+(?:true|v_applied)/i);
+    assert.match(body, /on conflict\s*\(\s*word_id\s*\)\s*do update/i);
+    assert.match(body, /status\s*=\s*'pending'/i);
+    assert.match(body, /question_generation_jobs\.status\s+in\s*\(\s*'ready'\s*,\s*'needs_manual_review'\s*\)/i);
+    assert.match(body, /v_word\.word[\s\S]*genaine/i);
+});
+
+test('new-word enqueue trigger rejects invalid English words and known bad spellings', () => {
+    assert.match(migration, /new\.word[\s\S]*genaine/i);
+    assert.match(migration, /\^\[a-z\][\s\S]*\$/i);
 });
 
 
@@ -123,4 +134,16 @@ test('job tables and claim RPC remain service-role only', () => {
     assert.ok(migration.includes('function public.enqueue_question_generation_job_for_new_word()'));
     assert.ok(migration.includes('after insert on public.words'));
     assert.ok(migration.includes("on conflict (word_id) do nothing"));
+});
+
+test('cache backfill cannot be vetoed by the RPC approximate readiness check', () => {
+    const body = functionBody('enqueue_question_generation_job_if_needed');
+    assert.match(body, /if\s+coalesce\s*\(\s*nullif\s*\(\s*p_reason[\s\S]*cache_backfill[\s\S]*or\s+v_ready_fingerprints\s*<\s*2/i);
+});
+
+test('claim quarantines or excludes historical jobs for invalid words', () => {
+    const body = functionBody('claim_question_generation_jobs');
+    assert.match(body, /join\s+public\.words\s+as\s+word[\s\S]*word\.id\s*=\s*job\.word_id/i);
+    assert.match(body, /word\.word[\s\S]*genaine/i);
+    assert.match(claimMigration, /update\s+public\.question_generation_jobs[\s\S]*needs_manual_review[\s\S]*invalid_word/i);
 });

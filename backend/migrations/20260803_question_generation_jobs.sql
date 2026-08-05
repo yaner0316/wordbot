@@ -67,6 +67,11 @@ security definer
 set search_path = public
 as $$
 begin
+    if lower(btrim(new.word)) = 'genaine'
+       or btrim(new.word) !~* '^[a-z]+([ ''-][a-z]+)*$' then
+        return new;
+    end if;
+
     insert into public.question_generation_jobs (
         user_id,
         word_id,

@@ -167,7 +167,7 @@ function escapeRegExp(value) {
 
 function hasWholeWord(context, word) {
     const key = String(word || '').trim();
-    if (!key || !/^[a-z]+$/i.test(key)) return false;
+    if (!key || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(key)) return false;
     return new RegExp(`\\b${escapeRegExp(key)}\\b`, 'i').test(String(context || ''));
 }
 
@@ -893,7 +893,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
 
 async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, generateContext }) {
     const wordText = String(word.word || '').trim().toLowerCase();
-    if (!wordText || !/^[a-z]+$/i.test(wordText) || isBadQuizWord(wordText)) return [];
+    if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
     if (!cleanChineseMeaningForCache(cacheWord) && typeof translateWords === 'function') {
         const translated = await translateWords([wordText]);
@@ -981,16 +981,38 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
     const words = await getWordsForUserWithClient(client, username);
+    const wordsById = new Map(words.map(word => [word.id, word]));
+    const assessmentRows = await getAssessmentsForUserWithClient(client, username);
+    const sourceRecordIdByWordId = new Map(
+        words.map(word => [String(word.id || ''), String(word.feishu_record_id || word.id || '').trim()])
+    );
+    const assessmentRecords = assessmentRows.map(row => toFeishuAssessmentRecord(row, {
+        username: user.username,
+        sourceRecordIdByWordId,
+    }));
+    const assessmentRecordsBySourceId = new Map();
+    for (const record of assessmentRecords) {
+        const sourceRecordId = String(record.fields?.record_id || '').trim();
+        if (!sourceRecordId) continue;
+        if (!assessmentRecordsBySourceId.has(sourceRecordId)) assessmentRecordsBySourceId.set(sourceRecordId, []);
+        assessmentRecordsBySourceId.get(sourceRecordId).push(record);
+    }
+    const masteryByWordId = new Map(words.map(word => {
+        const sourceRecordId = sourceRecordIdByWordId.get(String(word.id || ''));
+        const evidence = assessmentRecordsBySourceId.get(sourceRecordId) || [];
+        return [word.id, evaluateMeaningMastery(evidence, isCorrectStatsValue)];
+    }));
+    const isEvidenceMastered = word => Boolean(word && masteryByWordId.get(word.id)?.mastered);
     const candidateWords = words
         .filter(row => {
             const wordLevel = normalizeOptionalLearningLevel(row.level);
             return !wordLevel || wordLevel === level;
         })
-        .filter(row => String(row.mastery_status || '').trim().toLowerCase() !== 'mastered')
+        .filter(row => !isEvidenceMastered(row))
         .sort((left, right) => {
             const priority = { pending: 0, recognized: 1, consolidating: 2, mastered: 3 };
-            const leftPriority = priority[String(left.mastery_status || '').trim().toLowerCase()] ?? 1;
-            const rightPriority = priority[String(right.mastery_status || '').trim().toLowerCase()] ?? 1;
+            const leftPriority = priority[masteryByWordId.get(left.id)?.stage] ?? 1;
+            const rightPriority = priority[masteryByWordId.get(right.id)?.stage] ?? 1;
             return leftPriority - rightPriority || toMillis(left.entered_at || left.created_at) - toMillis(right.entered_at || right.created_at);
         });
     const { data: existingCacheRows, error: existingCacheError } = await client
@@ -999,9 +1021,8 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         .eq('user_id', user.id)
         .eq('level', level);
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
-    const existingCacheWords = await getWordsByIdWithClient(client, (existingCacheRows || []).map(row => row.word_id));
     const staleMasteredCacheIds = (existingCacheRows || [])
-        .filter(row => String(existingCacheWords.get(row.word_id)?.mastery_status || '').trim().toLowerCase() === 'mastered')
+        .filter(row => isEvidenceMastered(wordsById.get(row.word_id)))
         .map(row => row.id)
         .filter(Boolean);
     if (staleMasteredCacheIds.length) {
@@ -1015,8 +1036,8 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     }
     const existingCacheCount = (existingCacheRows || []).length - staleMasteredCacheIds.length;
     const hasExistingCache = existingCacheCount > 0;
-    const seedTargetPrimaryCount = existingCacheCount <= 20 ? 10 : null;    if (seedTargetPrimaryCount) {
-        const assessmentRows = await getAssessmentsForUserWithClient(client, username);
+    const seedTargetPrimaryCount = 10;
+    {
         const sourceByWordId = new Map(candidateWords.map(word => [String(word.id || ''), String(word.feishu_record_id || word.id || '').trim()]));
         const assessmentState = new Map();
         for (const assessment of assessmentRows) {
@@ -1073,7 +1094,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of candidateWords) {
-        if (seedTargetPrimaryCount && seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
+        if (seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
         if (!primaryRows.length) continue;
@@ -1085,8 +1106,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
 
     // Keep the current cache available while AI generation is in progress. A
     // partial rebuild must not turn a usable pool into an empty one.
-    const primaryCount = rows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready').length;
-    if (hasExistingCache && candidateWords.length >= 10 && primaryCount < 10) {
+    if (hasExistingCache && candidateWords.length >= seedTargetPrimaryCount && seededPrimaryWordIds.size < seedTargetPrimaryCount) {
         return {
             configured: true,
             level,

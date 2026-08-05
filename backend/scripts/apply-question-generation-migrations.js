@@ -67,6 +67,15 @@ select
       and index_meta.indpred is null
       and pg_get_indexdef(index_meta.indexrelid) like '%(user_id, word_id, question_fingerprint)%'
   ) as fingerprint_unique_index,
+  exists (
+    select 1
+    from pg_catalog.pg_proc as revision_proc
+    join pg_catalog.pg_namespace as revision_namespace
+      on revision_namespace.oid = revision_proc.pronamespace
+    where revision_namespace.nspname = 'public'
+      and revision_proc.proname = 'wordbot_question_generation_revision'
+      and revision_proc.prosrc like '%20260804%'
+  ) as backfill_hardening_revision,
   (select oid is not null from claim_proc) as claim_function,
   false as claim_public_execute,
   false as claim_anon_execute,
@@ -113,6 +122,7 @@ select
 const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_jobs.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_claim_rpc.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260804_question_generation_backfill_hardening.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -141,6 +151,7 @@ const EXPECTED_STATE = Object.freeze({
   claim_anon_execute: false,
   claim_authenticated_execute: false,
   claim_service_role_execute: false,
+  backfill_hardening_revision: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),

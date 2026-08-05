@@ -1,6 +1,10 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const { evaluateMeaningMastery } = require('../mastery-evidence');
+const { toFeishuAssessmentRecord } = require('../quiz-adapter');
+const { isBadQuizWord } = require('../question-quality');
+const { isCacheQuestionReady } = require('../question-cache');
 
 const REQUIRED_READY_FINGERPRINTS = 2;
 const PAGE_SIZE = 1000;
@@ -44,40 +48,102 @@ function createPlanFingerprint({ userId = null, jobs = [] } = {}) {
 }
 
 
-function isMastered(word) {
-    return String(word?.mastery_status || '').trim().toLowerCase() === 'mastered';
+function isCorrectAssessmentValue(value) {
+    if (value === true || value === 1) return true;
+    return ['1', 'true', 'correct', 'yes'].includes(String(value || '').trim().toLowerCase());
+}
+
+function isValidEnglishWord(word) {
+    const value = String(word?.word || '').trim();
+    return /^[a-z]+(?:[ '-][a-z]+)*$/i.test(value) && !isBadQuizWord(value);
+}
+
+function masteredMeaningKeys(words, assessments) {
+    const sourceRecordIdByWordId = new Map((words || []).map(word => [
+        normalizeId(word?.id || word?.word_id),
+        normalizeId(word?.feishu_record_id || word?.source_word_record_id || word?.id || word?.word_id),
+    ]));
+    const recordsBySourceId = new Map();
+    for (const row of assessments || []) {
+        const record = toFeishuAssessmentRecord(row, { username: '', sourceRecordIdByWordId });
+        const sourceRecordId = normalizeId(record?.fields?.record_id);
+        if (!sourceRecordId) continue;
+        if (!recordsBySourceId.has(sourceRecordId)) recordsBySourceId.set(sourceRecordId, []);
+        recordsBySourceId.get(sourceRecordId).push(record);
+    }
+
+    const mastered = new Set();
+    for (const word of words || []) {
+        const userId = normalizeId(word?.user_id);
+        const wordId = normalizeId(word?.id || word?.word_id);
+        const sourceRecordId = sourceRecordIdByWordId.get(wordId);
+        const evidence = recordsBySourceId.get(sourceRecordId) || [];
+        if (evaluateMeaningMastery(evidence, isCorrectAssessmentValue).mastered) {
+            mastered.add(identityKey(userId, wordId));
+        }
+    }
+    return mastered;
+}
+
+function enrichCacheRowsWithWords(words, cacheRows) {
+    const wordsByMeaning = new Map((words || []).map(word => [
+        identityKey(word?.user_id, word?.id || word?.word_id),
+        word,
+    ]));
+    return (cacheRows || []).map(row => {
+        const word = wordsByMeaning.get(identityKey(row?.user_id, row?.word_id));
+        return {
+            ...row,
+            word: row?.word || word?.word || '',
+            context_cn: row?.context_cn || row?.context_zh || '',
+        };
+    });
 }
 
 function readyFingerprintCounts(cacheRows) {
-    const fingerprintsByMeaning = new Map();
+    const readinessByMeaning = new Map();
     for (const row of cacheRows || []) {
         if (String(row?.round_type || '').trim() !== 'primary') continue;
-        if (String(row?.quality_status || '').trim() !== 'ready') continue;
         const userId = normalizeId(row?.user_id);
         const wordId = normalizeId(row?.word_id);
         const fingerprint = normalizeId(row?.question_fingerprint);
-        if (!userId || !wordId || !fingerprint) continue;
+        const stem = String(row?.question_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+        if (!userId || !wordId || !fingerprint || !stem) continue;
+        const formalRow = {
+            ...row,
+            word_record_id: row?.word_record_id || row?.source_word_record_id || wordId,
+        };
+        if (!isCacheQuestionReady(formalRow)) continue;
         const key = identityKey(userId, wordId);
-        if (!fingerprintsByMeaning.has(key)) fingerprintsByMeaning.set(key, new Set());
-        fingerprintsByMeaning.get(key).add(fingerprint);
+        if (!readinessByMeaning.has(key)) {
+            readinessByMeaning.set(key, { fingerprints: new Set(), stems: new Set() });
+        }
+        readinessByMeaning.get(key).fingerprints.add(fingerprint);
+        readinessByMeaning.get(key).stems.add(stem);
     }
-    return fingerprintsByMeaning;
+    return readinessByMeaning;
 }
 
-function planQuestionGenerationJobBackfill({ words = [], cacheRows = [], jobs = [] } = {}) {
-    const fingerprintsByMeaning = readyFingerprintCounts(cacheRows);
-    const existingJobs = new Set(
-        jobs
-            .map(job => identityKey(job?.user_id, job?.word_id))
-            .filter(key => key !== '\u0000')
-    );
+function planQuestionGenerationJobBackfill({ words = [], assessments = [], cacheRows = [], jobs = [] } = {}) {
+    const readinessByMeaning = readyFingerprintCounts(enrichCacheRowsWithWords(words, cacheRows));
+    const masteredMeanings = masteredMeaningKeys(words, assessments);
+    const existingJobs = new Map(jobs
+        .map(job => [
+            identityKey(job?.user_id, job?.word_id),
+            String(job?.status || '').trim().toLowerCase(),
+        ])
+        .filter(([key]) => key !== '\u0000'));
     const seenMeanings = new Set();
     const plannedJobs = [];
     const summary = {
         scannedMeanings: 0,
         eligibleMeanings: 0,
+        masteredByEvidence: 0,
+        invalidMeanings: 0,
         alreadyReady: 0,
         alreadyQueued: 0,
+        requeuedReady: 0,
+        requeuedManualReview: 0,
         planned: 0,
     };
 
@@ -90,18 +156,29 @@ function planQuestionGenerationJobBackfill({ words = [], cacheRows = [], jobs = 
         seenMeanings.add(key);
         summary.scannedMeanings += 1;
 
-        if (isMastered(word)) continue;
+        if (!isValidEnglishWord(word)) {
+            summary.invalidMeanings += 1;
+            continue;
+        }
+        if (masteredMeanings.has(key)) {
+            summary.masteredByEvidence += 1;
+            continue;
+        }
         summary.eligibleMeanings += 1;
 
-        const readyCount = fingerprintsByMeaning.get(key)?.size || 0;
-        if (readyCount >= REQUIRED_READY_FINGERPRINTS) {
+        const readiness = readinessByMeaning.get(key);
+        if ((readiness?.fingerprints.size || 0) >= REQUIRED_READY_FINGERPRINTS
+            && (readiness?.stems.size || 0) >= REQUIRED_READY_FINGERPRINTS) {
             summary.alreadyReady += 1;
             continue;
         }
-        if (existingJobs.has(key)) {
+        const existingStatus = existingJobs.get(key);
+        if (existingStatus && !['ready', 'needs_manual_review'].includes(existingStatus)) {
             summary.alreadyQueued += 1;
             continue;
         }
+        if (existingStatus === 'needs_manual_review') summary.requeuedManualReview += 1;
+        if (existingStatus === 'ready') summary.requeuedReady += 1;
         plannedJobs.push({
             user_id: userId,
             word_id: wordId,
@@ -125,16 +202,20 @@ async function backfillQuestionGenerationJobs(dependencies, options = {}) {
     const loadQuestionCache = requireDependency(dependencies, 'loadQuestionCache');
     const loadJobs = requireDependency(dependencies, 'loadJobs');
     const apply = options.apply === true;
+    const loadAssessments = typeof dependencies?.loadAssessments === 'function'
+        ? dependencies.loadAssessments
+        : async () => [];
     const userId = normalizeId(options.userId) || null;
     const reviewedPlanFingerprint = normalizeId(options.planFingerprint).toLowerCase() || null;
     const loadOptions = { userId };
 
-    const [words, cacheRows, jobs] = await Promise.all([
+    const [words, assessments, cacheRows, jobs] = await Promise.all([
         loadWords(loadOptions),
+        loadAssessments(loadOptions),
         loadQuestionCache(loadOptions),
         loadJobs(loadOptions),
     ]);
-    const plan = planQuestionGenerationJobBackfill({ words, cacheRows, jobs });
+    const plan = planQuestionGenerationJobBackfill({ words, assessments, cacheRows, jobs });
     const planFingerprint = createPlanFingerprint({ userId, jobs: plan.jobs });
 
     if (!apply) invalidatedPlanFingerprints.delete(planFingerprint);
@@ -257,13 +338,19 @@ function createSupabaseDependencies(client) {
         loadWords: ({ userId } = {}) => loadAllRows(
             client,
             'words',
-            'id,user_id,word,meaning_zh,mastery_status',
+            'id,user_id,feishu_record_id,word,meaning_zh,mastery_status',
+            userId, 'id'
+        ),
+        loadAssessments: ({ userId } = {}) => loadAllRows(
+            client,
+            'assessments',
+            'id,user_id,word_id,source_word_record_id,test_id,assessment_kind,is_real_assessment,assessed_at,created_at,question_type,is_correct,submitted_answer,answer_confidence',
             userId, 'id'
         ),
         loadQuestionCache: ({ userId } = {}) => loadAllRows(
             client,
             'question_cache',
-            'id,user_id,word_id,round_type,quality_status,question_fingerprint',
+            'id,user_id,word_id,source_word_record_id,level,round_type,quality_status,cache_state,question_type,question_text,context_zh,suffix,options,option_meanings,answer,correct_meaning,question_fingerprint',
             userId, 'id'
         ),
         loadJobs: ({ userId } = {}) => loadAllRows(

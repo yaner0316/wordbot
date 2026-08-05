@@ -381,7 +381,7 @@ test('question cache status summarizes Supabase rows by level', async () => {
         options: ['A. apple', 'B. pear', 'C. chair', 'D. desk'],
         answer: 'A',
         option_meanings: ['水果', '水果', '座位', '家具'],
-        correct_meaning: 'a fruit',
+        correct_meaning: String.fromCharCode(0x6c34, 0x679c),
         generated_at: '2026-07-19T12:00:00.000Z',
     };
 
@@ -1419,17 +1419,45 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
     assert.equal(client.db.question_cache.length, 0);
 });
 
-test('rebuildQuestionCacheForUser excludes unassessed words with stale mastered status', async () => {
+test('rebuildQuestionCacheForUser follows assessment evidence when stored mastery status is stale', async () => {
     const client = createFakeSupabase({ users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }], words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE, context_en: 'The child ate an apple after school.', distractors: ['pear', 'desk', 'chair'], old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-30T00:00:00.000Z' }], assessments: [], question_cache: [] });
-    const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map(word => [word, '\u82f9\u679c'])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous });
+    const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map(word => [word, '\u82f9\u679c'])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous, generateDistractors: contextualDistractorsForTest });
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-    assert.equal(result.count, 0);
+    assert.equal(result.count, 2);
+});
+test('rebuildQuestionCacheForUser builds both variants for a hyphenated English word', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'brand-new',
+            meaning_en: 'completely new', meaning_zh: '\u5d2d\u65b0\u7684', level: MIDDLE,
+            context_en: 'She wore a brand-new coat to school.',
+            distractors: ['ancient', 'broken', 'faded'], old_distractors: [],
+            mastery_status: 'pending', entered_at: '2026-07-30T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        generateContext: async (word, meaning, level, previous) =>
+            previous ? 'He opened a brand-new notebook in class.' : previous,
+        generateDistractors: contextualDistractorsForTest,
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 2);
+    assert.deepEqual(client.db.question_cache.map(row => row.word_id), ['word-1', 'word-1']);
 });
 test('rebuildQuestionCacheForUser removes existing cache rows for mastered words', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', level: MIDDLE, mastery_status: 'mastered' }],
-        assessments: [],
+        assessments: [
+            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+        ],
         question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1', level: MIDDLE, question_type: '1', quality_status: 'ready', cache_state: 'active' }],
     });
     const adapter = createSupabaseDataAdapter(client);
@@ -1498,10 +1526,10 @@ test('correct cache answer promotes the reserved next-day variant and retires th
 });
 
 
-test('rebuildQuestionCacheForUser seeds ten unique primary words when variants produce multiple rows', async () => {
+test('legacy rebuild seeds at most ten meanings and leaves full backfill to durable jobs', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
-        words: ['apple', 'brave', 'candle', 'dream', 'eager', 'forest', 'gentle', 'honest', 'island', 'jolly'].map((value, index) => ({
+        words: ['apple', 'brave', 'candle', 'dream', 'eager', 'forest', 'gentle', 'honest', 'island', 'jolly', 'kind', 'lucky'].map((value, index) => ({
             id: 'word-' + (index + 1),
             feishu_record_id: 'rec-word-' + (index + 1),
             user_id: 'user-1',
@@ -1593,7 +1621,11 @@ test('rebuildQuestionCacheForUser never seeds mastered words when pending words 
                 old_distractors: [], mastery_status: 'pending', entered_at: '2026-07-20T00:00:00.000Z',
             },
         ],
-        assessments: [], question_cache: [{ id: 'existing-cache' }],
+        assessments: [
+            { id: 'mastered-1', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'mastered-2', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+        ],
+        question_cache: [{ id: 'existing-cache' }],
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),

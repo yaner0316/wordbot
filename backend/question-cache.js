@@ -139,6 +139,10 @@ function getCacheQuestionReadinessIssues(row) {
     } else if (!question.options.every(option => /^[A-D]\.\s+\S/.test(String(option || '')))) {
         issues.push('bad_option_format');
     }
+    if ([1, 2].includes(Number(question.type))
+        && !hasMeaningfulChineseMeaning(question.correctMeaning)) {
+        issues.push('bad_correct_meaning');
+    }
     issues.push(...getQuestionQualityIssues(question));
     if (!Array.isArray(question.optionMeanings) || question.optionMeanings.length !== 4) {
         issues.push('bad_option_meanings');

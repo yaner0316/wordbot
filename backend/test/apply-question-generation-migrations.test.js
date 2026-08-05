@@ -38,12 +38,13 @@ test('normalizes a DATABASE_URL whose password contains unencoded reserved chara
   );
 });
 
-test('migration paths are fixed to the two approved SQL files in order', () => {
+test('migration paths include the versioned hardening migration in order', () => {
   assert.deepEqual(
     MIGRATION_PATHS.map(filePath => path.basename(filePath)),
     [
       '20260803_question_generation_jobs.sql',
       '20260803_question_generation_claim_rpc.sql',
+      '20260804_question_generation_backfill_hardening.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -75,6 +76,7 @@ const COMPLETE_STATE = Object.freeze({
   claim_authenticated_execute: false,
   claim_service_role_execute: false,
   ...Object.fromEntries(RPC_STATE_KEYS.map(key => [key, key.endsWith('_public_execute') || key.endsWith('_anon_execute') || key.endsWith('_authenticated_execute') ? false : true])),
+  backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
 });
 
@@ -84,6 +86,7 @@ const INCOMPLETE_STATE = Object.freeze({
   claim_service_role_execute: false,
   rpc_claim_question_generation_jobs_service_role_execute: false,
   rpc_old_claim_signature_absent: false,
+  backfill_hardening_revision: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -148,6 +151,7 @@ test('an incomplete database is inspected, migrated in fixed order, and verified
   const migrationSql = new Map([
     [MIGRATION_PATHS[0], '-- migration jobs'],
     [MIGRATION_PATHS[1], '-- migration claim rpc'],
+    [MIGRATION_PATHS[2], '-- migration backfill hardening'],
   ]);
   const readPaths = [];
   const databaseUrl = 'postgresql://postgres:abc?def!@db.example.com:5432/postgres';
@@ -165,6 +169,7 @@ test('an incomplete database is inspected, migrated in fixed order, and verified
   assert.equal(harness.instances[0].config.connectionString, normalizeDatabaseUrl(databaseUrl));
   assert.deepEqual(harness.instances[0].config.ssl, { rejectUnauthorized: false });
   assert.ok(harness.events.indexOf('query:-- migration jobs') < harness.events.indexOf('query:-- migration claim rpc'));
+  assert.ok(harness.events.indexOf('query:-- migration claim rpc') < harness.events.indexOf('query:-- migration backfill hardening'));
   assert.equal(result.status, 'applied');
   assert.deepEqual(result.appliedMigrations, MIGRATION_PATHS.map(filePath => path.basename(filePath)));
   assert.deepEqual(result.verification, COMPLETE_STATE);
@@ -204,6 +209,7 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
   assert.match(VERIFICATION_SQL, /relrowsecurity/);
   assert.match(VERIFICATION_SQL, /words_enqueue_question_generation_job/);
+  assert.match(VERIFICATION_SQL, /backfill_hardening_revision/);
   assert.match(VERIFICATION_SQL, /index_meta\.indisunique/);
   assert.match(VERIFICATION_SQL, /index_meta\.indpred is null/);
   assert.match(VERIFICATION_SQL, /claim_question_generation_jobs/);
@@ -220,9 +226,9 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -234,6 +240,7 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(jobsSql, /create trigger words_enqueue_question_generation_job/i);
   assert.match(jobsSql, /create or replace function public\.enqueue_question_generation_job_for_new_word/i);
   assert.match(claimSql, /drop function if exists public\.claim_question_generation_jobs[\s\S]*timestamptz, text, text\[\], text\[\], boolean/i);
+  assert.match(hardeningSql, /wordbot_question_generation_revision[\s\S]*20260804/i);
   const compactClaimSql = claimSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');
