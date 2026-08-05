@@ -10,11 +10,10 @@ function getCorsAllowedOrigins(environment = process.env) {
         .map(origin => origin.trim())
         .filter(Boolean);
 
-    return new Set(
-        configuredOrigins.length > 0
-            ? configuredOrigins
-            : DEFAULT_CORS_ALLOWED_ORIGINS
-    );
+    return new Set([
+        ...DEFAULT_CORS_ALLOWED_ORIGINS,
+        ...configuredOrigins,
+    ]);
 }
 
 function isDevelopmentLocalOrigin(origin, environment = process.env) {

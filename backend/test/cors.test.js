@@ -114,6 +114,25 @@ test('allowlist can be configured without loading production server dependencies
     });
 });
 
+test('configured origins supplement rather than replace the production web origin', async () => {
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        corsEnvironment: {
+            NODE_ENV: 'production',
+            WORDBOT_CORS_ALLOWED_ORIGINS: 'https://preview.wordbot.example',
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/health`, {
+            headers: corsRequestHeaders('https://wordbot-web.onrender.com'),
+        });
+
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('access-control-allow-origin'), 'https://wordbot-web.onrender.com');
+        assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+    });
+});
 test('localhost is allowed only for explicit development mode', async () => {
     const developmentApp = createApp({
         submitAnswers: async () => ({}),
