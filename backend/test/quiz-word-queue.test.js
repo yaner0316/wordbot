@@ -479,6 +479,22 @@ test('future reserved variant counts as stored readiness but cannot be selected 
     assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-1-1']);
 });
 
+test('reserved variant without an availability timestamp fails closed for same-day selection', () => {
+    const rows = [cacheVariant(1, 2, { cache_state: 'reserved_next_day', available_from: '' })];
+
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: rows,
+        queue: ['rec-1'],
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        limit: 2,
+        now: NOW,
+    });
+
+    assert.deepEqual(selected, []);
+});
+
 test('eligible ready meaning count is separated by learning level', () => {
     const otherLevel = 'other';
     const secondWord = word(2);

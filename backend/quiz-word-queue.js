@@ -72,8 +72,8 @@ function normalizeSelectableCacheRows(cacheRows, {
         .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
         .filter(row => !requireAvailable
             || row.cacheState !== 'reserved_next_day'
-            || !row.availableFrom
-            || Date.parse(row.availableFrom) <= Number(now))
+            || (row.availableFrom && Number.isFinite(Date.parse(row.availableFrom))
+                && Date.parse(row.availableFrom) <= Number(now)))
         .filter(row => isCacheQuestionReady(row));
 }
 
