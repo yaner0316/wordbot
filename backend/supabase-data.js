@@ -1240,16 +1240,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
 
 async function resolveWordRows(client, userId, word, options = {}) {
     const sourceWordRecordId = String(options.recordId || options.sourceWordRecordId || options.wordRecordId || '').trim();
-    if (options.wordId) {
-        const { data, error } = await client
-            .from('words')
-            .select('*')
-            .eq('id', options.wordId)
-            .eq('user_id', userId)
-            .maybeSingle();
-        ensureNoError(error, 'resolveWordRows.wordId');
-        if (data) return [data];
-    }
     if (sourceWordRecordId && isUuid(sourceWordRecordId)) {
         const { data, error } = await client
             .from('words')
@@ -1268,6 +1258,16 @@ async function resolveWordRows(client, userId, word, options = {}) {
             .eq('user_id', userId)
             .maybeSingle();
         ensureNoError(error, 'resolveWordRows.sourceFeishu');
+        if (data) return [data];
+    }
+    if (options.wordId) {
+        const { data, error } = await client
+            .from('words')
+            .select('*')
+            .eq('id', options.wordId)
+            .eq('user_id', userId)
+            .maybeSingle();
+        ensureNoError(error, 'resolveWordRows.wordId');
         if (data) return [data];
     }
     if (options.wordId || sourceWordRecordId) {
@@ -1777,14 +1777,14 @@ async function invalidateWordQuestionCacheAndRequeue(client, userId, wordId) {
         .select('id');
     ensureNoError(cacheError, 'updateWord.invalidateQuestionCache');
 
-    const { error: enqueueError } = await client.rpc('enqueue_question_generation_job_if_needed', {
+    const { data: enqueueData, error: enqueueError } = await client.rpc('enqueue_question_generation_job_if_needed', {
         p_user_id: userId,
         p_word_id: wordId,
         p_reason: 'word_edit',
     });
     ensureNoError(enqueueError, 'updateWord.enqueueQuestionGeneration');
 
-    const { error: requeueError } = await client
+    const { data: requeuedJobs, error: requeueError } = await client
         .from('question_generation_jobs')
         .update({
             status: 'pending',
@@ -1800,9 +1800,12 @@ async function invalidateWordQuestionCacheAndRequeue(client, userId, wordId) {
         })
         .eq('user_id', userId)
         .eq('word_id', wordId)
-        .in('status', ['ready', 'retry_wait', 'needs_manual_review'])
+        .in('status', ['pending', 'generating', 'validating', 'repairing', 'retry_wait', 'ready', 'needs_manual_review'])
         .select('id');
     ensureNoError(requeueError, 'updateWord.requeueQuestionGeneration');
+    if (enqueueData === false && (!Array.isArray(requeuedJobs) || requeuedJobs.length === 0)) {
+        throw new Error('updateWord.requeueQuestionGeneration: enqueue RPC returned false and no matching job was requeued');
+    }
 }
 async function updateWordWithClient(client, username, word, fields = {}) {
     const user = await requireUserByUsername(client, username);
