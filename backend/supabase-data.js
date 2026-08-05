@@ -1124,8 +1124,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         ).length > 0
     );
 
-    const existingCacheCount = nonMasteredCacheRows.length - badTranslationCacheIds.length;
-    const hasExistingCache = existingCacheCount > 0;
     const seedTargetPrimaryCount = 10;
     const rows = [];
     const seededPrimaryWordIds = new Set();
@@ -1169,18 +1167,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         if (!wordId || seededPrimaryWordIds.has(wordId)) continue;
         seededPrimaryWordIds.add(wordId);
         rows.push(...wordRows);
-    }
-
-    // Keep the current cache available while AI generation is in progress. A
-    // partial rebuild must not turn a usable pool into an empty one.
-    if (hasExistingCache && wordsNeedingRebuild.length >= seedTargetPrimaryCount && seededPrimaryWordIds.size < seedTargetPrimaryCount) {
-        return {
-            configured: true,
-            level,
-            count: 0,
-            retainedExisting: true,
-            generatedCount: rows.length,
-        };
     }
 
     const wordIdForRow = row => String(row?.word_id || '').trim();

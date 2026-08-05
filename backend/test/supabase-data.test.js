@@ -2265,6 +2265,41 @@ test('rebuildQuestionCacheForUser upserts a matching fingerprint and atomically 
     ), true);
 });
 
+test('rebuildQuestionCacheForUser publishes completed pairs while retaining unrebuildable meanings', async () => {
+    const words = ['amber', 'basic', 'cider', 'daisy', 'ember', 'fable', 'glade', 'honey', 'ivory', 'jolly']
+        .map((word, index) => rebuildCoverageWord('partial-' + (index + 1), word));
+    const successfulWordIds = new Set(words.slice(0, 2).map(word => word.id));
+    const oldRows = words.flatMap(word => {
+        const pair = rebuildCoverageInvalidPair(word);
+        pair[0].context_zh = DEFAULT_TEST_CONTEXT_TRANSLATION;
+        return pair;
+    });
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words,
+        assessments: [],
+        question_cache: oldRows,
+    });
+    const adapter = createRebuildCoverageAdapter(client, {
+        generateContext: async (word, meaning, level, previous) => {
+            const current = words.find(candidate => candidate.word === word);
+            if (!current || !successfulWordIds.has(current.id)) return '';
+            return previous
+                ? 'The second ' + word + ' sentence is ready.'
+                : 'The first ' + word + ' sentence is ready.';
+        },
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const rebuiltRows = client.db.question_cache.filter(row => successfulWordIds.has(row.word_id));
+    const unrebuildableRows = client.db.question_cache.filter(row => !successfulWordIds.has(row.word_id));
+
+    assert.equal(result.count, 4);
+    assert.equal(rebuiltRows.filter(row => ['active', 'reserved_next_day'].includes(row.cache_state)).length, 4);
+    assert.equal(rebuiltRows.filter(row => row.cache_state === 'retired').length, 4);
+    assert.deepEqual(unrebuildableRows, oldRows.filter(row => !successfulWordIds.has(row.word_id)));
+});
+
 test('rebuildQuestionCacheForUser prioritizes previously tested meanings before untested and today-tested meanings', async () => {
     const names = ['amber', 'basic', 'cider', 'daisy', 'ember', 'fable', 'glade', 'honey', 'ivory', 'jolly', 'karma', 'lilac'];
     const words = names.map((word, index) => rebuildCoverageWord(
