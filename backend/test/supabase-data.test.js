@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
 const {
     createSupabaseDataAdapter: createRawSupabaseDataAdapter,
@@ -83,6 +84,7 @@ test('Supabase game state persists shared minutes and garden state', async () =>
     });
 });
 function createFakeSupabase(seed = {}, options = {}) {
+    const operations = [];
     const db = {
         users: [],
         words: [],
@@ -123,7 +125,7 @@ function createFakeSupabase(seed = {}, options = {}) {
             this.payload = null;
         }
 
-        select() { return this; }
+        select(columns) { this.selectColumns = columns; return this; }
         order() { return this; }
         range() { return Promise.resolve(this._result()); }
         limit(count) { this.limitCount = count; return this; }
@@ -138,9 +140,10 @@ function createFakeSupabase(seed = {}, options = {}) {
             return this;
         }
 
-        upsert(payload) {
+        upsert(payload, upsertOptions = {}) {
             this.operation = 'upsert';
             this.payload = Array.isArray(payload) ? payload : [payload];
+            this.upsertOptions = upsertOptions;
             return this;
         }
 
@@ -173,6 +176,23 @@ function createFakeSupabase(seed = {}, options = {}) {
             const tableRows = db[this.table];
             if (!tableRows) return { data: null, error: new Error(`unknown table ${this.table}`) };
 
+            if (this.operation === 'delete') {
+                operations.push({
+                    table: this.table,
+                    operation: this.operation,
+                    filters: this.filters.map(filter => ({ ...filter })),
+                });
+            }
+            if (this.operation === 'upsert' && this.table === 'question_cache') {
+                operations.push({
+                    table: this.table,
+                    operation: this.operation,
+                    payload: this.payload.map(row => ({ ...row })),
+                    upsertOptions: { ...this.upsertOptions },
+                    selectColumns: this.selectColumns,
+                });
+            }
+
             if (this.operation === 'insert' || this.operation === 'upsert') {
                 const missingColumns = options.missingColumns?.[this.table] || [];
                 const missingColumn = missingColumns.find(column =>
@@ -187,6 +207,35 @@ function createFakeSupabase(seed = {}, options = {}) {
                         },
                     };
                 }
+                const hasQuestionCacheConflict = candidate => tableRows.some(existingRow =>
+                    existingRow.user_id === candidate.user_id
+                    && existingRow.word_id === candidate.word_id
+                    && existingRow.question_fingerprint === candidate.question_fingerprint
+                );
+                if (this.table === 'question_cache' && this.operation === 'insert'
+                    && this.payload.some(hasQuestionCacheConflict)) {
+                    return {
+                        data: null,
+                        error: {
+                            code: '23505',
+                            message: 'duplicate key value violates unique constraint question_cache_user_id_word_id_question_fingerprint_key',
+                        },
+                    };
+                }
+                if (this.table === 'question_cache' && this.operation === 'upsert') {
+                    const payloadFingerprints = this.payload
+                        .filter(row => row.question_fingerprint)
+                        .map(row => [row.user_id, row.word_id, row.question_fingerprint].join('|'));
+                    if (new Set(payloadFingerprints).size !== payloadFingerprints.length) {
+                        return {
+                            data: null,
+                            error: {
+                                code: '21000',
+                                message: 'ON CONFLICT DO UPDATE command cannot affect row a second time',
+                            },
+                        };
+                    }
+                }
                 const inserted = this.payload.map(row => {
                     const next = { ...row };
                     if (!next.id && ['words', 'assessments', 'question_cache'].includes(this.table)) {
@@ -196,6 +245,20 @@ function createFakeSupabase(seed = {}, options = {}) {
                         const existing = tableRows.find(existingRow => existingRow.test_id === next.test_id);
                         if (existing) {
                             Object.assign(existing, next);
+                            return existing;
+                        }
+                    }
+                    if (this.operation === 'upsert' && this.table === 'question_cache'
+                        && this.upsertOptions.onConflict === 'user_id,word_id,question_fingerprint') {
+                        const existing = tableRows.find(existingRow =>
+                            existingRow.user_id === next.user_id
+                            && existingRow.word_id === next.word_id
+                            && existingRow.question_fingerprint === next.question_fingerprint
+                        );
+                        if (existing) {
+                            const existingId = existing.id;
+                            Object.assign(existing, next);
+                            existing.id = existingId;
                             return existing;
                         }
                     }
@@ -226,6 +289,7 @@ function createFakeSupabase(seed = {}, options = {}) {
     return {
         db,
         queries: [],
+        operations,
         from(table) {
             this.queries.push(table);
             return new Query(table);
@@ -539,6 +603,7 @@ test('getQuestionCache normalizes known elementary mojibake before enum filterin
             answer: 'A',
             used_count: 0,
             generated_at: '2026-07-19T12:00:00.000Z',
+            question_fingerprint: 'cache-1-fingerprint',
         }],
     });
     const adapter = createSupabaseDataAdapter(client, {
@@ -551,6 +616,26 @@ test('getQuestionCache normalizes known elementary mojibake before enum filterin
     assert.equal(rows[0].level, ELEMENTARY);
 });
 
+test('getQuestionCache excludes ready rows without a question fingerprint', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', level: MIDDLE }],
+        question_cache: [
+            {
+                id: 'missing-fingerprint', user_id: 'user-1', word_id: 'word-1', level: MIDDLE,
+                round_type: 'primary', quality_status: 'ready', cache_state: 'active', question_fingerprint: null,
+            },
+            {
+                id: 'valid-fingerprint', user_id: 'user-1', word_id: 'word-1', level: MIDDLE,
+                round_type: 'primary', quality_status: 'ready', cache_state: 'active', question_fingerprint: 'valid-fingerprint',
+            },
+        ],
+    });
+
+    const rows = await createSupabaseDataAdapter(client).getQuestionCache('qiuqiu', MIDDLE, 'primary');
+
+    assert.deepEqual(rows.map(row => row.id), ['valid-fingerprint']);
+});
 test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
     const client = createFakeSupabase({
@@ -1575,40 +1660,176 @@ test('correct cache answer promotes the reserved next-day variant and retires th
 });
 
 
-test('legacy rebuild seeds at most ten meanings and leaves full backfill to durable jobs', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
-        words: ['apple', 'brave', 'candle', 'dream', 'eager', 'forest', 'gentle', 'honest', 'island', 'jolly', 'kind', 'lucky'].map((value, index) => ({
-            id: 'word-' + (index + 1),
-            feishu_record_id: 'rec-word-' + (index + 1),
+test('rebuildQuestionCacheForUser preserves complete pairs beyond ten while repairing only the invalid pair', async () => {
+    const existingWords = ['apple', 'brave', 'candle', 'dream', 'eager', 'forest', 'gentle', 'honest', 'island', 'jolly', 'kind']
+        .map((word, index) => ({
+            id: `word-${index + 1}`,
+            feishu_record_id: `rec-word-${index + 1}`,
             user_id: 'user-1',
-            word: value,
-            meaning_en: 'meaning ' + (index + 1),
-            meaning_zh: '',
+            word,
+            meaning_en: `meaning ${index + 1}`,
+            meaning_zh: '\u4e2d\u6587\u91ca\u4e49',
             level: MIDDLE,
-            context_en: 'The first ' + value + ' sentence is ready.',
+            context_en: `The first ${word} sentence is ready.`,
             distractors: ['alpha', 'bravo', 'charlie'],
             old_distractors: [],
             mastery_status: 'pending',
-            entered_at: '2026-07-19T00:00:' + String(index).padStart(2, '0') + '.000Z',
-        })),
+            entered_at: `2026-07-19T00:00:${String(index).padStart(2, '0')}.000Z`,
+        }));
+    const repairWord = {
+        id: 'word-12',
+        feishu_record_id: 'rec-word-12',
+        user_id: 'user-1',
+        word: 'lucky',
+        meaning_en: 'having good fortune',
+        meaning_zh: '\u5e78\u8fd0\u7684',
+        level: MIDDLE,
+        context_en: 'The lucky child found a coin after school.',
+        distractors: ['alpha', 'bravo', 'charlie'],
+        old_distractors: [],
+        mastery_status: 'pending',
+        entered_at: '2026-07-19T00:00:11.000Z',
+    };
+    const cachePairFor = (word, { invalidTranslationSlot = null } = {}) => [1, 2].map(slot => {
+        const distractors = slot === 1
+            ? ['alpha', 'bravo', 'charlie']
+            : ['delta', 'echo', 'foxtrot'];
+        return {
+            id: `cache-${word.id}-${slot}`,
+            user_id: 'user-1',
+            word_id: word.id,
+            source_word_record_id: word.feishu_record_id,
+            level: MIDDLE,
+            round_type: 'primary',
+            quality_status: 'ready',
+            cache_state: slot === 1 ? 'active' : 'reserved_next_day',
+            question_type: '1',
+            question_fingerprint: `${word.id}-fingerprint-${slot}`,
+            question_text: `The student saw _____ ${slot} after school.`,
+            context_zh: slot === invalidTranslationSlot ? word.meaning_zh : DEFAULT_TEST_CONTEXT_TRANSLATION,
+            options: [`A. ${word.word}`, ...distractors.map((value, index) => `${String.fromCharCode(66 + index)}. ${value}`)],
+            answer: 'A',
+            option_meanings: [word.meaning_zh, '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49'],
+            correct_meaning: word.meaning_zh,
+        };
+    });
+    const retainedCacheIds = new Set(existingWords.flatMap(word =>
+        cachePairFor(word).map(row => row.id)
+    ));
+    const repairCacheIds = new Set(['cache-word-12-1', 'cache-word-12-2']);
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [...existingWords, repairWord],
         assessments: [],
-        question_cache: [{ id: 'existing-cache' }],
+        question_cache: [
+            ...existingWords.flatMap(word => cachePairFor(word)),
+            ...cachePairFor(repairWord, { invalidTranslationSlot: 1 }),
+        ],
     });
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
-        generateContext: async word => 'The second ' + word + ' sentence is ready.',
+        generateContext: async word => `The second ${word} sentence is ready.`,
         generateDistractors: contextualDistractorsForTest,
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-    const primary = client.db.question_cache.filter(row => row.round_type === 'primary');
 
-    assert.equal(result.count, 20);
-    assert.equal(primary.length, 20);
-    assert.equal(new Set(primary.map(row => row.source_word_record_id)).size, 10);
-    assert.equal(primary.every(row => row.question_type === '1'), true);
-    assert.equal(primary.every(row => row.correct_meaning === '\u4e2d\u6587\u91ca\u4e49'), true);
+    const cacheDeletes = client.operations.filter(operation =>
+        operation.table === 'question_cache' && operation.operation === 'delete'
+    );
+    const repairRows = client.db.question_cache.filter(row => row.word_id === repairWord.id);
+    const oldRepairRows = repairRows.filter(row => repairCacheIds.has(row.id));
+    const readyRepairRows = repairRows.filter(row =>
+        row.quality_status === 'ready' && ['active', 'reserved_next_day'].includes(row.cache_state)
+    );
+    const rebuildUpsert = client.operations.find(operation =>
+        operation.table === 'question_cache' && operation.operation === 'upsert'
+    );
+
+    assert.equal(cacheDeletes.length, 0);
+    assert.equal(result.count, 2);
+    assert.equal(result.status.ready, 2);
+    assert.equal([...retainedCacheIds].every(id =>
+        client.db.question_cache.some(row => row.id === id)
+    ), true);
+    assert.equal(existingWords.every(word =>
+        client.db.question_cache.filter(row => row.word_id === word.id).length === 2
+    ), true);
+    assert.equal(oldRepairRows.length, 2);
+    assert.equal(oldRepairRows.every(row => row.cache_state === 'retired'), true);
+    assert.equal(readyRepairRows.length, 2);
+    assert.equal(readyRepairRows
+        .every(row => row.context_zh !== repairWord.meaning_zh), true);
+    assert.equal(rebuildUpsert.selectColumns, '*');
+});
+
+test('rebuildQuestionCache repairs duplicate stem and distractor pairs', async () => {
+    const word = {
+        id: 'word-duplicate',
+        feishu_record_id: 'rec-word-duplicate',
+        user_id: 'user-1',
+        word: 'lucky',
+        meaning_en: 'having good fortune',
+        meaning_zh: '\u5e78\u8fd0\u7684',
+        level: MIDDLE,
+        context_en: 'The lucky child found a coin after school.',
+        distractors: ['alpha', 'bravo', 'charlie'],
+        old_distractors: [],
+        mastery_status: 'pending',
+    };
+    const oldIds = ['cache-duplicate-1', 'cache-duplicate-2'];
+    const seed = {
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: oldIds.map((id, index) => ({
+            id,
+            user_id: 'user-1',
+            word_id: word.id,
+            source_word_record_id: word.feishu_record_id,
+            level: MIDDLE,
+            round_type: 'primary',
+            quality_status: 'ready',
+            cache_state: index === 0 ? 'active' : 'reserved_next_day',
+            question_type: '1',
+            question_fingerprint: `duplicate-fingerprint-${index + 1}`,
+            question_text: 'The lucky child found a coin after school.',
+            context_zh: DEFAULT_TEST_CONTEXT_TRANSLATION,
+            options: ['A. lucky', 'B. alpha', 'C. bravo', 'D. charlie'],
+            answer: 'A',
+            option_meanings: [word.meaning_zh, '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49'],
+            correct_meaning: word.meaning_zh,
+        })),
+    };
+    const createAdapter = client => createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(value => [value, '\u4e2d\u6587\u91ca\u4e49'])),
+        generateContext: async value => `The second ${value} sentence is ready.`,
+        generateDistractors: contextualDistractorsForTest,
+    });
+
+    const client = createFakeSupabase(seed);
+    const result = await createAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+    assert.equal(result.count, 2);
+    const replacedOldRows = client.db.question_cache.filter(row => row.id && oldIds.includes(row.id));
+    const readyRows = client.db.question_cache.filter(row =>
+        row.word_id === word.id && ['active', 'reserved_next_day'].includes(row.cache_state)
+    );
+    assert.equal(replacedOldRows.length, 2);
+    assert.equal(replacedOldRows.every(row => row.cache_state === 'retired'), true);
+    assert.equal(readyRows.length, 2);
+    assert.equal(client.operations.some(operation => operation.operation === 'delete'), false);
+
+    const failedClient = createFakeSupabase(seed, {
+        missingColumns: { question_cache: ['question_fingerprint'] },
+    });
+    await assert.rejects(
+        createAdapter(failedClient).rebuildQuestionCacheForUser('qiuqiu'),
+        /rebuildQuestionCache\.upsert/
+    );
+    assert.deepEqual(
+        failedClient.db.question_cache.map(row => row.id).sort(),
+        [...oldIds].sort()
+    );
 });
 
 test('rebuildQuestionCacheForUser always backfills missing middle-school contexts', async () => {
@@ -1873,7 +2094,7 @@ test('rebuildQuestionCacheForUser publishes no ready rows when sentence translat
     assert.equal(client.db.question_cache.length, 0);
 });
 
-test('rebuildQuestionCacheForUser removes translation-invalid cache rows before retaining a partial rebuild', async () => {
+test('rebuildQuestionCacheForUser retains translation-invalid cache rows when no replacement pair can publish', async () => {
     const words = Array.from({ length: 10 }, (_, index) => ({
         id: `word-${index + 1}`,
         feishu_record_id: `rec-word-${index + 1}`,
@@ -1917,5 +2138,184 @@ test('rebuildQuestionCacheForUser removes translation-invalid cache rows before 
 
     assert.equal(result.count, 0);
     assert.equal(result.retainedExisting, undefined);
-    assert.deepEqual(client.db.question_cache, []);
+    assert.deepEqual(client.db.question_cache.map(row => row.id), ['bad-cache']);
+});
+
+function rebuildCoverageWord(id, word, enteredAt = '2026-07-01T00:00:00.000Z') {
+    return {
+        id,
+        feishu_record_id: `rec-${id}`,
+        user_id: 'user-1',
+        word,
+        meaning_en: `meaning for ${word}`,
+        meaning_zh: '\u4e2d\u6587\u91ca\u4e49',
+        context_en: `The ${word} child found a coin after school.`,
+        distractors: ['alpha', 'bravo', 'charlie'],
+        old_distractors: [],
+        level: MIDDLE,
+        mastery_status: 'pending',
+        entered_at: enteredAt,
+    };
+}
+
+function rebuildCoverageInvalidPair(word) {
+    return [1, 2].map(slot => ({
+        id: `old-${word.id}-${slot}`,
+        user_id: 'user-1',
+        word_id: word.id,
+        source_word_record_id: word.feishu_record_id,
+        level: MIDDLE,
+        round_type: 'primary',
+        quality_status: 'ready',
+        cache_state: slot === 1 ? 'active' : 'reserved_next_day',
+        question_type: '1',
+        question_fingerprint: `old-${word.id}-fingerprint-${slot}`,
+        question_text: `The student saw _____ ${slot} after school.`,
+        context_zh: word.meaning_zh,
+        options: [`A. ${word.word}`, 'B. alpha', 'C. bravo', 'D. charlie'],
+        answer: 'A',
+        option_meanings: [word.meaning_zh, '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49'],
+        correct_meaning: word.meaning_zh,
+    }));
+}
+
+function createRebuildCoverageAdapter(client, options = {}) {
+    return createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        generateContext: async word => `The second ${word} sentence is ready.`,
+        generateDistractors: contextualDistractorsForTest,
+        ...options,
+    });
+}
+
+test('rebuildQuestionCacheForUser keeps both old rows when a bad translation replacement write fails', async () => {
+    const word = rebuildCoverageWord('write-failure', 'lucky');
+    const oldRows = rebuildCoverageInvalidPair(word);
+    oldRows[0].context_zh = DEFAULT_TEST_CONTEXT_TRANSLATION;
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: oldRows,
+    }, {
+        missingColumns: { question_cache: ['question_fingerprint'] },
+    });
+
+    const beforeRows = structuredClone(client.db.question_cache);
+    await assert.rejects(
+        createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu'),
+        /rebuildQuestionCache\.(?:insert|upsert)/
+    );
+
+    assert.deepEqual(client.db.question_cache, beforeRows);
+});
+
+test('rebuildQuestionCacheForUser upserts a matching fingerprint and atomically retires the other old row', async () => {
+    const word = rebuildCoverageWord('conflict', 'lucky');
+    const oldRows = rebuildCoverageInvalidPair(word);
+    oldRows[0] = {
+        ...oldRows[0],
+        id: 'matching-old-row',
+        question_fingerprint: crypto.createHash('sha256').update(JSON.stringify({
+            wordId: word.id,
+            questionText: 'the _____ child found a coin after school.',
+            questionType: '1',
+            meaning: word.meaning_zh,
+        })).digest('hex'),
+        question_text: 'The _____ child found a coin after school.',
+        context_zh: DEFAULT_TEST_CONTEXT_TRANSLATION,
+        used_count: 7,
+        last_used_at: '2026-08-01T00:00:00.000Z',
+    };
+    oldRows[1].id = 'translation-invalid-old-row';
+    delete oldRows[0].source_word_record_id;
+    delete oldRows[1].source_word_record_id;
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: oldRows,
+    });
+
+    const result = await createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+    const finalRows = client.db.question_cache.filter(row => row.word_id === word.id);
+    const readyRows = finalRows.filter(row => ['active', 'reserved_next_day'].includes(row.cache_state));
+    const retiredRow = finalRows.find(row => row.id === 'translation-invalid-old-row');
+    const matchingRow = finalRows.find(row => row.id === 'matching-old-row');
+    const upsertOperation = client.operations.find(operation => operation.operation === 'upsert');
+
+    assert.equal(result.count, 2);
+    assert.equal(result.status.ready, 2);
+    assert.equal(finalRows.length, 3);
+    assert.equal(readyRows.length, 2);
+    assert.equal(new Set(readyRows.map(row => row.question_fingerprint)).size, 2);
+    assert.equal(matchingRow.used_count, 7);
+    assert.equal(matchingRow.last_used_at, '2026-08-01T00:00:00.000Z');
+    assert.equal(retiredRow.cache_state, 'retired');
+    assert.equal(readyRows.every(row => row.context_zh !== word.meaning_zh), true);
+    assert.equal(client.operations.some(operation => operation.operation === 'delete'), false);
+    assert.equal(upsertOperation.selectColumns, '*');
+    assert.equal(upsertOperation.upsertOptions.onConflict, 'user_id,word_id,question_fingerprint');
+    assert.equal(upsertOperation.upsertOptions.defaultToNull, false);
+    assert.equal(upsertOperation.payload.filter(row =>
+        row.word_id === word.id && row.quality_status === 'ready' && ['active', 'reserved_next_day'].includes(row.cache_state)
+    ).length, 2);
+    assert.equal(upsertOperation.payload.some(row =>
+        row.id === 'translation-invalid-old-row' && row.cache_state === 'retired'
+    ), true);
+});
+
+test('rebuildQuestionCacheForUser prioritizes previously tested meanings before untested and today-tested meanings', async () => {
+    const names = ['amber', 'basic', 'cider', 'daisy', 'ember', 'fable', 'glade', 'honey', 'ivory', 'jolly', 'karma', 'lilac'];
+    const words = names.map((word, index) => rebuildCoverageWord(
+        `priority-${index + 1}`,
+        word,
+        `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+    ));
+    const untested = words.slice(0, 7);
+    const testedToday = words.slice(7, 8);
+    const testedBeforeToday = words.slice(8);
+    const now = Date.now();
+    const assessments = [
+        ...testedBeforeToday.map((word, index) => ({
+            id: `past-${index + 1}`,
+            user_id: 'user-1',
+            word_id: word.id,
+            source_word_record_id: word.feishu_record_id,
+            test_id: `real-past-${index + 1}`,
+            assessed_at: new Date(now - (48 * 60 * 60 * 1000)).toISOString(),
+            question_type: '1',
+            is_correct: 'wrong',
+            submitted_answer: 'B|sure',
+        })),
+        ...testedToday.map((word, index) => ({
+            id: `today-${index + 1}`,
+            user_id: 'user-1',
+            word_id: word.id,
+            source_word_record_id: word.feishu_record_id,
+            test_id: `real-today-${index + 1}`,
+            assessed_at: new Date(now).toISOString(),
+            question_type: '1',
+            is_correct: 'wrong',
+            submitted_answer: 'B|sure',
+        })),
+    ];
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words,
+        assessments,
+        question_cache: words.flatMap(rebuildCoverageInvalidPair),
+    });
+
+    const result = await createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+    const publishedSourceIds = [...new Set(client.db.question_cache
+        .filter(row => row.context_zh === DEFAULT_TEST_CONTEXT_TRANSLATION)
+        .map(row => row.source_word_record_id))];
+
+    assert.equal(result.count, 20);
+    assert.deepEqual(publishedSourceIds, [
+        ...testedBeforeToday.map(word => word.feishu_record_id),
+        ...untested.slice(0, 6).map(word => word.feishu_record_id),
+    ]);
+    assert.equal(publishedSourceIds.includes(testedToday[0].feishu_record_id), false);
 });

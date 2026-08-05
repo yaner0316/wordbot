@@ -13,6 +13,7 @@ const {
     getCacheQuestionReadinessIssues,
     summarizeCacheStatus,
 } = require('./question-cache');
+const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
 const {
     generateElementaryDistractors,
     generateElementaryTemplateContext,
@@ -808,8 +809,9 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
         },
         'getQuestionCache'
     );
-    const wordsById = await getWordsByIdWithClient(client, rows.map((row) => row.word_id));
-    return rows.map((row) => {
+    const fingerprintedRows = rows.filter(row => String(row.question_fingerprint || '').trim());
+    const wordsById = await getWordsByIdWithClient(client, fingerprintedRows.map((row) => row.word_id));
+    return fingerprintedRows.map((row) => {
         const word = wordsById.get(row.word_id);
         return {
             ...row,
@@ -1074,19 +1076,25 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             .some(issue => badTranslationIssueCodes.has(issue)))
         .map(row => row.record_id)
         .filter(Boolean);
-    if (badTranslationCacheIds.length) {
-        const { error: badTranslationDeleteError } = await client
-            .from('question_cache')
-            .delete()
-            .eq('user_id', user.id)
-            .in('id', badTranslationCacheIds)
-            .select('id');
-        ensureNoError(badTranslationDeleteError, 'rebuildQuestionCache.deleteBadTranslations');
-    }
 
-    const existingCacheCount = nonMasteredCacheRows.length - badTranslationCacheIds.length;
-    const hasExistingCache = existingCacheCount > 0;
-    const seedTargetPrimaryCount = 10;
+    const rawCacheRowByStatusRecordId = new Map(nonMasteredCacheRows.map(row => [
+        String(row.feishu_record_id || row.id || '').trim(),
+        row,
+    ]));
+    const badTranslationCacheIdSet = new Set(badTranslationCacheIds);
+    const readyPrimaryRowsBySourceId = new Map();
+    for (const statusRow of existingStatusRows) {
+        if (badTranslationCacheIdSet.has(statusRow.record_id)) continue;
+        if (getCacheQuestionReadinessIssues(statusRow).length) continue;
+        const fields = statusRow.fields || {};
+        if (fields.round_type !== 'primary' || String(fields.question_type) !== '1') continue;
+        const sourceId = String(fields.word_record_id || '').trim();
+        if (!sourceId) continue;
+        const rawRow = rawCacheRowByStatusRecordId.get(String(statusRow.record_id || '').trim());
+        if (!rawRow) continue;
+        if (!readyPrimaryRowsBySourceId.has(sourceId)) readyPrimaryRowsBySourceId.set(sourceId, []);
+        readyPrimaryRowsBySourceId.get(sourceId).push(rawRow);
+    }
     {
         const sourceByWordId = new Map(candidateWords.map(word => [String(word.id || ''), String(word.feishu_record_id || word.id || '').trim()]));
         const assessmentState = new Map();
@@ -1104,12 +1112,21 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         const rebuildPriority = word => {
             const sourceId = String(word.feishu_record_id || word.id || '').trim();
             const state = assessmentState.get(sourceId);
-            if (!state || (!state.hasBeforeToday && !state.hasToday)) return 0;
-            if (state.hasBeforeToday && !state.hasToday) return 1;
+            if (state?.hasBeforeToday && !state.hasToday) return 0;
+            if (!state || (!state.hasBeforeToday && !state.hasToday)) return 1;
             return 2;
         };
         candidateWords.sort((left, right) => rebuildPriority(left) - rebuildPriority(right));
     }
+    const wordsNeedingRebuild = candidateWords.filter(word =>
+        getReadyPrimaryPairIssues(
+            readyPrimaryRowsBySourceId.get(String(word.feishu_record_id || word.id || '').trim()) || []
+        ).length > 0
+    );
+
+    const existingCacheCount = nonMasteredCacheRows.length - badTranslationCacheIds.length;
+    const hasExistingCache = existingCacheCount > 0;
+    const seedTargetPrimaryCount = 10;
     const rows = [];
     const seededPrimaryWordIds = new Set();
     const generateDistractors = async input => {
@@ -1136,14 +1153,14 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         }
         return Object.fromEntries(uniqueWords.map(word => [word, translationCache.get(word) || '']));
     };
-    const translationWords = [...new Set(candidateWords.flatMap(word => [
+    const translationWords = [...new Set(wordsNeedingRebuild.flatMap(word => [
         ...(word.distractors || []),
         ...(word.old_distractors || []),
     ]).map(word => String(word || "").trim().toLowerCase()).filter(Boolean))];
     for (let index = 0; index < translationWords.length; index += 40) {
         await translateWords(translationWords.slice(index, index + 40));
     }
-    for (const word of candidateWords) {
+    for (const word of wordsNeedingRebuild) {
         if (seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
@@ -1156,7 +1173,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
 
     // Keep the current cache available while AI generation is in progress. A
     // partial rebuild must not turn a usable pool into an empty one.
-    if (hasExistingCache && candidateWords.length >= seedTargetPrimaryCount && seededPrimaryWordIds.size < seedTargetPrimaryCount) {
+    if (hasExistingCache && wordsNeedingRebuild.length >= seedTargetPrimaryCount && seededPrimaryWordIds.size < seedTargetPrimaryCount) {
         return {
             configured: true,
             level,
@@ -1166,23 +1183,71 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         };
     }
 
-    const { error: deleteError } = await client
-        .from('question_cache')
-        .delete()
-        .eq('user_id', user.id)
-        .eq('level', level)
-        .select('id');
-    ensureNoError(deleteError, 'rebuildQuestionCache.deleteExisting');
-    const { error: insertError } = await client
-        .from('question_cache')
-        .insert(rows)
-        .select('id');
-    ensureNoError(insertError, 'rebuildQuestionCache.insert');
-    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
+    const wordIdForRow = row => String(row?.word_id || '').trim();
+    const fingerprintForRow = row => String(row?.question_fingerprint || '').trim();
+    const cacheIdentity = row => `${wordIdForRow(row)}|${fingerprintForRow(row)}`;
+    const requestedRowCountsByWordId = new Map();
+    const requestedFingerprints = new Set();
+    const existingRowsByIdentity = new Map(nonMasteredCacheRows
+        .filter(row => wordIdForRow(row) && fingerprintForRow(row))
+        .map(row => [cacheIdentity(row), row]));
+    for (const row of rows) {
+        const wordId = wordIdForRow(row);
+        const fingerprint = fingerprintForRow(row);
+        if (!wordId || !fingerprint) {
+            throw new Error('rebuildQuestionCache.upsert: generated row is missing its word id or fingerprint');
+        }
+        requestedRowCountsByWordId.set(wordId, (requestedRowCountsByWordId.get(wordId) || 0) + 1);
+        requestedFingerprints.add(cacheIdentity(row));
+        const existing = existingRowsByIdentity.get(cacheIdentity(row));
+        if (existing) {
+            row.used_count = Math.max(0, Number(existing.used_count) || 0);
+            row.last_used_at = existing.last_used_at || row.last_used_at || null;
+        }
+    }
+
+    let publishedRows = [];
+    if (rows.length) {
+        const rebuiltWordIds = new Set(requestedRowCountsByWordId.keys());
+        const retiredAt = new Date().toISOString();
+        const retirementRowsByIdentity = new Map();
+        for (const row of nonMasteredCacheRows) {
+            const wordId = wordIdForRow(row);
+            const fingerprint = fingerprintForRow(row);
+            if (!rebuiltWordIds.has(wordId) || !fingerprint || requestedFingerprints.has(cacheIdentity(row))) continue;
+            retirementRowsByIdentity.set(cacheIdentity(row), {
+                ...row,
+                cache_state: 'retired',
+                updated_at: retiredAt,
+            });
+        }
+        const writeRows = [...rows, ...retirementRowsByIdentity.values()];
+        const { data, error: upsertError } = await client
+            .from('question_cache')
+            .upsert(writeRows, { onConflict: 'user_id,word_id,question_fingerprint', defaultToNull: false })
+            .select('*');
+        ensureNoError(upsertError, 'rebuildQuestionCache.upsert');
+        publishedRows = (data || []).filter(row => requestedFingerprints.has(cacheIdentity(row)));
+
+        const publishedRowCountsByWordId = new Map();
+        for (const row of publishedRows) {
+            const wordId = wordIdForRow(row);
+            if (!row?.id || !wordId) {
+                throw new Error('rebuildQuestionCache.upsert: published row is missing its id or word id');
+            }
+            publishedRowCountsByWordId.set(wordId, (publishedRowCountsByWordId.get(wordId) || 0) + 1);
+        }
+        for (const [wordId, requestedCount] of requestedRowCountsByWordId) {
+            if (publishedRowCountsByWordId.get(wordId) !== requestedCount) {
+                throw new Error('rebuildQuestionCache.upsert: published rows did not cover every generated pair');
+            }
+        }
+    }
+    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, publishedRows);
     return {
         configured: true,
         level,
-        count: rows.length,
+        count: publishedRows.length,
         status: summarizeCacheStatus(statusRows),
     };
 }

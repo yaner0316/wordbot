@@ -5,6 +5,7 @@ const { evaluateMeaningMastery } = require('../mastery-evidence');
 const { toFeishuAssessmentRecord } = require('../quiz-adapter');
 const { isBadQuizWord } = require('../question-quality');
 const { isCacheQuestionReady } = require('../question-cache');
+const { getReadyPrimaryPairIssues } = require('../question-cache-pair');
 
 const REQUIRED_READY_FINGERPRINTS = 2;
 const PAGE_SIZE = 1000;
@@ -104,11 +105,10 @@ function readyFingerprintCounts(cacheRows) {
     const readinessByMeaning = new Map();
     for (const row of cacheRows || []) {
         if (String(row?.round_type || '').trim() !== 'primary') continue;
+        if (String(row?.question_type || '').trim() !== '1') continue;
         const userId = normalizeId(row?.user_id);
         const wordId = normalizeId(row?.word_id);
-        const fingerprint = normalizeId(row?.question_fingerprint);
-        const stem = String(row?.question_text || '').trim().replace(/\s+/g, ' ').toLowerCase();
-        if (!userId || !wordId || !fingerprint || !stem) continue;
+        if (!userId || !wordId) continue;
         const formalRow = {
             ...row,
             word_record_id: row?.word_record_id || row?.source_word_record_id || wordId,
@@ -116,10 +116,9 @@ function readyFingerprintCounts(cacheRows) {
         if (!isCacheQuestionReady(formalRow)) continue;
         const key = identityKey(userId, wordId);
         if (!readinessByMeaning.has(key)) {
-            readinessByMeaning.set(key, { fingerprints: new Set(), stems: new Set() });
+            readinessByMeaning.set(key, { rows: [] });
         }
-        readinessByMeaning.get(key).fingerprints.add(fingerprint);
-        readinessByMeaning.get(key).stems.add(stem);
+        readinessByMeaning.get(key).rows.push(formalRow);
     }
     return readinessByMeaning;
 }
@@ -167,8 +166,8 @@ function planQuestionGenerationJobBackfill({ words = [], assessments = [], cache
         summary.eligibleMeanings += 1;
 
         const readiness = readinessByMeaning.get(key);
-        if ((readiness?.fingerprints.size || 0) >= REQUIRED_READY_FINGERPRINTS
-            && (readiness?.stems.size || 0) >= REQUIRED_READY_FINGERPRINTS) {
+        if ((readiness?.rows.length || 0) >= REQUIRED_READY_FINGERPRINTS
+            && getReadyPrimaryPairIssues(readiness.rows).length === 0) {
             summary.alreadyReady += 1;
             continue;
         }
@@ -405,6 +404,7 @@ if (require.main === module) {
 
 module.exports = {
     REQUIRED_READY_FINGERPRINTS,
+    getReadyPrimaryPairIssues,
     parseArgs,
     planQuestionGenerationJobBackfill,
     createPlanFingerprint,

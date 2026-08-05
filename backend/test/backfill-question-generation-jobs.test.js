@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
     parseArgs,
     planQuestionGenerationJobBackfill,
+    getReadyPrimaryPairIssues,
     createPlanFingerprint,
     backfillQuestionGenerationJobs,
     createSupabaseDependencies,
@@ -50,6 +51,80 @@ function assessment(overrides = {}) {
         is_correct: 'correct', submitted_answer: 'A|sure', ...overrides,
     };
 }
+function distinctSecondVariant(overrides = {}) {
+    return cache({
+        question_fingerprint: 'fingerprint-2',
+        question_text: 'She deposited money at the bank.',
+        options: ['A. bank', 'B. river', 'C. bridge', 'D. road'],
+        option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u6865', '\u9053\u8def'],
+        ...overrides,
+    });
+}
+
+test('ready primary pair validator rejects more than one shared distractor', () => {
+    assert.equal(typeof getReadyPrimaryPairIssues, 'function');
+    assert.deepEqual(getReadyPrimaryPairIssues([
+        cache({ question_fingerprint: 'fingerprint-1' }),
+        cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
+    ]), ['distractor_overlap']);
+});
+
+test('requeues a legacy ready pair whose three distractors are identical', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.alreadyReady, 0);
+    assert.equal(plan.summary.planned, 1);
+});
+
+test('requeues a legacy ready pair with two shared distractors', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            distinctSecondVariant({
+                options: ['A. bank', 'B. river', 'C. school', 'D. library'],
+                option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u56fe\u4e66\u9986'],
+            }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.alreadyReady, 0);
+    assert.equal(plan.summary.planned, 1);
+});
+
+test('accepts any valid pair when three ready primary rows exist', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1' }),
+            distinctSecondVariant({ question_fingerprint: 'fingerprint-2' }),
+            distinctSecondVariant({
+                question_fingerprint: 'fingerprint-3',
+                question_text: 'The bank manager counted the cash.',
+                options: ['A. bank', 'B. river', 'C. school', 'D. library'],
+                option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u56fe\u4e66\u9986'],
+            }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs, []);
+    assert.equal(plan.summary.alreadyReady, 1);
+});
+
 
 
 test('plans jobs only for unmastered meanings with fewer than two distinct ready primary fingerprints', () => {
@@ -63,7 +138,7 @@ test('plans jobs only for unmastered meanings with fewer than two distinct ready
         cache(),
         cache({ question_fingerprint: 'fingerprint-1' }),
         cache({ word_id: 'word-2', question_fingerprint: 'fingerprint-a' }),
-        cache({ word_id: 'word-2', question_fingerprint: 'fingerprint-b', question_text: 'The river bank was covered with grass.' }),
+        distinctSecondVariant({ word_id: 'word-2', question_fingerprint: 'fingerprint-b', question_text: 'The river bank was covered with grass.' }),
         cache({ word_id: 'word-3', question_fingerprint: 'fingerprint-a' }),
         cache({ word_id: 'word-4', round_type: 'review', question_fingerprint: 'fingerprint-a' }),
         cache({ word_id: 'word-4', quality_status: 'rejected', question_fingerprint: 'fingerprint-b' }),
@@ -134,7 +209,7 @@ test('does not treat a cache pair with a blank Chinese answer as ready', () => {
         assessments: [],
         cacheRows: [
             cache({ question_fingerprint: 'fingerprint-1' }),
-            cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.', correct_meaning: '' }),
+            distinctSecondVariant({ correct_meaning: '' }),
         ],
         jobs: [],
     });
@@ -148,7 +223,7 @@ test('does not treat English option meanings as a formally ready cache pair', ()
         assessments: [],
         cacheRows: [
             cache({ question_fingerprint: 'fingerprint-1' }),
-            cache({ question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.', option_meanings: ['bank', 'river', 'school', 'garden'] }),
+            distinctSecondVariant({ option_meanings: ['bank', 'river', 'bridge', 'road'] }),
         ],
         jobs: [],
     });
@@ -198,7 +273,7 @@ test('treats same spelling meanings as independent user_id + word_id identities'
         ],
         cacheRows: [
             cache({ word_id: 'bank-bank', question_fingerprint: 'bank-a' }),
-            cache({ word_id: 'bank-bank', question_fingerprint: 'bank-b', question_text: 'She deposited money at the bank.' }),
+            distinctSecondVariant({ word_id: 'bank-bank', question_fingerprint: 'bank-b' }),
         ],
         jobs: [],
     });
@@ -529,6 +604,8 @@ test('uses word records and context_zh when database cache rows omit denormalize
         cache({ word: undefined, context_cn: undefined, context_zh: '这家银行平日开门很早', question_fingerprint: 'fingerprint-1' }),
         cache({ word: undefined, context_cn: undefined, context_zh: '她把钱存进了银行', question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
     ];
+    rows[1].options = ['A. bank', 'B. river', 'C. bridge', 'D. road'];
+    rows[1].option_meanings = ['\u94f6\u884c', '\u6cb3\u6d41', '\u6865', '\u9053\u8def'];
     const plan = planQuestionGenerationJobBackfill({ words: [word()], assessments: [], cacheRows: rows, jobs: [] });
 
     assert.deepEqual(plan.jobs, []);
