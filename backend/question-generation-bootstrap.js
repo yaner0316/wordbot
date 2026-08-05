@@ -8,7 +8,7 @@ const {
     generateReplacementContextWithAI,
 } = require('./supabase-data');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
-const { translateSupabaseWords } = require('./supabase-translations');
+const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
 
 const DEFAULT_QUESTION_WORKER_BATCH_SIZE = 1;
 const DEFAULT_QUESTION_WORKER_LEASE_MS = 15 * 60 * 1000;
@@ -25,6 +25,7 @@ function createDefaultQuestionGenerationRuntime({ onError, onSuccess } = {}) {
         candidateBuilderOptions: {
             generateDistractors: generateSupabaseDistractors,
             translateWords: translateSupabaseWords,
+            translateContext: translateSupabaseContext,
             generateContext: generateReplacementContextWithAI,
         },
         batchSize: Number(process.env.WORDBOT_QUESTION_WORKER_BATCH_SIZE || DEFAULT_QUESTION_WORKER_BATCH_SIZE),

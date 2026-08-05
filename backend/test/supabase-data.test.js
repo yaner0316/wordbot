@@ -1,7 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createSupabaseDataAdapter, generateReplacementContextWithAI } = require('../supabase-data');
+const {
+    createSupabaseDataAdapter: createRawSupabaseDataAdapter,
+    generateReplacementContextWithAI,
+} = require('../supabase-data');
+
+const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
+
+function createSupabaseDataAdapter(client, options = {}) {
+    return createRawSupabaseDataAdapter(client, {
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        ...options,
+    });
+}
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 const contextualDistractorsForTest = async ({ excludedDistractors = [] }) => excludedDistractors.length
@@ -83,6 +95,14 @@ function createFakeSupabase(seed = {}, options = {}) {
         word_parts_of_speech: [],
         ...seed,
     };
+    db.question_cache = db.question_cache.map(row => {
+        const isTypeOne = String(row.question_type || '1') === '1';
+        if (!isTypeOne || Object.prototype.hasOwnProperty.call(row, 'context_zh')) return row;
+        return {
+            ...row,
+            context_zh: DEFAULT_TEST_CONTEXT_TRANSLATION,
+        };
+    });
 
     function matches(row, filters) {
         return filters.every(filter => {
@@ -1768,4 +1788,134 @@ test('context generation uses the shared bounded MiniMax request', async () => {
         else process.env.MINIMAX_MODEL = previousModel;
         global.fetch = previousFetch;
     }
+});
+
+test('rebuildQuestionCacheForUser translates each completed type-one stem independently', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'apple',
+            meaning_en: 'a fruit',
+            meaning_zh: '苹果',
+            context_en: 'The child ate an apple after school.',
+            context_zh: '苹果',
+            level: MIDDLE,
+            mastery_status: 'pending',
+            entered_at: '2026-07-30T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const translationCalls = [];
+    const translations = new Map([
+        ['The child ate an apple after school.', '放学后，这个孩子吃了一个苹果'],
+        ['The child packed an apple for the long trip.', '这个孩子为长途旅行装了一个苹果'],
+    ]);
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [
+            word,
+            word === 'apple' ? '苹果' : '干扰项',
+        ])),
+        translateContext: async sentence => {
+            translationCalls.push(sentence);
+            return translations.get(sentence) || '';
+        },
+        generateContext: async (word, meaning, level, previous) =>
+            previous ? 'The child packed an apple for the long trip.' : previous,
+        generateDistractors: contextualDistractorsForTest,
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const rows = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+    assert.equal(result.count, 2);
+    assert.deepEqual(translationCalls, [...translations.keys()]);
+    assert.deepEqual(rows.map(row => row.context_zh), [...translations.values()]);
+    assert.equal(rows.every(row => row.context_zh !== row.correct_meaning), true);
+});
+
+test('rebuildQuestionCacheForUser publishes no ready rows when sentence translation fails', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1',
+            feishu_record_id: 'rec-word-1',
+            user_id: 'user-1',
+            word: 'apple',
+            meaning_en: 'a fruit',
+            meaning_zh: '苹果',
+            context_en: 'The child ate an apple after school.',
+            context_zh: '放学后，这个孩子吃了一个苹果',
+            level: MIDDLE,
+            mastery_status: 'pending',
+            entered_at: '2026-07-30T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [
+            word,
+            word === 'apple' ? '苹果' : '干扰项',
+        ])),
+        translateContext: async () => '',
+        generateContext: async (word, meaning, level, previous) =>
+            previous ? 'The child packed an apple for the long trip.' : previous,
+        generateDistractors: contextualDistractorsForTest,
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.length, 0);
+});
+
+test('rebuildQuestionCacheForUser removes translation-invalid cache rows before retaining a partial rebuild', async () => {
+    const words = Array.from({ length: 10 }, (_, index) => ({
+        id: `word-${index + 1}`,
+        feishu_record_id: `rec-word-${index + 1}`,
+        user_id: 'user-1',
+        word: `word${index + 1}`,
+        meaning_en: `meaning ${index + 1}`,
+        meaning_zh: `\u91ca\u4e49${index + 1}`,
+        context_en: `The child learned word${index + 1} after school.`,
+        level: MIDDLE,
+        mastery_status: 'pending',
+        entered_at: '2026-07-30T00:00:00.000Z',
+    }));
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words,
+        assessments: [],
+        question_cache: [{
+            id: 'bad-cache',
+            user_id: 'user-1',
+            word_id: 'word-1',
+            source_word_record_id: 'rec-word-1',
+            level: MIDDLE,
+            round_type: 'primary',
+            quality_status: 'ready',
+            cache_state: 'active',
+            question_type: '1',
+            question_text: 'The child learned word1 after school.',
+            context_zh: '\u91ca\u4e49',
+            options: ['A. word1', 'B. pear', 'C. desk', 'D. chair'],
+            answer: 'A',
+            option_meanings: ['\u91ca\u4e49', '\u68a8', '\u4e66\u684c', '\u6905\u5b50'],
+            correct_meaning: '\u91ca\u4e49',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client, {
+        generateDistractors: async () => null,
+        translateWords: async () => ({}),
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(result.retainedExisting, undefined);
+    assert.deepEqual(client.db.question_cache, []);
 });

@@ -36,6 +36,7 @@ function cache(index) {
         cache_state: 'active',
         question_type: '1',
         question_text: `A clear sentence uses _____ in context number ${index}.`,
+        context_zh: `\u8fd9\u662f\u7b2c${index}\u9053\u7ec3\u4e60\u4e2d\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
         options: [`A. ${TERMS[index - 1]}`, 'B. alpha', 'C. bravo', 'D. charlie'],
         answer: 'A',
         option_meanings: [`释义${index}`, '甲', '乙', '丙'],

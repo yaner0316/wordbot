@@ -33,6 +33,7 @@ function question(overrides) {
         generated_at: 100,
         question_type: 1,
         question_text: 'I ate an _____.',
+        context_cn: '我吃了一个苹果',
         options: JSON.stringify(['A. apple', 'B. pear', 'C. chair', 'D. book']),
         option_meanings: JSON.stringify(['苹果', '梨', '椅子', '书']),
         answer: 'A',
@@ -590,4 +591,56 @@ test('selects at most one cached primary question per word record', () => {
     // Order within the same used_count tier is now randomized, so assert the
     // dedup semantics (one question per word record) rather than a fixed order.
     assert.deepEqual(selected.map(item => item.record_id).sort(), ['rec-cotton', 'rec-linen']);
+});
+
+test('rejects type-one cache translations that are missing or only repeat the correct meaning', () => {
+    const missingIssues = getCacheQuestionReadinessIssues(question({
+        context_cn: '',
+    }));
+    const meaningOnlyIssues = getCacheQuestionReadinessIssues(question({
+        question_text: 'My sister was thrilled to receive a _____ bicycle for her birthday.',
+        context_cn: '全新',
+        correct_meaning: '全新',
+    }));
+    const shortIssues = getCacheQuestionReadinessIssues(question({
+        question_text: 'My sister was thrilled to receive a _____ bicycle for her birthday.',
+        context_cn: '全新短语',
+        correct_meaning: '新的',
+    }));
+
+    assert.ok(missingIssues.includes('missing_context_translation'));
+    assert.ok(meaningOnlyIssues.includes('context_translation_is_meaning'));
+    assert.ok(shortIssues.includes('context_translation_too_short'));
+});
+
+test('accepts a complete Chinese translation for a short type-one sentence without punctuation', () => {
+    const issues = getCacheQuestionReadinessIssues(question({
+        question_text: 'I _____.',
+        context_cn: '我赢了',
+        correct_meaning: '赢',
+        options: JSON.stringify(['A. won', 'B. slept', 'C. waited', 'D. smiled']),
+        option_meanings: JSON.stringify([
+            '赢了',
+            '睡觉',
+            '等待',
+            '微笑',
+        ]),
+        answer: 'A',
+        word: 'won',
+    }));
+
+    assert.equal(issues.includes('missing_context_translation'), false);
+    assert.equal(issues.includes('context_translation_is_meaning'), false);
+    assert.equal(issues.includes('context_translation_too_short'), false);
+});
+
+test('does not apply type-one translation requirements to type-four review questions', () => {
+    const issues = getCacheQuestionReadinessIssues(question({
+        question_type: 4,
+        context_cn: '',
+        correct_meaning: '',
+    }));
+
+    assert.equal(issues.includes('missing_context_translation'), false);
+    assert.equal(issues.includes('context_translation_is_meaning'), false);
 });

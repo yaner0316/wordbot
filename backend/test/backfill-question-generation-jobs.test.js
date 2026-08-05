@@ -29,6 +29,7 @@ function cache(overrides = {}) {
         round_type: 'primary',
         quality_status: 'ready',
         question_fingerprint: 'fingerprint-1',
+        context_zh: '这家银行平日开门很早',
         cache_state: 'active',
         question_type: '1',
         question_text: 'The bank opens early on weekdays.',
@@ -525,8 +526,8 @@ test('parses safe CLI defaults and requires an exact --apply flag to write', () 
 
 test('uses word records and context_zh when database cache rows omit denormalized fields', () => {
     const rows = [
-        cache({ word: undefined, context_cn: undefined, context_zh: 'Chinese context', question_fingerprint: 'fingerprint-1' }),
-        cache({ word: undefined, context_cn: undefined, context_zh: 'Another context', question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
+        cache({ word: undefined, context_cn: undefined, context_zh: '这家银行平日开门很早', question_fingerprint: 'fingerprint-1' }),
+        cache({ word: undefined, context_cn: undefined, context_zh: '她把钱存进了银行', question_fingerprint: 'fingerprint-2', question_text: 'She deposited money at the bank.' }),
     ];
     const plan = planQuestionGenerationJobBackfill({ words: [word()], assessments: [], cacheRows: rows, jobs: [] });
 

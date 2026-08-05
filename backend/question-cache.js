@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
+const { getContextTranslationIssues } = require('./context-sentence-translation');
 
 const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
@@ -143,6 +144,7 @@ function getCacheQuestionReadinessIssues(row) {
         && !hasMeaningfulChineseMeaning(question.correctMeaning)) {
         issues.push('bad_correct_meaning');
     }
+    issues.push(...getContextTranslationIssues(question));
     issues.push(...getQuestionQualityIssues(question));
     if (!Array.isArray(question.optionMeanings) || question.optionMeanings.length !== 4) {
         issues.push('bad_option_meanings');

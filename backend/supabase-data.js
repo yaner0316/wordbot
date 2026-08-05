@@ -30,7 +30,7 @@ const {
     toFeishuAssessmentRecord,
     toFeishuCacheRow,
 } = require('./quiz-adapter');
-const { translateSupabaseWords } = require('./supabase-translations');
+const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
 const {
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
@@ -862,7 +862,7 @@ function countDistractorOverlap(left, right) {
     const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
     return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
 }
-async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords }) {
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     const blankedContext = blankWordInContext(context, wordText);
@@ -879,6 +879,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         translateWords,
     });
     if (!optionMeanings) return null;
+    const contextTranslation = typeof translateContext === 'function'
+        ? String(await translateContext(context).catch(() => '') || '').trim()
+        : '';
+    if (!contextTranslation) return null;
+
     const row = {
         user_id: user.id,
         word_id: word.id,
@@ -888,7 +893,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         quality_status: 'ready',
         question_type: '1',
         question_text: blankedContext,
-        context_zh: word.context_zh || null,
+        context_zh: contextTranslation,
         suffix: null,
         options,
         answer,
@@ -907,7 +912,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         : row;
 }
 
-async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, generateContext }) {
+async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -974,8 +979,8 @@ async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now
     const secondDistractors = await generateForContext(secondContext, firstDistractors);
     if (!secondDistractors) return [];
 
-    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords });
-    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords });
+    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords, translateContext });
+    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords, translateContext });
     if (!first) return [];
     return second ? [first, second] : [];
 }
@@ -992,7 +997,7 @@ async function deleteQuestionCacheRowsWithClient(client, username, type = null) 
     return { deleted: (data || []).length };
 }
 
-async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextGenerator = null) {
+async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level);
     if (!level) return { configured: true, skipped: true, level: null, count: 0 };
@@ -1033,7 +1038,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         });
     const { data: existingCacheRows, error: existingCacheError } = await client
         .from('question_cache')
-        .select('id, word_id')
+        .select('*')
         .eq('user_id', user.id)
         .eq('level', level);
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
@@ -1050,7 +1055,36 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
             .select('id');
         ensureNoError(staleDeleteError, 'rebuildQuestionCache.deleteStaleMastered');
     }
-    const existingCacheCount = (existingCacheRows || []).length - staleMasteredCacheIds.length;
+
+    const staleMasteredCacheIdSet = new Set(staleMasteredCacheIds);
+    const nonMasteredCacheRows = (existingCacheRows || [])
+        .filter(row => !staleMasteredCacheIdSet.has(row.id));
+    const existingStatusRows = await toQuestionCacheStatusRecordsWithClient(
+        client,
+        user,
+        nonMasteredCacheRows
+    );
+    const badTranslationIssueCodes = new Set([
+        'missing_context_translation',
+        'context_translation_is_meaning',
+        'context_translation_too_short',
+    ]);
+    const badTranslationCacheIds = existingStatusRows
+        .filter(row => getCacheQuestionReadinessIssues(row)
+            .some(issue => badTranslationIssueCodes.has(issue)))
+        .map(row => row.record_id)
+        .filter(Boolean);
+    if (badTranslationCacheIds.length) {
+        const { error: badTranslationDeleteError } = await client
+            .from('question_cache')
+            .delete()
+            .eq('user_id', user.id)
+            .in('id', badTranslationCacheIds)
+            .select('id');
+        ensureNoError(badTranslationDeleteError, 'rebuildQuestionCache.deleteBadTranslations');
+    }
+
+    const existingCacheCount = nonMasteredCacheRows.length - badTranslationCacheIds.length;
     const hasExistingCache = existingCacheCount > 0;
     const seedTargetPrimaryCount = 10;
     {
@@ -1111,7 +1145,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     }
     for (const word of candidateWords) {
         if (seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
-        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, generateContext: contextGenerator });
+        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
         if (!primaryRows.length) continue;
         const wordId = String(primaryRows[0].source_word_record_id || primaryRows[0].word_id || '').trim();
@@ -1450,10 +1484,11 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     }
 }
 
-async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}, distractorGenerator, translator, contextGenerator) {
+async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}, distractorGenerator, translator, contextTranslator, contextGenerator) {
     const buildContext = typeof contextGenerator === 'function' ? contextGenerator : generateReplacementContextWithAI;
     const buildDistractors = typeof distractorGenerator === 'function' ? distractorGenerator : generateSupabaseDistractors;
     const translateOptions = typeof translator === 'function' ? translator : translateSupabaseWords;
+    const translateSentence = typeof contextTranslator === 'function' ? contextTranslator : translateSupabaseContext;
     if (!userId || !testId || !Array.isArray(result?.results)) return { prepared: 0, skipped: true, source: 'supabase' };
     const usedRecordIds = new Set(result.results.filter(item => item?.correct === false).map(item => String(item?.recordId || '').trim()).filter(Boolean));
     if (!usedRecordIds.size) return { prepared: 0, skipped: true, source: 'supabase' };
@@ -1479,6 +1514,7 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
             generateDistractors: input => buildDistractors(input),
             translateWords: words => translateOptions(words),
             generateContext: buildContext,
+            translateContext: sentence => translateSentence(sentence),
         });
         const primary = candidates.find(row => row.round_type === 'primary' && String(row.question_text || '').trim().toLowerCase() !== String(assessment.question_text || '').trim().toLowerCase());
         if (primary) {
@@ -2007,8 +2043,9 @@ async function getAllStatsWithClient(client) {
     return Promise.all(users.map(user => getStatsWithClient(client, user.username)));
 }
 
-function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null, generateContext = null } = {}) {
+function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null, translateContext = null, generateContext = null } = {}) {
     const distractorGenerator = generateDistractors || (async () => null);
+    const contextTranslator = translateContext || translateSupabaseContext;
     const translator = translateWords || (async () => ({}));
     return {
         name: 'supabase',
@@ -2037,7 +2074,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
-        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, generateContext),
+        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, contextTranslator, generateContext),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
         saveQuizSession: (username, testId, questions, options) =>
@@ -2056,12 +2093,12 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getActiveReviewRound: input => getActiveReviewRoundWithClient(client, input),
         deferReviewRound: input => deferReviewRoundWithClient(client, input),
         getReviewSummary: input => getReviewSummaryWithClient(client, input),
-        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input, distractorGenerator, translator, generateContext),
+        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input, distractorGenerator, translator, contextTranslator, generateContext),
         submitReviewRound: input => submitReviewRoundWithClient(client, input),
     };
 }
 
-const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors, translateWords: translateSupabaseWords, generateContext: generateReplacementContextWithAI });
+const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors, translateWords: translateSupabaseWords, translateContext: translateSupabaseContext, generateContext: generateReplacementContextWithAI });
 
 module.exports = {
     name: 'supabase',

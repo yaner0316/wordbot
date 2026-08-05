@@ -1,5 +1,6 @@
 const https = require('https');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { hasChineseSentenceTranslation } = require('./context-sentence-translation');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 
 function callMiniMax(prompt, timeout) {
@@ -63,4 +64,24 @@ async function translateSupabaseWords(words) {
     }
 }
 
-module.exports = { translateSupabaseWords };
+async function translateSupabaseContext(sentence) {
+    const text = String(sentence || '').trim();
+    if (!text) return '';
+    const prompt = [
+        'Translate this complete English sentence into natural Simplified Chinese:',
+        JSON.stringify(text),
+        'Return only the complete Chinese sentence. Do not explain or label the translation.',
+    ].join('\n');
+    try {
+        const raw = String(await callMiniMax(prompt) || '').trim();
+        const translated = raw.replace(/^```(?:text)?\s*|\s*```$/gi, '').trim();
+        return hasChineseSentenceTranslation(translated) ? translated : '';
+    } catch (error) {
+        return '';
+    }
+}
+
+module.exports = {
+    translateSupabaseContext,
+    translateSupabaseWords,
+};

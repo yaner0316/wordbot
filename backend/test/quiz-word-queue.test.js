@@ -41,6 +41,7 @@ function cache(index, overrides = {}) {
             quality_status: 'ready',
             question_type: 1,
             question_text: `A clear sentence for word-${index}.`,
+            context_cn: `\u8fd9\u662fword-${index}\u5bf9\u5e94\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
             options: JSON.stringify(['A. word', 'B. bad', 'C. wrong', 'D. no']),
             answer: 'A',
             correct_meaning: String.fromCharCode(0x91ca, 0x4e49),
