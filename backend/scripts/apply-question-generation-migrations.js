@@ -13,11 +13,13 @@ with claim_proc as (
 ), rpc_specs(name, signature) as (
   values
     ('claim_question_generation_jobs', 'public.claim_question_generation_jobs(text,integer,bigint)'),
-    ('renew_question_generation_job', 'public.renew_question_generation_job(uuid,text,bigint)'),
-    ('publish_question_generation_variants', 'public.publish_question_generation_variants(uuid,text,jsonb)'),
-    ('complete_question_generation_job', 'public.complete_question_generation_job(uuid,text)'),
-    ('fail_question_generation_job', 'public.fail_question_generation_job(uuid,text,integer,bigint,bigint,text,text,jsonb)'),
-    ('enqueue_question_generation_job_if_needed', 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)')
+    ('renew_question_generation_job', 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)'),
+    ('publish_question_generation_variants', 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)'),
+    ('complete_question_generation_job', 'public.complete_question_generation_job(uuid,text,bigint,uuid)'),
+    ('fail_question_generation_job', 'public.fail_question_generation_job(uuid,text,bigint,uuid,integer,bigint,bigint,text,text,jsonb)'),
+    ('enqueue_question_generation_job_if_needed', 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)'),
+    ('fence_word_question_generation', 'public.fence_word_question_generation(uuid,uuid)'),
+    ('finalize_word_question_generation_edit', 'public.finalize_word_question_generation_edit(uuid,uuid)')
 ), rpc_proc as (
   select spec.name, spec.signature, to_regprocedure(spec.signature)::oid as oid
   from rpc_specs as spec
@@ -69,12 +71,37 @@ select
   ) as fingerprint_unique_index,
   exists (
     select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.words')
+      and attribute.attname = 'question_generation_version'
+      and attribute.atttypid = 'bigint'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+  ) as word_generation_version_column,
+  exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.question_generation_jobs')
+      and attribute.attname = 'word_version'
+      and attribute.atttypid = 'bigint'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+  ) as job_word_version_column,
+  exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.question_generation_jobs')
+      and attribute.attname = 'lease_token'
+      and attribute.atttypid = 'uuid'::regtype
+      and not attribute.attisdropped
+  ) as job_lease_token_column,
     from pg_catalog.pg_proc as revision_proc
+  exists (
     join pg_catalog.pg_namespace as revision_namespace
       on revision_namespace.oid = revision_proc.pronamespace
     where revision_namespace.nspname = 'public'
       and revision_proc.proname = 'wordbot_question_generation_revision'
-      and revision_proc.prosrc like '%20260804%'
+      and revision_proc.prosrc like '%20260806-versioned-word-edit%'
   ) as backfill_hardening_revision,
   (select oid is not null from claim_proc) as claim_function,
   false as claim_public_execute,
@@ -117,12 +144,25 @@ select
   (select public_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_public_execute,
   (select anon_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_anon_execute,
   (select authenticated_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_service_role_execute,
+  (select signature from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_signature,
+  (select security_definer from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_security_definer,
+  (select public_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_public_execute,
+  (select anon_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_service_role_execute,
+  (select signature from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_signature,
+  (select security_definer from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_security_definer,
+  (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_public_execute,
+  (select anon_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_authenticated_execute,
   (select oid is null from old_claim_proc) as rpc_old_claim_signature_absent
 `;
 const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_jobs.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_claim_rpc.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260804_question_generation_backfill_hardening.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260806_word_edit_generation_version.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -132,6 +172,8 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
   'complete_question_generation_job',
   'fail_question_generation_job',
   'enqueue_question_generation_job_if_needed',
+  'fence_word_question_generation',
+  'finalize_word_question_generation_edit',
 ].flatMap(name => [
   `rpc_${name}_signature`,
   `rpc_${name}_security_definer`,
@@ -151,7 +193,10 @@ const EXPECTED_STATE = Object.freeze({
   claim_anon_execute: false,
   claim_authenticated_execute: false,
   claim_service_role_execute: false,
+  word_generation_version_column: true,
+  job_word_version_column: true,
   backfill_hardening_revision: true,
+  job_lease_token_column: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),

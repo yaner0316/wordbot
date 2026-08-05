@@ -13,11 +13,13 @@ const {
 
 const RPC_SIGNATURES = Object.freeze({
   claim_question_generation_jobs: 'public.claim_question_generation_jobs(text,integer,bigint)',
-  renew_question_generation_job: 'public.renew_question_generation_job(uuid,text,bigint)',
-  publish_question_generation_variants: 'public.publish_question_generation_variants(uuid,text,jsonb)',
-  complete_question_generation_job: 'public.complete_question_generation_job(uuid,text)',
-  fail_question_generation_job: 'public.fail_question_generation_job(uuid,text,integer,bigint,bigint,text,text,jsonb)',
+  renew_question_generation_job: 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)',
+  publish_question_generation_variants: 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)',
+  complete_question_generation_job: 'public.complete_question_generation_job(uuid,text,bigint,uuid)',
+  fail_question_generation_job: 'public.fail_question_generation_job(uuid,text,bigint,uuid,integer,bigint,bigint,text,text,jsonb)',
   enqueue_question_generation_job_if_needed: 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)',
+  fence_word_question_generation: 'public.fence_word_question_generation(uuid,uuid)',
+  finalize_word_question_generation_edit: 'public.finalize_word_question_generation_edit(uuid,uuid)',
 });
 
 const RPC_STATE_KEYS = Object.freeze(
@@ -45,6 +47,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260803_question_generation_jobs.sql',
       '20260803_question_generation_claim_rpc.sql',
       '20260804_question_generation_backfill_hardening.sql',
+      '20260806_word_edit_generation_version.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -75,7 +78,10 @@ const COMPLETE_STATE = Object.freeze({
   claim_anon_execute: false,
   claim_authenticated_execute: false,
   claim_service_role_execute: false,
+  word_generation_version_column: true,
+  job_word_version_column: true,
   ...Object.fromEntries(RPC_STATE_KEYS.map(key => [key, key.endsWith('_public_execute') || key.endsWith('_anon_execute') || key.endsWith('_authenticated_execute') ? false : true])),
+  job_lease_token_column: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
 });
@@ -87,6 +93,15 @@ const INCOMPLETE_STATE = Object.freeze({
   rpc_claim_question_generation_jobs_service_role_execute: false,
   rpc_old_claim_signature_absent: false,
   backfill_hardening_revision: false,
+  word_generation_version_column: false,
+  job_word_version_column: false,
+  rpc_fence_word_question_generation_signature: false,
+  job_lease_token_column: false,
+  rpc_fence_word_question_generation_security_definer: false,
+  rpc_fence_word_question_generation_service_role_execute: false,
+  rpc_finalize_word_question_generation_edit_signature: false,
+  rpc_finalize_word_question_generation_edit_security_definer: false,
+  rpc_finalize_word_question_generation_edit_service_role_execute: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -152,6 +167,7 @@ test('an incomplete database is inspected, migrated in fixed order, and verified
     [MIGRATION_PATHS[0], '-- migration jobs'],
     [MIGRATION_PATHS[1], '-- migration claim rpc'],
     [MIGRATION_PATHS[2], '-- migration backfill hardening'],
+    [MIGRATION_PATHS[3], '-- migration word edit version'],
   ]);
   const readPaths = [];
   const databaseUrl = 'postgresql://postgres:abc?def!@db.example.com:5432/postgres';
@@ -170,6 +186,7 @@ test('an incomplete database is inspected, migrated in fixed order, and verified
   assert.deepEqual(harness.instances[0].config.ssl, { rejectUnauthorized: false });
   assert.ok(harness.events.indexOf('query:-- migration jobs') < harness.events.indexOf('query:-- migration claim rpc'));
   assert.ok(harness.events.indexOf('query:-- migration claim rpc') < harness.events.indexOf('query:-- migration backfill hardening'));
+  assert.ok(harness.events.indexOf('query:-- migration backfill hardening') < harness.events.indexOf('query:-- migration word edit version'));
   assert.equal(result.status, 'applied');
   assert.deepEqual(result.appliedMigrations, MIGRATION_PATHS.map(filePath => path.basename(filePath)));
   assert.deepEqual(result.verification, COMPLETE_STATE);
@@ -226,9 +243,9 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -241,13 +258,21 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(jobsSql, /create or replace function public\.enqueue_question_generation_job_for_new_word/i);
   assert.match(claimSql, /drop function if exists public\.claim_question_generation_jobs[\s\S]*timestamptz, text, text\[\], text\[\], boolean/i);
   assert.match(hardeningSql, /wordbot_question_generation_revision[\s\S]*20260804/i);
-  const compactClaimSql = claimSql.replace(/\s+/g, '');
+  assert.match(versionSql, /add column if not exists question_generation_version bigint not null default 1/i);
+  assert.match(versionSql, /add column if not exists word_version bigint not null default 1/i);
+  assert.match(versionSql, /wordbot_question_generation_revision[\s\S]*20260806-versioned-word-edit/i);
+  assert.match(versionSql, /add column if not exists lease_token uuid/i);
+  assert.match(versionSql, /create or replace function public\.fence_word_question_generation/i);
+  assert.match(versionSql, /create or replace function public\.finalize_word_question_generation_edit/i);
+  assert.match(versionSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
+  const rpcSql = `${claimSql}\n${versionSql}`;
+  const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');
-    assert.match(claimSql, new RegExp('create or replace function public\\.' + name + '\\(', 'i'));
-    assert.ok(compactClaimSql.includes('revokeallonfunctionpublic.' + signatureWithoutSchema + 'frompublic,anon,authenticated'), name);
-    assert.ok(compactClaimSql.includes('grantexecuteonfunctionpublic.' + signatureWithoutSchema + 'toservice_role'), name);
-    assert.match(claimSql, new RegExp('function public\\.' + name + '[\\s\\S]*security definer', 'i'));
+    assert.match(rpcSql, new RegExp('create or replace function public\\.' + name + '\\(', 'i'));
+    assert.ok(compactRpcSql.includes('revokeallonfunctionpublic.' + signatureWithoutSchema + 'frompublic,anon,authenticated'), name);
+    assert.ok(compactRpcSql.includes('grantexecuteonfunctionpublic.' + signatureWithoutSchema + 'toservice_role'), name);
+    assert.match(rpcSql, new RegExp('function public\\.' + name + '[\\s\\S]*security definer', 'i'));
   }});
 
 test('root prestart runs only the fixed migration runner before the original server command', () => {

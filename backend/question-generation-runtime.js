@@ -96,6 +96,8 @@ function createSupabaseQuestionGenerationJobStore({
         const args = {
             p_job_id: request.jobId,
             p_worker_id: request.workerId,
+            p_expected_word_version: request.expectedWordVersion,
+            p_lease_token: request.leaseToken,
             ...(isComplete ? {} : {
                 p_max_attempts: Math.max(1, Number(maxAttempts) || 5),
                 p_base_backoff_ms: Math.max(1, Number(baseBackoffMs) || 60_000),
@@ -116,6 +118,8 @@ function createSupabaseQuestionGenerationJobStore({
         const { data, error } = await supabase.rpc(RENEW_RPC, {
             p_job_id: request.jobId,
             p_worker_id: request.workerId,
+            p_expected_word_version: request.expectedWordVersion,
+            p_lease_token: request.leaseToken,
             p_lease_duration_ms: Math.max(1, Number(leaseDurationMs) || 60_000),
         });
         throwSupabaseError(error, 'questionGenerationJob.renew');
@@ -202,6 +206,8 @@ function createSupabaseReadyVariantPublisher({ client, workerId, requiredReadyCo
         const newFingerprints = validatePublishableVariants(variants, requiredReadyCount);
         const { data, error } = await supabase.rpc(PUBLISH_RPC, {
             p_job_id: exactJobId,
+            p_expected_word_version: job?.word_version,
+            p_lease_token: job?.lease_token,
             p_worker_id: exactWorkerId,
             p_variants: variants,
         });

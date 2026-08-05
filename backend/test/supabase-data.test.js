@@ -191,6 +191,10 @@ function createFakeSupabase(seed = {}, options = {}) {
                 operations.push(operation);
             }
 
+            if (this.operation === 'update' && options.failUpdateForOnce === this.table) {
+                options.failUpdateForOnce = null;
+                return { data: null, error: new Error('forced ' + this.table + ' update failure') };
+            }
             if (this.operation === 'update' && options.failUpdateFor === this.table) {
                 return { data: null, error: new Error('forced ' + this.table + ' update failure') };
             }
@@ -312,6 +316,36 @@ function createFakeSupabase(seed = {}, options = {}) {
         async rpc(name, args) {
             operations.push({ table: 'rpc', operation: 'rpc', name, args: { ...args } });
             if (options.failRpcName === name) return { data: null, error: new Error(`forced ${name} failure`) };
+            if (options.failRpcNameOnce === name) {
+                options.failRpcNameOnce = null;
+                return { data: null, error: new Error(`forced ${name} failure`) };
+            }
+            if (name === 'fence_word_question_generation') {
+                const word = db.words.find(row => row.id === args.p_word_id && row.user_id === args.p_user_id);
+                if (!word) return { data: null, error: null };
+                word.question_generation_version = Number(word.question_generation_version || 1) + 1;
+                const job = db.question_generation_jobs.find(row => row.word_id === word.id);
+                const patch = { user_id: word.user_id, word_id: word.id, word_version: word.question_generation_version, status: 'pending', reason: 'word_edit', attempt_count: 0, next_attempt_at: '9999-12-31T23:59:59.999Z', lease_owner: null, lease_expires_at: null, lease_token: null, last_error_code: null, last_error_detail: null, rejection_reasons: {} };
+                if (job) Object.assign(job, patch);
+                else db.question_generation_jobs.push({ id: `job-${db.question_generation_jobs.length + 1}`, ...patch });
+                db.question_cache = db.question_cache.filter(row => row.user_id !== word.user_id || row.word_id !== word.id);
+                return { data: word.question_generation_version, error: null };
+            }
+            if (name === 'finalize_word_question_generation_edit') {
+                const word = db.words.find(row => row.id === args.p_word_id && row.user_id === args.p_user_id);
+                if (!word) return { data: false, error: null };
+                const eligible = word.mastery_status !== 'mastered' && String(word.word || '').toLowerCase() !== 'genaine' && /^[a-z]+([ '-][a-z]+)*$/i.test(String(word.word || '').trim());
+                if (!eligible) {
+                    db.question_cache = db.question_cache.filter(row => row.user_id !== word.user_id || row.word_id !== word.id);
+                    db.question_generation_jobs = db.question_generation_jobs.filter(row => row.user_id !== word.user_id || row.word_id !== word.id);
+                    return { data: false, error: null };
+                }
+                const job = db.question_generation_jobs.find(row => row.word_id === word.id);
+                const patch = { user_id: word.user_id, word_id: word.id, word_version: word.question_generation_version, status: 'pending', reason: 'word_edit', attempt_count: 0, next_attempt_at: 'rpc-now', lease_owner: null, lease_expires_at: null, lease_token: null, last_error_code: null, last_error_detail: null, rejection_reasons: {} };
+                if (job) Object.assign(job, patch);
+                else db.question_generation_jobs.push({ id: `job-${db.question_generation_jobs.length + 1}`, ...patch });
+                return { data: true, error: null };
+            }
             if (name !== 'enqueue_question_generation_job_if_needed') return { data: null, error: new Error(`unknown rpc ${name}`) };
             if (options.rpcDataFalseAlways) return { data: false, error: null };
             if (options.rpcDataFalseOnce) {
@@ -465,385 +499,65 @@ test('updateWord gives recordId priority when a conflicting wordId is supplied',
     assert.equal(client.db.words.find(row => row.id === 'word-2').meaning_en, 'an updated technology company meaning');
 });
 
-test('unchanged POS fences the exact job before word, POS, and cache writes', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-        parts_of_speech: [{ id: 1, code: 'noun', display_name: 'noun' }],
-        word_parts_of_speech: [{ word_id: 'word-1', part_of_speech_id: 1, position: 1 }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{
-            id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating',
-            attempt_count: 4, lease_owner: 'old-worker', lease_expires_at: '2099-01-01T00:00:00.000Z',
-        }],
-    });
-
-    await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-        recordId: 'rec-1', pos: 'noun',
-    });
-
-    const fenceIndex = client.operations.findIndex(operation =>
-        operation.table === 'question_generation_jobs'
-        && operation.operation === 'update'
-        && operation.payload?.status === 'pending'
-    );
-    const wordIndex = client.operations.findIndex(operation =>
-        operation.table === 'words' && operation.operation === 'update'
-    );
-    const posIndex = client.operations.findIndex(operation =>
-        operation.table === 'word_parts_of_speech' && operation.operation === 'delete'
-    );
-    const cacheIndex = client.operations.findIndex(operation =>
-        operation.table === 'question_cache' && operation.operation === 'delete'
-    );
-
-    assert.ok(fenceIndex >= 0);
-    assert.ok(fenceIndex < wordIndex);
-    assert.ok(fenceIndex < posIndex);
-    assert.ok(fenceIndex < cacheIndex);
-    assert.equal(client.db.question_generation_jobs[0].lease_owner, null);
-});
-
-test('final cache delete removes an old worker publication that entered before the fence', async () => {
-    let oldWorkerPublished = false;
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-        question_cache: [{ id: 'cache-original', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{
-            id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating',
-            attempt_count: 1, lease_owner: 'old-worker', lease_expires_at: '2099-01-01T00:00:00.000Z',
-        }],
-    }, {
-        beforeOperation({ table, operation, db }) {
-            const job = db.question_generation_jobs[0];
-            if (table === 'question_generation_jobs'
-                && operation === 'update'
-                && job.status === 'generating'
-                && job.lease_owner === 'old-worker') {
-                oldWorkerPublished = true;
-                db.question_cache.push({
-                    id: 'cache-old-worker-publish',
-                    user_id: 'user-1',
-                    word_id: 'word-1',
-                    question_text: 'stale question',
-                });
-            }
-        },
-    });
-
-    await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-        recordId: 'rec-1', context: 'The child ate an apple after school.',
-    });
-
-    assert.equal(oldWorkerPublished, true);
-    assert.deepEqual(client.db.question_cache, []);
-});
-
-test('same quality payload retries the lifecycle after a cache delete failure', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', context_en: 'The child ate an apple.',
-            mastery_status: 'pending',
-        }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{
-            id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating',
-            lease_owner: 'old-worker', lease_expires_at: '2099-01-01T00:00:00.000Z',
-        }],
-    }, { failDeleteForOnce: 'question_cache' });
-    const adapter = createSupabaseDataAdapter(client);
-    const fields = { recordId: 'rec-1', context: 'The child ate an apple.' };
-
-    await assert.rejects(adapter.updateWord('qiuqiu', 'apple', fields), /updateWord.invalidateQuestionCache/);
-    await adapter.updateWord('qiuqiu', 'apple', fields);
-
-    assert.deepEqual(client.db.question_cache, []);
-    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
-    assert.equal(client.db.question_generation_jobs[0].lease_owner, null);
-});
-
-test('quality edit invalidates only its cache and requeues its ready job through the durable RPC', async () => {
+test('updateWord fences the exact meaning with RPCs before word and POS writes', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
         words: [
-            { id: 'word-finance', feishu_record_id: 'rec-finance', user_id: 'user-1', word: 'bank', meaning_en: 'financial institution' },
-            { id: 'word-river', feishu_record_id: 'rec-river', user_id: 'user-1', word: 'bank', meaning_en: 'river edge' },
+            { id: 'word-finance', feishu_record_id: 'rec-finance', user_id: 'user-1', word: 'bank', meaning_en: 'financial institution', mastery_status: 'pending' },
+            { id: 'word-river', feishu_record_id: 'rec-river', user_id: 'user-1', word: 'bank', meaning_en: 'river edge', mastery_status: 'pending' },
         ],
-        question_cache: [
-            { id: 'cache-finance', user_id: 'user-1', word_id: 'word-finance' },
-            { id: 'cache-river', user_id: 'user-1', word_id: 'word-river' },
-        ],
-        question_generation_jobs: [
-            { id: 'job-finance', user_id: 'user-1', word_id: 'word-finance', status: 'ready', attempt_count: 4 },
-            { id: 'job-river', user_id: 'user-1', word_id: 'word-river', status: 'ready', attempt_count: 2 },
-        ],
+        question_cache: [{ id: 'cache-river', user_id: 'user-1', word_id: 'word-river' }],
+        parts_of_speech: [{ id: 1, code: 'noun', display_name: 'noun' }],
     });
     await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'bank', {
-        recordId: 'rec-finance', meaning: 'organization that holds money',
+        recordId: 'rec-finance', meaning: 'a financial institution', pos: 'noun',
     });
+    const rpcNames = client.operations.filter(row => row.operation === 'rpc').map(row => row.name);
+    const fenceIndex = client.operations.findIndex(row => row.operation === 'rpc' && row.name === 'fence_word_question_generation');
+    const wordIndex = client.operations.findIndex(row => row.table === 'words' && row.operation === 'update');
+    const posIndex = client.operations.findIndex(row => row.table === 'word_parts_of_speech' && row.operation === 'delete');
+    const finalizeIndex = client.operations.findIndex(row => row.operation === 'rpc' && row.name === 'finalize_word_question_generation_edit');
+    assert.deepEqual(rpcNames, ['fence_word_question_generation', 'finalize_word_question_generation_edit']);
+    assert.ok(fenceIndex < wordIndex && wordIndex < posIndex && posIndex < finalizeIndex);
+    assert.deepEqual(client.db.question_generation_jobs.map(row => row.word_id), ['word-finance']);
     assert.deepEqual(client.db.question_cache.map(row => row.id), ['cache-river']);
-    assert.equal(client.db.question_generation_jobs.find(row => row.id === 'job-finance').status, 'pending');
-    assert.equal(client.db.question_generation_jobs.find(row => row.id === 'job-finance').reason, 'word_edit');
-    assert.equal(client.db.question_generation_jobs.find(row => row.id === 'job-river').status, 'ready');
-    assert.deepEqual(client.operations.find(row => row.table === 'question_cache' && row.operation === 'delete').filters, [
-        { type: 'eq', column: 'user_id', value: 'user-1' },
-        { type: 'eq', column: 'word_id', value: 'word-finance' },
-    ]);
-    assert.deepEqual(client.operations.find(row => row.operation === 'rpc').args, {
-        p_user_id: 'user-1', p_word_id: 'word-finance', p_reason: 'word_edit',
-    });
 });
 
-test('quality edit resets a retrying generation job for only the edited record', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [
-            { id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'bank', meaning_en: 'finance' },
-            { id: 'word-2', feishu_record_id: 'rec-2', user_id: 'user-1', word: 'bank', meaning_en: 'river edge' },
-        ],
-        question_generation_jobs: [
-            { id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'retry_wait', attempt_count: 3, next_attempt_at: 'future' },
-            { id: 'job-2', user_id: 'user-1', word_id: 'word-2', status: 'ready', attempt_count: 1 },
-        ],
-    });
-    await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'bank', { recordId: 'rec-1', context: 'A new finance context.' });
-    const requeued = client.db.question_generation_jobs.find(row => row.id === 'job-1');
-    assert.equal(requeued.status, 'pending');
-    assert.equal(requeued.attempt_count, 0);
-    assert.equal(requeued.reason, 'word_edit');
-    assert.equal(client.db.question_generation_jobs.find(row => row.id === 'job-2').status, 'ready');
-});
-
-test('quality edit requeues each active generation state and clears the old worker lease data', async () => {
-    for (const status of ['generating', 'validating', 'repairing']) {
+test('mastered and invalid edits finalize by removing only their fenced cache and job', async () => {
+    for (const fields of [{ status: 'mastered' }, { word: 'genaine' }]) {
         const client = createFakeSupabase({
             users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-            words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit' }],
-            question_cache: [{ id: 'cache-' + status, user_id: 'user-1', word_id: 'word-1' }],
-            question_generation_jobs: [{
-                id: 'job-' + status, user_id: 'user-1', word_id: 'word-1', status, reason: 'old_reason',
-                attempt_count: 7, next_attempt_at: '2099-01-01T00:00:00.000Z', lease_owner: 'old-worker',
-                lease_expires_at: '2099-01-01T00:00:00.000Z', last_error_code: 'old_error',
-                last_error_detail: 'old detail', rejection_reasons: { old: 'reason' },
-            }],
+            words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit', mastery_status: 'pending' }],
+            question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
+            question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating' }],
         });
-        await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', { recordId: 'rec-1', context: 'new ' + status + ' context' });
-        const job = client.db.question_generation_jobs[0];
+        await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', { recordId: 'rec-1', ...fields });
         assert.deepEqual(client.db.question_cache, []);
-        assert.equal(job.status, 'pending');
-        assert.equal(job.reason, 'word_edit');
-        assert.equal(job.attempt_count, 0);
-        assert.notEqual(job.next_attempt_at, '2099-01-01T00:00:00.000Z');
-        assert.equal(job.lease_owner, null);
-        assert.equal(job.lease_expires_at, null);
-        assert.equal(job.last_error_code, null);
-        assert.equal(job.last_error_detail, null);
-        assert.deepEqual(job.rejection_reasons, {});
+        assert.deepEqual(client.db.question_generation_jobs, []);
     }
 });
-test('permanent false enqueue falls back to an idempotent pending job for a valid word', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-    }, { rpcDataFalseAlways: true });
-    const adapter = createSupabaseDataAdapter(client);
-    const fields = { recordId: 'rec-1', meaning: 'edible fruit' };
 
-    await adapter.updateWord('qiuqiu', 'apple', fields);
-    await adapter.updateWord('qiuqiu', 'apple', fields);
-
-    assert.equal(client.db.question_generation_jobs.length, 1);
-    assert.equal(client.db.question_generation_jobs[0].word_id, 'word-1');
-    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
-    assert.equal(client.db.question_generation_jobs[0].lease_owner, null);
-    assert.equal(client.operations.filter(row => row.operation === 'rpc').length, 2);
-    assert.equal(client.operations.some(row =>
-        row.table === 'question_generation_jobs' && row.operation === 'upsert'
-    ), true);
-});
-
-test('mastered and invalid quality edits succeed without leaving a job under permanent false enqueue conditions', async () => {
+test('same update payload recovers after POS, word, or finalize failure', async () => {
     const cases = [
-        {
-            name: 'mastered',
-            fields: { recordId: 'rec-1', meaning: 'fruit', status: 'mastered' },
-            oldJob: true,
-        },
-        {
-            name: 'invalid',
-            fields: { recordId: 'rec-1', word: 'genaine' },
-        },
+        { fields: { pos: 'noun' }, options: { failDeleteForOnce: 'word_parts_of_speech' } },
+        { fields: { context: 'An apple fell.' }, options: { failUpdateForOnce: 'words' } },
+        { fields: { context: 'An apple fell.' }, options: { failRpcNameOnce: 'finalize_word_question_generation_edit' } },
     ];
-
     for (const testCase of cases) {
         const client = createFakeSupabase({
             users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-            words: [{
-                id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-                word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-            }],
-            question_cache: [{ id: 'cache-' + testCase.name, user_id: 'user-1', word_id: 'word-1' }],
-            question_generation_jobs: testCase.oldJob ? [{
-                id: 'job-old', user_id: 'user-1', word_id: 'word-1', status: 'generating',
-                attempt_count: 3, lease_owner: 'old-worker',
-                lease_expires_at: '2099-01-01T00:00:00.000Z',
-                last_error_code: 'old-error', rejection_reasons: { stale: 1 },
-            }] : [],
-        }, { rpcDataFalseAlways: true });
-
-        await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', testCase.fields);
-
-        assert.deepEqual(client.db.question_cache, [], testCase.name);
-        assert.deepEqual(client.db.question_generation_jobs, [], testCase.name);
-        assert.equal(client.operations.some(row => row.operation === 'rpc'), false, testCase.name);
-        const cacheDeleteIndex = client.operations.findIndex(row =>
-            row.table === 'question_cache' && row.operation === 'delete'
-        );
-        const jobDeleteIndex = client.operations.findIndex(row =>
-            row.table === 'question_generation_jobs' && row.operation === 'delete'
-        );
-        assert.ok(cacheDeleteIndex >= 0, testCase.name);
-        assert.ok(jobDeleteIndex > cacheDeleteIndex, testCase.name);
+            words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit', mastery_status: 'pending' }],
+            parts_of_speech: [{ id: 1, code: 'noun', display_name: 'noun' }],
+        }, testCase.options);
+        const adapter = createSupabaseDataAdapter(client);
+        const payload = { recordId: 'rec-1', ...testCase.fields };
+        await assert.rejects(adapter.updateWord('qiuqiu', 'apple', payload));
+        await adapter.updateWord('qiuqiu', 'apple', payload);
+        assert.equal(client.db.question_generation_jobs.length, 1);
+        assert.equal(client.db.question_generation_jobs[0].status, 'pending');
+        assert.equal(client.db.question_generation_jobs[0].lease_owner, null);
     }
 });
-
-test('valid false-enqueue fallback propagates a durable job upsert failure', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-    }, {
-        rpcDataFalseAlways: true,
-        failUpsertFor: 'question_generation_jobs',
-    });
-
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-            recordId: 'rec-1', meaning: 'edible fruit',
-        }),
-        /updateWord.ensureQuestionGenerationJob/
-    );
-});
-
-
-test('POS failure returns explicitly while the fenced job remains unclaimable', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{
-            id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating',
-            lease_owner: 'old-worker', lease_expires_at: '2099-01-01T00:00:00.000Z',
-        }],
-    }, { failDeleteFor: 'word_parts_of_speech' });
-
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-            recordId: 'rec-1', pos: 'noun',
-        }),
-        /updateWord.partsOfSpeech.delete/
-    );
-
-    const job = client.db.question_generation_jobs[0];
-    assert.equal(job.status, 'pending');
-    assert.equal(job.lease_owner, null);
-    assert.equal(new Date(job.next_attempt_at).getUTCFullYear(), 9999);
-    assert.equal(client.db.question_cache.length, 1);
-});
-
-test('ineligible job cleanup failure returns explicitly after cache deletion', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1',
-            word: 'apple', meaning_en: 'fruit', mastery_status: 'pending',
-        }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{
-            id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'repairing',
-            lease_owner: 'old-worker', lease_expires_at: '2099-01-01T00:00:00.000Z',
-        }],
-    }, { failDeleteFor: 'question_generation_jobs' });
-
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-            recordId: 'rec-1', meaning: 'fruit', status: 'mastered',
-        }),
-        /updateWord.removeIneligibleQuestionGenerationJob/
-    );
-
-    assert.deepEqual(client.db.question_cache, []);
-    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
-    assert.equal(new Date(client.db.question_generation_jobs[0].next_attempt_at).getUTCFullYear(), 9999);
-});
-
-test('quality edit propagates a precise generation job fence update failure', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit' }],
-        question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating' }],
-    }, { failUpdateFor: 'question_generation_jobs' });
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', { recordId: 'rec-1', context: 'A new fruit context.' }),
-        /updateWord.fenceQuestionGeneration/
-    );
-});
-test('non-quality word edits do not invalidate cache or enqueue generation', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit' }],
-        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }],
-        question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'ready' }],
-    });
-    await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', {
-        recordId: 'rec-1', status: 'mastered', qualityFlags: ['reviewed'], qualityNote: 'checked',
-    });
-    assert.deepEqual(client.db.question_cache.map(row => row.id), ['cache-1']);
-    assert.equal(client.db.question_generation_jobs[0].status, 'ready');
-    assert.equal(client.operations.some(row => row.operation === 'rpc'), false);
-});
-
-test('quality edit propagates cache invalidation failure', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit' }],
-    }, { failDeleteFor: 'question_cache' });
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', { recordId: 'rec-1', meaning: 'edible fruit' }),
-        /updateWord.invalidateQuestionCache/
-    );
-});
-
-test('quality edit propagates durable generation enqueue failure', async () => {
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit' }],
-    }, { failRpcName: 'enqueue_question_generation_job_if_needed' });
-    await assert.rejects(
-        createSupabaseDataAdapter(client).updateWord('qiuqiu', 'apple', { recordId: 'rec-1', distractors: ['pear', 'plum', 'orange'] }),
-        /updateWord.enqueueQuestionGeneration/
-    );
-});
-
-
 test('updateWord rejects an unowned recordId instead of changing a same-spelling word', async () => {
     const client = seededClient();
     client.db.words.push({

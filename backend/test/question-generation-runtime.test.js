@@ -160,6 +160,7 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
                     row.attempt_count = Number(row.attempt_count || 0) + 1;
                     row.lease_owner = args.p_worker_id;
                     row.lease_expires_at = new Date(nowMs + args.p_lease_duration_ms).toISOString();
+                    row.lease_token = `lease-${sequence++}`;
                     row.updated_at = NOW;
                 }
                 return { data: clone(due), error: null };
@@ -168,6 +169,8 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
             const job = state.question_generation_jobs.find(row => row.id === args.p_job_id);
             const ownsLiveLease = job
                 && job.lease_owner === args.p_worker_id
+                && job.word_version === args.p_expected_word_version
+                && job.lease_token === args.p_lease_token
                 && inProgress.includes(job.status)
                 && new Date(job.lease_expires_at).getTime() > nowMs;
             if (name === 'renew_question_generation_job') {
@@ -258,6 +261,8 @@ function generationJob(overrides = {}) {
         status: 'generating',
         attempt_count: 1,
         lease_owner: 'worker-a',
+        word_version: 1,
+        lease_token: 'lease-1',
         lease_expires_at: '2026-08-03T12:01:00.000Z',
         next_attempt_at: NOW,
         ...overrides,
@@ -583,7 +588,7 @@ test('runtime returns its worker and independently testable persistence componen
 
 
 
-test('renew, complete, and fail transitions use RPCs without application authorization timestamps', async () => {
+test('renew, complete, and fail transitions return the claimed version and lease token without application authorization timestamps', async () => {
     const operations = [
         ['renew', 'renew_question_generation_job'],
         ['complete', 'complete_question_generation_job'],
@@ -607,6 +612,8 @@ test('renew, complete, and fail transitions use RPCs without application authori
         const call = fake.calls.find(item => item.type === 'rpc');
         assert.equal(call.name, rpcName);
         assert.equal(Object.keys(call.args).some(key => /before|expires_at|valid_after|updated_at/.test(key)), false);
+        assert.equal(call.args.p_expected_word_version, 1);
+        assert.equal(call.args.p_lease_token, 'lease-1');
         assert.equal(fake.calls.some(item => item.type === 'job_update'), false);
     }
 });
