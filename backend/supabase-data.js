@@ -1768,52 +1768,104 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     return updated;
 }
 
-async function invalidateWordQuestionCacheAndRequeue(client, userId, wordId) {
-    const { error: cacheError } = await client
+const WORD_EDIT_FENCE_UNTIL = '9999-12-31T23:59:59.999Z';
+const QUESTION_GENERATION_JOB_STATUSES = [
+    'pending',
+    'generating',
+    'validating',
+    'repairing',
+    'retry_wait',
+    'ready',
+    'needs_manual_review',
+];
+
+function pendingQuestionGenerationPatch(nextAttemptAt) {
+    const updatedAt = new Date().toISOString();
+    return {
+        status: 'pending',
+        reason: 'word_edit',
+        attempt_count: 0,
+        next_attempt_at: nextAttemptAt,
+        lease_owner: null,
+        lease_expires_at: null,
+        last_error_code: null,
+        last_error_detail: null,
+        rejection_reasons: {},
+        updated_at: updatedAt,
+    };
+}
+
+async function fenceWordQuestionGeneration(client, userId, wordId) {
+    const { error } = await client
+        .from('question_generation_jobs')
+        .update(pendingQuestionGenerationPatch(WORD_EDIT_FENCE_UNTIL))
+        .eq('user_id', userId)
+        .eq('word_id', wordId)
+        .in('status', QUESTION_GENERATION_JOB_STATUSES)
+        .select('id');
+    ensureNoError(error, 'updateWord.fenceQuestionGeneration');
+}
+
+async function deleteWordQuestionCache(client, userId, wordId) {
+    const { error } = await client
         .from('question_cache')
         .delete()
         .eq('user_id', userId)
         .eq('word_id', wordId)
         .select('id');
-    ensureNoError(cacheError, 'updateWord.invalidateQuestionCache');
+    ensureNoError(error, 'updateWord.invalidateQuestionCache');
+}
+
+function isQuestionGenerationEligibleWord(row) {
+    const word = String(row?.word || '').trim();
+    return row?.mastery_status !== 'mastered'
+        && word.toLowerCase() !== 'genaine'
+        && /^[a-z]+([ '-][a-z]+)*$/i.test(word);
+}
+
+async function finalizeWordQuestionGeneration(client, userId, wordRow) {
+    if (!isQuestionGenerationEligibleWord(wordRow)) {
+        const { error } = await client
+            .from('question_generation_jobs')
+            .delete()
+            .eq('user_id', userId)
+            .eq('word_id', wordRow.id)
+            .select('id');
+        ensureNoError(error, 'updateWord.removeIneligibleQuestionGenerationJob');
+        return;
+    }
 
     const { data: enqueueData, error: enqueueError } = await client.rpc('enqueue_question_generation_job_if_needed', {
         p_user_id: userId,
-        p_word_id: wordId,
+        p_word_id: wordRow.id,
         p_reason: 'word_edit',
     });
     ensureNoError(enqueueError, 'updateWord.enqueueQuestionGeneration');
+    if (enqueueData === true) return;
 
-    const { data: requeuedJobs, error: requeueError } = await client
+    const { data: job, error: upsertError } = await client
         .from('question_generation_jobs')
-        .update({
-            status: 'pending',
-            reason: 'word_edit',
-            attempt_count: 0,
-            next_attempt_at: new Date().toISOString(),
-            lease_owner: null,
-            lease_expires_at: null,
-            last_error_code: null,
-            last_error_detail: null,
-            rejection_reasons: {},
-            updated_at: new Date().toISOString(),
+        .upsert({
+            user_id: userId,
+            word_id: wordRow.id,
+            ...pendingQuestionGenerationPatch(new Date().toISOString()),
+        }, {
+            onConflict: 'word_id',
+            ignoreDuplicates: false,
         })
-        .eq('user_id', userId)
-        .eq('word_id', wordId)
-        .in('status', ['pending', 'generating', 'validating', 'repairing', 'retry_wait', 'ready', 'needs_manual_review'])
-        .select('id');
-    ensureNoError(requeueError, 'updateWord.requeueQuestionGeneration');
-    if (enqueueData === false && (!Array.isArray(requeuedJobs) || requeuedJobs.length === 0)) {
-        throw new Error('updateWord.requeueQuestionGeneration: enqueue RPC returned false and no matching job was requeued');
-    }
+        .select('id')
+        .maybeSingle();
+    ensureNoError(upsertError, 'updateWord.ensureQuestionGenerationJob');
+    if (!job) throw new Error('updateWord.ensureQuestionGenerationJob: pending job was not persisted');
 }
 async function updateWordWithClient(client, username, word, fields = {}) {
     const user = await requireUserByUsername(client, username);
     const has = key => Object.prototype.hasOwnProperty.call(fields, key) && fields[key] !== undefined;
     const editable = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'status', 'qualityFlags', 'qualityNote'];
-    const questionQualityChanged = ['word', 'meaning', 'cnMeaning', 'context', 'distractors'].some(has);
+    const questionQualityChanged = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors'].some(has);
     if (!editable.some(has)) throw new Error('WORD_UPDATE_FIELDS_REQUIRED');
     const [row] = await resolveWordRows(client, user.id, word, fields);
+    if (questionQualityChanged) await fenceWordQuestionGeneration(client, user.id, row.id);
 
     const payload = { updated_at: new Date().toISOString() };
     if (has('word')) payload.word = fields.word;
@@ -1854,7 +1906,10 @@ async function updateWordWithClient(client, username, word, fields = {}) {
             ensureNoError(insertError, 'updateWord.partsOfSpeech.insert');
         }
     }
-    if (questionQualityChanged) await invalidateWordQuestionCacheAndRequeue(client, user.id, row.id);
+    if (questionQualityChanged) {
+        await deleteWordQuestionCache(client, user.id, row.id);
+        await finalizeWordQuestionGeneration(client, user.id, data);
+    }
     return { success: true };
 }
 async function ensurePartOfSpeechRows(client, codes) {
