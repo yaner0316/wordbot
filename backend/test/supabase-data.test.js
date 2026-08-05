@@ -501,6 +501,24 @@ test('updateWord maps editable fields to the recordId-owned Supabase word', asyn
     assert.equal(updated.quality_note, 'confirmed');
     assert.deepEqual(client.db.word_parts_of_speech.filter(row => row.word_id === 'word-2').map(row => row.part_of_speech_id), [3]);
 });
+test('updateWord normalizes quality flag strings to the words text array', async () => {
+    const cases = [
+        { value: '', expected: [] },
+        { value: '["reviewed", " needs_context ", ""]', expected: ['reviewed', 'needs_context'] },
+        { value: 'reviewed, needs_context, ', expected: ['reviewed', 'needs_context'] },
+        { value: ['reviewed', ' needs_context ', ''], expected: ['reviewed', ' needs_context ', ''] },
+    ];
+
+    for (const { value, expected } of cases) {
+        const client = seededClient();
+        await createSupabaseDataAdapter(client).updateWord('qiuqiu', 'Apple', {
+            recordId: 'rec-word-1',
+            qualityFlags: value,
+        });
+        assert.deepEqual(client.db.words.find(row => row.id === 'word-1').quality_flags, expected);
+    }
+});
+
 test('updateWord gives recordId priority when a conflicting wordId is supplied', async () => {
     const client = seededClient();
     client.db.words.push({

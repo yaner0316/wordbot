@@ -162,6 +162,17 @@ function normalizePartsOfSpeech(value) {
         .map(part => abbreviations.get(part) || part);
 }
 
+function normalizeQualityFlags(value) {
+    if (Array.isArray(value)) return value;
+    const raw = String(value || '').trim();
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.map(item => String(item || '').trim()).filter(Boolean);
+    } catch {}
+    return raw.split(',').map(item => item.trim()).filter(Boolean);
+}
+
 function escapeRegExp(value) {
     return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1806,7 +1817,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     if (has('context')) payload.context_en = fields.context;
     if (has('distractors')) payload.distractors = fields.distractors;
     if (has('status')) payload.mastery_status = normalizeMasteryStatus(fields.status);
-    if (has('qualityFlags')) payload.quality_flags = fields.qualityFlags;
+    if (has('qualityFlags')) payload.quality_flags = normalizeQualityFlags(fields.qualityFlags);
     if (has('qualityNote')) payload.quality_note = fields.qualityNote;
     const { data, error } = await client
         .from('words')
