@@ -95,8 +95,9 @@ select
       and attribute.atttypid = 'uuid'::regtype
       and not attribute.attisdropped
   ) as job_lease_token_column,
-    from pg_catalog.pg_proc as revision_proc
   exists (
+    select 1
+    from pg_catalog.pg_proc as revision_proc
     join pg_catalog.pg_namespace as revision_namespace
       on revision_namespace.oid = revision_proc.pronamespace
     where revision_namespace.nspname = 'public'
@@ -156,7 +157,11 @@ select
   (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_public_execute,
   (select anon_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_anon_execute,
   (select authenticated_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_authenticated_execute,
-  (select oid is null from old_claim_proc) as rpc_old_claim_signature_absent
+  (select oid is null from old_claim_proc) as rpc_old_claim_signature_absent,
+  to_regprocedure('public.renew_question_generation_job(uuid,text,bigint)') is null as rpc_old_renew_signature_absent,
+  to_regprocedure('public.publish_question_generation_variants(uuid,text,jsonb)') is null as rpc_old_publish_signature_absent,
+  to_regprocedure('public.complete_question_generation_job(uuid,text)') is null as rpc_old_complete_signature_absent,
+  to_regprocedure('public.fail_question_generation_job(uuid,text,integer,bigint,bigint,text,text,jsonb)') is null as rpc_old_fail_signature_absent
 `;
 const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_jobs.sql'),
@@ -202,6 +207,10 @@ const EXPECTED_STATE = Object.freeze({
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),
   ])),
   rpc_old_claim_signature_absent: true,
+  rpc_old_renew_signature_absent: true,
+  rpc_old_publish_signature_absent: true,
+  rpc_old_complete_signature_absent: true,
+  rpc_old_fail_signature_absent: true,
 });
 function normalizeDatabaseUrl(databaseUrl) {
   try {

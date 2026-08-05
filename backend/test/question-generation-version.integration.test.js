@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const { PGlite } = require('@electric-sql/pglite');
-const { MIGRATION_PATHS } = require('../scripts/apply-question-generation-migrations');
+const { MIGRATION_PATHS, VERIFICATION_SQL } = require('../scripts/apply-question-generation-migrations');
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORD_ID = '22222222-2222-4222-8222-222222222222';
@@ -115,6 +115,15 @@ async function fenceWord(db) {
     );
 }
 
+test('migration verification SQL executes against the real versioned PGlite schema', async () => {
+    const db = await createDatabase();
+    try {
+        const result = await db.query(VERIFICATION_SQL);
+        assert.equal(result.rows[0].job_lease_token_column, true);
+    } finally {
+        await db.close();
+    }
+});
 test('a no-job word edit fence prevents a later backfill claim and stale publication', async () => {
     const db = await createDatabase();
     try {

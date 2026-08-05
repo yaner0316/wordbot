@@ -1749,6 +1749,7 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     const rows = await resolveWordRows(client, user.id, word, options);
     const updated = [];
     for (const row of rows) {
+        await fenceWordQuestionGeneration(client, user.id, row.id);
         const payload = {
             mastery_status: masteryStatus,
             updated_at: new Date().toISOString(),
@@ -1763,6 +1764,7 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
             .select('*')
             .single();
         ensureNoError(error, 'updateWordMastery');
+        await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
         updated.push(data);
     }
     return updated;

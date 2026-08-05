@@ -84,6 +84,10 @@ const COMPLETE_STATE = Object.freeze({
   job_lease_token_column: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
+  rpc_old_renew_signature_absent: true,
+  rpc_old_publish_signature_absent: true,
+  rpc_old_complete_signature_absent: true,
+  rpc_old_fail_signature_absent: true,
 });
 
 const INCOMPLETE_STATE = Object.freeze({

@@ -458,6 +458,23 @@ test('updateWordMastery updates the resolved user word row', async () => {
     assert.ok(client.db.words[0].remembered_at);
 });
 
+test('quiz mastery fences and finalizes only the exact same-spelling meaning, and retries after finalize failure', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [
+            { id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'bank', meaning_en: 'finance', mastery_status: 'pending' },
+            { id: 'word-2', feishu_record_id: 'rec-2', user_id: 'user-1', word: 'bank', meaning_en: 'river', mastery_status: 'pending' },
+        ],
+        question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1' }, { id: 'cache-2', user_id: 'user-1', word_id: 'word-2' }],
+        question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', word_id: 'word-1', status: 'generating' }, { id: 'job-2', user_id: 'user-1', word_id: 'word-2', status: 'ready' }],
+    }, { failRpcNameOnce: 'finalize_word_question_generation_edit' });
+    const adapter = createSupabaseDataAdapter(client);
+    await assert.rejects(adapter.updateWordMastery('qiuqiu', 'bank', 'mastered', { sourceWordRecordId: 'rec-1' }));
+    await adapter.updateWordMastery('qiuqiu', 'bank', 'mastered', { sourceWordRecordId: 'rec-1' });
+    assert.deepEqual(client.db.question_cache.map(row => row.id), ['cache-2']);
+    assert.deepEqual(client.db.question_generation_jobs.map(row => row.id), ['job-2']);
+    assert.equal(client.db.words.find(row => row.id === 'word-2').mastery_status, 'pending');
+});
 test('updateWord maps editable fields to the recordId-owned Supabase word', async () => {
     const client = seededClient();
     client.db.words.push({
