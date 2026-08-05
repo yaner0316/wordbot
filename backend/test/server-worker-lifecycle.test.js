@@ -178,3 +178,17 @@ test('direct HTTP close waits for its own worker before closing the listener', a
     await closePromise;
     assert.equal(server.listening, false);
 });
+
+test('production startup applies migrations before opening the listener', async () => {
+    const { startServerAfterMigrations } = require('../server');
+    const events = [];
+    const fakeServer = { id: 'server' };
+
+    const server = await startServerAfterMigrations({
+        applyMigrations: async () => { events.push('migrate'); },
+        startServerImpl: () => { events.push('listen'); return fakeServer; },
+    });
+
+    assert.deepEqual(events, ['migrate', 'listen']);
+    assert.equal(server, fakeServer);
+});
