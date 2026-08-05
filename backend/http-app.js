@@ -1,5 +1,46 @@
 const express = require('express');
 const cors = require('cors');
+const DEFAULT_CORS_ALLOWED_ORIGINS = Object.freeze([
+    'https://wordbot-web.onrender.com',
+]);
+
+function getCorsAllowedOrigins(environment = process.env) {
+    const configuredOrigins = String(environment.WORDBOT_CORS_ALLOWED_ORIGINS || '')
+        .split(',')
+        .map(origin => origin.trim())
+        .filter(Boolean);
+
+    return new Set(
+        configuredOrigins.length > 0
+            ? configuredOrigins
+            : DEFAULT_CORS_ALLOWED_ORIGINS
+    );
+}
+
+function isDevelopmentLocalOrigin(origin, environment = process.env) {
+    if (environment.NODE_ENV !== 'development') return false;
+
+    try {
+        const url = new URL(origin);
+        return url.protocol === 'http:'
+            && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+    } catch {
+        return false;
+    }
+}
+
+function createCorsOptions(environment = process.env) {
+    const allowedOrigins = getCorsAllowedOrigins(environment);
+
+    return {
+        credentials: true,
+        origin(origin, callback) {
+            const allowed = Boolean(origin)
+                && (allowedOrigins.has(origin) || isDevelopmentLocalOrigin(origin, environment));
+            callback(null, allowed ? origin : false);
+        },
+    };
+}
 
 const CLIENT_ERROR_PATTERNS = [
     /缺少参数/,
@@ -98,13 +139,14 @@ function createApp({
     getRuntimeHealth,
     onUserLogin,
     onParentLogin,
+    corsEnvironment = process.env,
 }) {
     if (typeof submitAnswers !== 'function') {
         throw new Error('createApp requires submitAnswers');
     }
 
     const app = express();
-    app.use(cors());
+    app.use(cors(createCorsOptions(corsEnvironment)));
     app.use(express.json());
     app.use(addErrorContract);
 
@@ -338,4 +380,7 @@ module.exports = {
     addErrorContract,
     createApp,
     errorCodeForStatus,
+    createCorsOptions,
+    getCorsAllowedOrigins,
+    isDevelopmentLocalOrigin,
 };
