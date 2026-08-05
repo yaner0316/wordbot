@@ -250,13 +250,18 @@ test('approved SQL files are transactional and idempotent', () => {
     assert.match(claimSql, new RegExp('function public\\.' + name + '[\\s\\S]*security definer', 'i'));
   }});
 
-test('root prestart runs only the fixed migration runner before the original server command', () => {
+test('both Render start layouts run the fixed migration runner before the server', () => {
   const rootPackage = JSON.parse(
     fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')
+  );
+  const backendPackage = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8')
   );
 
   assert.equal(rootPackage.scripts.prestart, 'node backend/scripts/apply-question-generation-migrations.js');
   assert.equal(rootPackage.scripts.start, 'node backend/server.js');
+  assert.equal(backendPackage.scripts.prestart, 'node scripts/apply-question-generation-migrations.js');
+  assert.equal(backendPackage.scripts.start, 'node server.js');
 });
 
 test('the real runner exits nonzero without DATABASE_URL and does not start the server', () => {
