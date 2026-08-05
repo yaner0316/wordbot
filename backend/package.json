@@ -6,7 +6,6 @@
   },
   "scripts": {
     "start": "node server.js",
-    "prestart": "node scripts/apply-question-generation-migrations.js",
     "test": "node --test --test-concurrency=1 --test-isolation=none \"test/**/*.test.js\"",
     "setup:review-fields": "node setup-review-fields.js",
     "check:env": "node check-env.js"
