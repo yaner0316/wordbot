@@ -1239,7 +1239,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
 }
 
 async function resolveWordRows(client, userId, word, options = {}) {
-    const sourceWordRecordId = String(options.sourceWordRecordId || options.wordRecordId || '').trim();
+    const sourceWordRecordId = String(options.recordId || options.sourceWordRecordId || options.wordRecordId || '').trim();
     if (options.wordId) {
         const { data, error } = await client
             .from('words')
@@ -1269,6 +1269,9 @@ async function resolveWordRows(client, userId, word, options = {}) {
             .maybeSingle();
         ensureNoError(error, 'resolveWordRows.sourceFeishu');
         if (data) return [data];
+    }
+    if (options.wordId || sourceWordRecordId) {
+        throw new Error(`WORD_NOT_FOUND: ${sourceWordRecordId || options.wordId}`);
     }
 
     const normalizedWord = String(word || '').trim();
@@ -1765,6 +1768,92 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     return updated;
 }
 
+async function invalidateWordQuestionCacheAndRequeue(client, userId, wordId) {
+    const { error: cacheError } = await client
+        .from('question_cache')
+        .delete()
+        .eq('user_id', userId)
+        .eq('word_id', wordId)
+        .select('id');
+    ensureNoError(cacheError, 'updateWord.invalidateQuestionCache');
+
+    const { error: enqueueError } = await client.rpc('enqueue_question_generation_job_if_needed', {
+        p_user_id: userId,
+        p_word_id: wordId,
+        p_reason: 'word_edit',
+    });
+    ensureNoError(enqueueError, 'updateWord.enqueueQuestionGeneration');
+
+    const { error: requeueError } = await client
+        .from('question_generation_jobs')
+        .update({
+            status: 'pending',
+            reason: 'word_edit',
+            attempt_count: 0,
+            next_attempt_at: new Date().toISOString(),
+            lease_owner: null,
+            lease_expires_at: null,
+            last_error_code: null,
+            last_error_detail: null,
+            rejection_reasons: {},
+            updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('word_id', wordId)
+        .in('status', ['ready', 'retry_wait', 'needs_manual_review'])
+        .select('id');
+    ensureNoError(requeueError, 'updateWord.requeueQuestionGeneration');
+}
+async function updateWordWithClient(client, username, word, fields = {}) {
+    const user = await requireUserByUsername(client, username);
+    const has = key => Object.prototype.hasOwnProperty.call(fields, key) && fields[key] !== undefined;
+    const editable = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'status', 'qualityFlags', 'qualityNote'];
+    const questionQualityChanged = ['word', 'meaning', 'cnMeaning', 'context', 'distractors'].some(has);
+    if (!editable.some(has)) throw new Error('WORD_UPDATE_FIELDS_REQUIRED');
+    const [row] = await resolveWordRows(client, user.id, word, fields);
+
+    const payload = { updated_at: new Date().toISOString() };
+    if (has('word')) payload.word = fields.word;
+    if (has('meaning')) payload.meaning_en = fields.meaning;
+    if (has('cnMeaning')) payload.meaning_zh = fields.cnMeaning;
+    if (has('context')) payload.context_en = fields.context;
+    if (has('distractors')) payload.distractors = fields.distractors;
+    if (has('status')) payload.mastery_status = normalizeMasteryStatus(fields.status);
+    if (has('qualityFlags')) payload.quality_flags = fields.qualityFlags;
+    if (has('qualityNote')) payload.quality_note = fields.qualityNote;
+    const { data, error } = await client
+        .from('words')
+        .update(payload)
+        .eq('id', row.id)
+        .eq('user_id', user.id)
+        .select('*')
+        .single();
+    ensureNoError(error, 'updateWord.words');
+    if (!data) throw new Error(`WORD_NOT_FOUND: ${row.id}`);
+
+    if (has('pos')) {
+        const parts = normalizePartsOfSpeech(fields.pos);
+        const { error: deleteError } = await client
+            .from('word_parts_of_speech')
+            .delete()
+            .eq('word_id', row.id)
+            .select('*');
+        ensureNoError(deleteError, 'updateWord.partsOfSpeech.delete');
+        if (parts.length) {
+            const partRows = await ensurePartOfSpeechRows(client, parts);
+            const { error: insertError } = await client
+                .from('word_parts_of_speech')
+                .insert(parts.map((part, index) => ({
+                    word_id: row.id,
+                    part_of_speech_id: partRows.get(part).id,
+                    position: index + 1,
+                })));
+            ensureNoError(insertError, 'updateWord.partsOfSpeech.insert');
+        }
+    }
+    if (questionQualityChanged) await invalidateWordQuestionCacheAndRequeue(client, user.id, row.id);
+    return { success: true };
+}
 async function ensurePartOfSpeechRows(client, codes) {
     const uniqueCodes = [...new Set(codes)];
     if (!uniqueCodes.length) return new Map();
@@ -2122,6 +2211,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         applyQuizCacheLifecycle: input => applyQuizCacheLifecycleWithClient(client, input),
         getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
         getGameState: username => getGameStateWithClient(client, username),
+        updateWord: (username, word, fields) => updateWordWithClient(client, username, word, fields),
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
@@ -2175,6 +2265,7 @@ module.exports = {
     applyQuizCacheLifecycle: defaultAdapter.applyQuizCacheLifecycle,
     getQuestionCacheStatus: defaultAdapter.getQuestionCacheStatus,
     getGameState: defaultAdapter.getGameState,
+    updateWord: defaultAdapter.updateWord,
     saveGameState: defaultAdapter.saveGameState,
     getQuestionCacheDiagnostics: defaultAdapter.getQuestionCacheDiagnostics,
     deleteQuestionCacheRows: defaultAdapter.deleteQuestionCacheRows,

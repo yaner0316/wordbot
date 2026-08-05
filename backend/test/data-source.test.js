@@ -207,6 +207,15 @@ test('defaults DATA_SOURCE to supabase and exposes the unified interface', async
     assert.equal((await dataSource.addWord({ username: 'qiuqiu', word: 'apple', meaning: 'fruit' })).source, 'supabase');
 });
 
+test('DATA_SOURCE=supabase never falls back to Feishu for updateWord', async () => {
+    const dataSource = loadDataSource({
+        envValue: 'supabase',
+        feishuExports: { updateWord: async () => ({ source: 'feishu' }) },
+    });
+    assert.throws(() => dataSource.updateWord('qiuqiu', 'apple', {}), /supabaseData\.updateWord is not a function/);
+});
+
+
 test('WORDBOT_CACHE_SOURCE=feishu reads the Feishu cache while keeping Supabase data source', async () => {
     const dataSource = loadDataSource({ cacheSource: 'feishu', feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] } });
     assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);

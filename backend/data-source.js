@@ -394,6 +394,7 @@ function loadSupabaseDataSource() {
         generateQuiz,
         submitAnswers,
         addWord,
+        updateWord: (username, word, fields) => supabaseData.updateWord(username, word, fields),
         addWords,
     };
 }
