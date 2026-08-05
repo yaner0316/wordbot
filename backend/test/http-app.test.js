@@ -296,11 +296,56 @@ test('active formal quiz session response exposes trusted cache-only metadata', 
             testId: 'real-student',
             source: 'question_cache',
             mode: 'real',
+            partialFormalChallenge: false,
+            readyCount: 10,
+            requiredCount: 10,
             diagnostics: {
                 fallbackUsed: false,
                 resumed: true,
                 requiredCount: 10,
                 readyCount: 10,
+                finalQuestionCount: 10,
+            },
+            questions,
+            progress: { currentQuestion: 3, answers: ['A'] },
+        });
+    });
+});
+
+test('active session DTO preserves a partial formal cache challenge', async () => {
+    const questions = Array.from({ length: 7 }, (_, index) => ({
+        type: 1,
+        word: `word-${index}`,
+        wordRecordId: `meaning-${index}`,
+        cacheRecordId: `cache-${index}`,
+        source: 'question_cache',
+    }));
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveQuizSession: async () => ({
+            test_id: 'real-partial-student',
+            questions,
+            progress: { currentQuestion: 3, answers: ['A'] },
+        }),
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            active: true,
+            testId: 'real-partial-student',
+            source: 'question_cache',
+            mode: 'real',
+            partialFormalChallenge: true,
+            readyCount: 7,
+            requiredCount: 10,
+            diagnostics: {
+                fallbackUsed: false,
+                resumed: true,
+                requiredCount: 10,
+                readyCount: 7,
+                finalQuestionCount: 7,
             },
             questions,
             progress: { currentQuestion: 3, answers: ['A'] },

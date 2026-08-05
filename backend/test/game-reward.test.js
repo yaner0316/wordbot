@@ -37,6 +37,23 @@ test('grants the regular reward for nine correct answers', () => {
     );
 });
 
+test('does not grant game time for a perfect partial formal quiz', () => {
+    assert.deepEqual(
+        calculateGameReward({
+            testId: 'real-partial-quiz',
+            mode: 'real',
+            correct: 9,
+            total: 9,
+        }),
+        {
+            eligible: false,
+            minutes: 0,
+            tier: 'none',
+            reason: 'incomplete_quiz',
+        }
+    );
+});
+
 test('does not grant a reward for review rounds or test mode', () => {
     assert.equal(
         calculateGameReward({

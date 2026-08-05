@@ -106,11 +106,51 @@ test('generateQuiz resumes an active complete type-one session before building a
     assert.equal(quiz.testId, 'real-active');
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.source, 'question_cache');
-    assert.deepEqual(quiz.diagnostics, { fallbackUsed: false, resumed: true, requiredCount: 10, readyCount: 10 });
+    assert.equal(quiz.partialFormalChallenge, false);
+    assert.equal(quiz.readyCount, 10);
+    assert.equal(quiz.requiredCount, 10);
+    assert.deepEqual(quiz.diagnostics, { fallbackUsed: false, resumed: true, requiredCount: 10, readyCount: 10, finalQuestionCount: 10 });
     assert.equal(quiz.progress.currentQuestion, 7);
 });
 
-test('formal session recovery rejects test, live, incomplete, and duplicate-meaning sessions', () => {
+test('generateQuiz resumes a partial formal cache session with explicit challenge metadata', async () => {
+    const questions = Array.from({ length: 7 }, (_, index) => ({
+        type: 1,
+        word: 'word' + (index + 1),
+        record_id: 'rec-' + (index + 1),
+        cacheRecordId: 'cache-' + (index + 1),
+        source: 'question_cache',
+        options: ['A. answer', 'B. other', 'C. another', 'D. last'],
+        answer: 'A',
+        context: 'Sentence ' + (index + 1) + '.',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async () => ({
+                test_id: 'real-partial-active',
+                questions,
+                progress: { currentQuestion: 4, answers: Array(4).fill({ option: 0, confidence: 'sure' }) },
+            }),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(quiz.testId, 'real-partial-active');
+    assert.equal(quiz.partialFormalChallenge, true);
+    assert.equal(quiz.questions.length, 7);
+    assert.equal(quiz.readyCount, 7);
+    assert.equal(quiz.requiredCount, 10);
+    assert.deepEqual(quiz.diagnostics, {
+        fallbackUsed: false,
+        resumed: true,
+        requiredCount: 10,
+        readyCount: 7,
+        finalQuestionCount: 7,
+    });
+});
+
+test('formal session recovery accepts cache-only partial sessions and rejects invalid sources or meanings', () => {
     const dataSource = loadDataSource();
     const cachedQuestions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
@@ -132,12 +172,24 @@ test('formal session recovery rejects test, live, incomplete, and duplicate-mean
         questions: cachedQuestions.map(({ cacheRecordId, ...question }) => question),
     }, 'real'), false);
     assert.equal(dataSource.isResumableQuizSession({
-        test_id: 'real-short',
+        test_id: 'real-partial',
         questions: cachedQuestions.slice(0, 9),
+    }, 'real'), true);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-empty',
+        questions: [],
+    }, 'real'), false);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-fallback',
+        questions: cachedQuestions.map(question => ({ ...question, source: 'live_fallback' })),
     }, 'real'), false);
     assert.equal(dataSource.isResumableQuizSession({
         test_id: 'real-duplicate',
         questions: cachedQuestions.map(question => ({ ...question, record_id: 'same-meaning' })),
+    }, 'real'), false);
+    assert.equal(dataSource.isResumableQuizSession({
+        test_id: 'real-missing-meaning',
+        questions: cachedQuestions.map(({ record_id, ...question }) => question),
     }, 'real'), false);
 });
 test('defaults DATA_SOURCE to supabase and exposes the unified interface', async () => {

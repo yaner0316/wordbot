@@ -19,14 +19,22 @@ function quizMeaningId(question) {
 }
 
 function isResumableQuizSession(session, requestedMode = 'real') {
-    if (!session || getAssessmentMode(session.test_id) !== normalizeAssessmentMode(requestedMode)) return false;
+    const normalizedMode = normalizeAssessmentMode(requestedMode);
+    if (!session || normalizedMode !== 'real' || getAssessmentMode(session.test_id) !== 'real') return false;
+    const sessionMode = String(session.mode || 'real').trim().toLowerCase();
+    const sessionSource = String(session.source || '').trim().toLowerCase();
+    if (sessionMode !== 'real' || (sessionSource && sessionSource !== 'question_cache')) return false;
     const questions = Array.isArray(session.questions) ? session.questions : [];
-    if (questions.length !== QUIZ_QUESTION_COUNT || questions.some(question => Number(question?.type) !== 1)) return false;
-    if (normalizeAssessmentMode(requestedMode) !== 'real') return true;
+    if (questions.length < 1 || questions.length > QUIZ_QUESTION_COUNT) return false;
+    if (questions.some(question => Number(question?.type) !== 1)) return false;
     const meaningIds = questions.map(quizMeaningId);
-    return questions.every(question => String(question?.cacheRecordId || '').trim())
+    return questions.every(question => {
+        const source = String(question?.source || '').trim().toLowerCase();
+        return String(question?.cacheRecordId || '').trim()
+            && (!source || source === 'question_cache');
+    })
         && meaningIds.every(Boolean)
-        && new Set(meaningIds).size === QUIZ_QUESTION_COUNT;
+        && new Set(meaningIds).size === questions.length;
 }
 
 function normalizeDataSource(value) {
@@ -241,12 +249,22 @@ function loadSupabaseDataSource() {
         if (activeSession) {
             const questions = Array.isArray(activeSession.questions) ? activeSession.questions : [];
             if (isResumableQuizSession(activeSession, mode || 'real')) {
+                const partialFormalChallenge = questions.length < QUIZ_QUESTION_COUNT;
                 return {
                     testId: activeSession.test_id,
                     mode: mode || 'real',
                     level: level || null,
                     source: 'question_cache',
-                    diagnostics: { fallbackUsed: false, resumed: true, requiredCount: QUIZ_QUESTION_COUNT, readyCount: questions.length },
+                    partialFormalChallenge,
+                    readyCount: questions.length,
+                    requiredCount: QUIZ_QUESTION_COUNT,
+                    diagnostics: {
+                        fallbackUsed: false,
+                        resumed: true,
+                        requiredCount: QUIZ_QUESTION_COUNT,
+                        readyCount: questions.length,
+                        finalQuestionCount: questions.length,
+                    },
                     progress: activeSession.progress || { currentQuestion: 0, answers: [] },
                     questions,
                 };

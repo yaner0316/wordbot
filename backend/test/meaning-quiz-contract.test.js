@@ -99,3 +99,25 @@ test('formal quiz fails closed when word timestamps are missing', async () => {
     assert.equal(quiz.code, 'QUESTION_POOL_EXHAUSTED');
     assert.deepEqual(quiz.questions, []);
 });
+test('formal quiz returns every available cached question when one to nine are ready', async () => {
+    const words = Array.from({ length: 12 }, (_, index) => word(index + 1, NOW - WORD_QUIZ_COOLDOWN_MS));
+
+    for (let readyCount = 1; readyCount <= 10; readyCount += 1) {
+        const quiz = await generateQuizWithDataSource({
+            username: 'qiuqiu', level: LEVEL, mode: 'real', now: NOW,
+            dataSource: dataSource(words, Array.from({ length: readyCount }, (_, index) => cache(index + 1))),
+            createId: () => `partial-${readyCount}`,
+        });
+
+        assert.equal(quiz.error, undefined);
+        assert.equal(quiz.source, 'question_cache');
+        assert.equal(quiz.partialFormalChallenge, readyCount < 10);
+        assert.equal(quiz.readyCount, readyCount);
+        assert.equal(quiz.requiredCount, 10);
+        assert.equal(quiz.questions.length, readyCount);
+        assert.equal(quiz.questions.every(question => question.source === 'question_cache'), true);
+        assert.equal(quiz.diagnostics.source, 'question_cache');
+        assert.equal(quiz.diagnostics.fallbackUsed, false);
+        assert.equal(quiz.diagnostics.finalQuestionCount, readyCount);
+    }
+});

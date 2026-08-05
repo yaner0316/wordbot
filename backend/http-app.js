@@ -215,16 +215,21 @@ function createApp({
                 const session = await getActiveQuizSession(user);
                 if (!session) return res.json({ active: false });
                 const questions = Array.isArray(session.questions) ? session.questions : [];
+                const readyCount = questions.length;
                 res.json({
                     active: true,
                     testId: session.test_id,
                     source: 'question_cache',
                     mode: 'real',
+                    partialFormalChallenge: readyCount < 10,
+                    readyCount,
+                    requiredCount: 10,
                     diagnostics: {
                         fallbackUsed: false,
                         resumed: true,
                         requiredCount: 10,
-                        readyCount: questions.length,
+                        readyCount,
+                        finalQuestionCount: readyCount,
                     },
                     questions,
                     progress: session.progress,

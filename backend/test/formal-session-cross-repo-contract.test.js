@@ -49,6 +49,8 @@ test('the real active-session HTTP DTO passes the production frontend formal gat
             code: '',
             message: '',
         });
+        assert.equal(rawDto.partialFormalChallenge, false);
+        assert.equal(rawDto.diagnostics.finalQuestionCount, 10);
         assert.equal(new Set(rawDto.questions.map(question => question.wordRecordId)).size, 10);
     });
 });

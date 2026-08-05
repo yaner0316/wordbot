@@ -24,6 +24,9 @@ function calculateGameReward({ testId, mode, correct, total }) {
     if (questionCount <= 0 || score < 9) {
         return { eligible: false, minutes: 0, tier: 'none', reason: 'score_below_threshold' };
     }
+    if (questionCount !== 10) {
+        return { eligible: false, minutes: 0, tier: 'none', reason: 'incomplete_quiz' };
+    }
     if (score >= questionCount) {
         return {
             eligible: true,

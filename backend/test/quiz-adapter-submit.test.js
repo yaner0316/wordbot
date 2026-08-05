@@ -62,6 +62,8 @@ test('submitQuizWithDataSource writes assessment, mastery status, and cache usag
 
     assert.equal(result.correct, 1);
     assert.equal(result.total, 1);
+    assert.equal(result.gameReward.eligible, false);
+    assert.equal(result.gameReward.minutes, 0);
     assert.equal(result.results[0].correct, true);
     assert.equal(calls[0][0], 'submitAssessment');
     assert.equal(calls[0][1].sourceWordRecordId, 'rec-word-1');

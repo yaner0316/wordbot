@@ -324,6 +324,7 @@ async function generateQuizWithDataSource({
         now,
     }).map((question) => ({
         ...question,
+        source: 'question_cache',
         correctAnswer: question.answer,
     }));
 
@@ -344,30 +345,54 @@ async function generateQuizWithDataSource({
     };
 
     if (questions.length < limit) {
-    if (mode === 'real' && questions.length < limit) {
-        const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
-        return {
-            error: code === 'QUESTION_POOL_EXHAUSTED'
-                ? 'Question pool exhausted for this level.'
-                : 'Question cache is still preparing.',
-            code,
-            source: 'question_cache',
-            level: effectiveLevel,
-            diagnostics: {
-                ...diagnostics,
-                state: code === 'QUESTION_POOL_EXHAUSTED' ? 'exhausted' : 'building',
-                readyCount: questions.length,
-                eligibleReadyMeanings: questions.length,
+        if (mode === 'real') {
+            if (questions.length > 0) {
+                return {
+                    testId,
+                    mode,
+                    source: 'question_cache',
+                    level: effectiveLevel,
+                    partialFormalChallenge: true,
+                    readyCount: questions.length,
+                    requiredCount: limit,
+                    diagnostics: {
+                        ...diagnostics,
+                        source: 'question_cache',
+                        fallbackUsed: false,
+                        fallbackQuestionCount: 0,
+                        finalQuestionCount: questions.length,
+                        readyCount: questions.length,
+                        requiredCount: limit,
+                    },
+                    questions,
+                };
+            }
+
+            const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
+            return {
+                error: code === 'QUESTION_POOL_EXHAUSTED'
+                    ? 'Question pool exhausted for this level.'
+                    : 'Question cache is still preparing.',
+                code,
+                source: 'question_cache',
+                level: effectiveLevel,
+                partialFormalChallenge: false,
+                diagnostics: {
+                    ...diagnostics,
+                    source: 'question_cache',
+                    state: code === 'QUESTION_POOL_EXHAUSTED' ? 'exhausted' : 'building',
+                    readyCount: 0,
+                    eligibleReadyMeanings: 0,
+                    requiredCount: limit,
+                    fallbackUsed: false,
+                    fallbackQuestionCount: 0,
+                    finalQuestionCount: 0,
+                },
+                readyCount: 0,
                 requiredCount: limit,
-                fallbackUsed: false,
-                fallbackQuestionCount: 0,
-                finalQuestionCount: 0,
-            },
-            readyCount: questions.length,
-            requiredCount: limit,
-            questions: [],
-        };
-    }
+                questions: [],
+            };
+        }
 
         const fallbackQueue = [...new Set([
             ...queue,
@@ -458,7 +483,20 @@ async function generateQuizWithDataSource({
         mode,
         source: 'question_cache',
         level: effectiveLevel,
-        diagnostics,
+        partialFormalChallenge: mode === 'real' ? false : undefined,
+        readyCount: mode === 'real' ? questions.length : undefined,
+        requiredCount: mode === 'real' ? limit : undefined,
+        diagnostics: mode === 'real'
+            ? {
+                ...diagnostics,
+                source: 'question_cache',
+                fallbackUsed: false,
+                fallbackQuestionCount: 0,
+                finalQuestionCount: questions.length,
+                readyCount: questions.length,
+                requiredCount: limit,
+            }
+            : diagnostics,
         questions,
     };
 }
