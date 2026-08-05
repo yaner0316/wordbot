@@ -398,7 +398,17 @@ test('word loader inherits a missing word level from the user learning level', a
     });
     const loadWord = createSupabaseWordLoader({ client: fake.client });
     const word = await loadWord('word-no-level', 'user-1');
-    assert.equal(word.level, 'high');
+    assert.equal(word.level, String.fromCharCode(0x9ad8, 0x4e2d));
+});
+
+test('word loader uses the schema default when both word and user levels are missing', async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-no-level', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: null }],
+        users: [{ id: 'user-1', learning_level: null }],
+    });
+    const loadWord = createSupabaseWordLoader({ client: fake.client });
+    const word = await loadWord('word-no-level', 'user-1');
+    assert.equal(word.level, String.fromCharCode(0x4e2d, 0x5b66));
 });
 
 test('publisher rejects any count other than the product invariant of exactly two variants', async () => {

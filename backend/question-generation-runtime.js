@@ -3,6 +3,7 @@
 const { createQuestionGenerationJobStore } = require('./question-generation-job');
 const { createQuestionGenerationService } = require('./question-generation-service');
 const { createQuestionGenerationWorker } = require('./question-generation-worker');
+const { normalizeLevel } = require('./learning-level');
 
 const DEFAULT_CLAIM_RPC = 'claim_question_generation_jobs';
 const RENEW_RPC = 'renew_question_generation_job';
@@ -158,7 +159,7 @@ function createSupabaseWordLoader({ client } = {}) {
         throwSupabaseError(userError, 'questionGeneration.loadUserLevel');
         return {
             ...data,
-            level: String(user?.learning_level || 'middle').trim() || 'middle',
+            level: normalizeLevel(user?.learning_level),
         };
     };
 }
