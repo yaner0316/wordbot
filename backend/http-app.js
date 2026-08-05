@@ -1,5 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const {
+    FORMAL_QUIZ_REQUIRED_COUNT,
+    isResumableQuizSession,
+} = require('./formal-quiz-session');
 const DEFAULT_CORS_ALLOWED_ORIGINS = Object.freeze([
     'https://wordbot-web.onrender.com',
 ]);
@@ -213,21 +217,21 @@ function createApp({
                 const { user } = req.query;
                 if (!user) return res.status(400).json({ error: '缂哄皯鐢ㄦ埛ID' });
                 const session = await getActiveQuizSession(user);
-                if (!session) return res.json({ active: false });
-                const questions = Array.isArray(session.questions) ? session.questions : [];
+                if (!isResumableQuizSession(session)) return res.json({ active: false });
+                const questions = session.questions;
                 const readyCount = questions.length;
                 res.json({
                     active: true,
                     testId: session.test_id,
                     source: 'question_cache',
                     mode: 'real',
-                    partialFormalChallenge: readyCount < 10,
+                    partialFormalChallenge: readyCount < FORMAL_QUIZ_REQUIRED_COUNT,
                     readyCount,
-                    requiredCount: 10,
+                    requiredCount: FORMAL_QUIZ_REQUIRED_COUNT,
                     diagnostics: {
                         fallbackUsed: false,
                         resumed: true,
-                        requiredCount: 10,
+                        requiredCount: FORMAL_QUIZ_REQUIRED_COUNT,
                         readyCount,
                         finalQuestionCount: readyCount,
                     },

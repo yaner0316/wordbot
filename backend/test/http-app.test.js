@@ -283,8 +283,8 @@ test('active formal quiz session response exposes trusted cache-only metadata', 
             test_id: `real-${user}`,
             questions,
             progress: { currentQuestion: 3, answers: ['A'] },
-            source: 'live_fallback',
-            mode: 'test',
+            source: 'question_cache',
+            mode: 'real',
         }),
     });
 
@@ -388,4 +388,57 @@ test('health endpoint reports runtime and configuration presence', async () => {
         assert.equal(body.env.FEISHU_APP_ID, true);
         assert.equal(body.env.FEISHU_APP_SECRET, false);
     });
+});
+
+test('active session DTO rejects sessions that are not resumable formal cache challenges', async t => {
+    const validQuestions = Array.from({ length: 3 }, (_, index) => ({
+        type: 1,
+        word: `word-${index}`,
+        wordRecordId: `meaning-${index}`,
+        cacheRecordId: `cache-${index}`,
+        source: 'question_cache',
+    }));
+    const invalidSessions = [
+        {
+            name: 'empty questions',
+            session: { test_id: 'real-empty', questions: [] },
+        },
+        {
+            name: 'test mode',
+            session: { test_id: 'test-session', mode: 'test', questions: validQuestions },
+        },
+        {
+            name: 'live fallback source',
+            session: { test_id: 'real-live', source: 'live_fallback', questions: validQuestions },
+        },
+        {
+            name: 'duplicate meaning ids',
+            session: {
+                test_id: 'real-duplicate',
+                questions: validQuestions.map(question => ({ ...question, wordRecordId: 'same-meaning' })),
+            },
+        },
+        {
+            name: 'missing meaning id',
+            session: {
+                test_id: 'real-missing-meaning',
+                questions: validQuestions.map(({ wordRecordId, ...question }) => question),
+            },
+        },
+    ];
+
+    for (const { name, session } of invalidSessions) {
+        await t.test(name, async () => {
+            const app = createApp({
+                submitAnswers: async () => ({}),
+                getActiveQuizSession: async () => session,
+            });
+
+            await withServer(app, async baseUrl => {
+                const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
+                assert.equal(response.status, 200);
+                assert.deepEqual(await response.json(), { active: false });
+            });
+        });
+    }
 });
