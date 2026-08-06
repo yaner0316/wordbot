@@ -1135,7 +1135,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         ).length > 0
     );
 
-    const seedTargetPrimaryCount = 10;
     const rows = [];
     const seededPrimaryWordIds = new Set();
     const generateDistractors = async input => {
@@ -1170,7 +1169,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of wordsNeedingRebuild) {
-        if (seededPrimaryWordIds.size >= seedTargetPrimaryCount) break;
         const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
         if (!primaryRows.length) continue;

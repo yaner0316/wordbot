@@ -2424,6 +2424,36 @@ function createRebuildCoverageAdapter(client, options = {}) {
     });
 }
 
+test('rebuildQuestionCacheForUser covers every unmastered meaning beyond the formal quiz seed size', async () => {
+    const names = ['amber', 'basic', 'cider', 'daisy', 'ember', 'fable', 'glade', 'honey', 'ivory', 'jolly', 'karma', 'lilac'];
+    const words = names.map((word, index) => rebuildCoverageWord(
+        `coverage-${index + 1}`,
+        word,
+        `2026-07-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`
+    ));
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words,
+        assessments: [],
+        question_cache: [],
+    });
+
+    const result = await createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+    const primaryRows = client.db.question_cache.filter(row =>
+        row.round_type === 'primary'
+        && row.quality_status === 'ready'
+        && ['active', 'reserved_next_day'].includes(row.cache_state)
+    );
+
+    assert.equal(result.count, 24);
+    assert.equal(primaryRows.length, 24);
+    for (const word of words) {
+        const rows = primaryRows.filter(row => row.word_id === word.id);
+        assert.equal(rows.length, 2, word.id);
+        assert.equal(new Set(rows.map(row => row.question_text)).size, 2, word.id);
+    }
+});
+
 test('rebuildQuestionCacheForUser keeps both old rows when a bad translation replacement write fails', async () => {
     const word = rebuildCoverageWord('write-failure', 'lucky');
     const oldRows = rebuildCoverageInvalidPair(word);
@@ -2583,10 +2613,10 @@ test('rebuildQuestionCacheForUser prioritizes previously tested meanings before 
         .filter(row => row.context_zh === DEFAULT_TEST_CONTEXT_TRANSLATION)
         .map(row => row.source_word_record_id))];
 
-    assert.equal(result.count, 20);
+    assert.equal(result.count, 24);
     assert.deepEqual(publishedSourceIds, [
         ...testedBeforeToday.map(word => word.feishu_record_id),
-        ...untested.slice(0, 6).map(word => word.feishu_record_id),
+        ...untested.map(word => word.feishu_record_id),
+        testedToday[0].feishu_record_id,
     ]);
-    assert.equal(publishedSourceIds.includes(testedToday[0].feishu_record_id), false);
 });
