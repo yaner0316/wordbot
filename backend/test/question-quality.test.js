@@ -688,6 +688,43 @@ test('fill-in rejects same-category transport route contexts across levels', () 
     assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
 });
 
+test('fill-in rejects screenshot method-strategy distractors in broad problem-solving contexts', () => {
+    const cases = [
+        'We need a new _____ to solve this problem.',
+        'To solve the problem, the team needs a different _____.',
+        'We need a new _____ for solving this problem.',
+    ];
+
+    for (const context of cases) {
+        const issues = getQuestionQualityIssues({
+            type: 1,
+            level: JUNIOR_HIGH,
+            word: 'method',
+            context,
+            correctMeaning: String.fromCharCode(0x65b9, 0x6cd5),
+            options: ['A. approach', 'B. technique', 'C. method', 'D. strategy'],
+            answer: 'C',
+        });
+        assert.ok(issues.includes('ambiguous_fill_in_context'), `${context} issues=${issues.join(',')}`);
+    }
+});
+test('fill-in keeps a unique non-solution meaning acceptable', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'apple',
+        context: 'She ate a ripe _____ after lunch.',
+        correctMeaning: String.fromCharCode(0x82f9, 0x679c),
+        options: ['A. apple', 'B. method', 'C. technique', 'D. strategy'],
+        answer: 'A',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), true);
+    assert.equal(issues.includes('ambiguous_fill_in_context'), false, 'issues=' + issues.join(','));
+});
+
+
 test('middle-school quality rejects qiuqiu screenshot bad fill-in samples', () => {
     const cases = [
         {

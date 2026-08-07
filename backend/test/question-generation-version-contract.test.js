@@ -27,7 +27,7 @@ function functionBody(name) {
 }
 
 test('fixed migration runner verifies the version columns, revision, and edit RPC ACLs', () => {
-    assert.equal(path.basename(MIGRATION_PATHS.at(-1)), '20260806_word_edit_generation_version.sql');
+    assert.ok(MIGRATION_PATHS.some(filePath => path.basename(filePath) === '20260806_word_edit_generation_version.sql'));
     assert.match(VERIFICATION_SQL, /question_generation_version/i);
     assert.match(VERIFICATION_SQL, /word_version/i);
     assert.match(VERIFICATION_SQL, /20260806-versioned-word-edit/i);

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const { submitQuizWithDataSource } = require('../quiz-adapter');
 
-test('submitQuizWithDataSource writes assessment, mastery status, and cache usage through the data source', async () => {
+test('submitQuizWithDataSource writes assessment and cache usage through the data source in test mode', async () => {
     const calls = [];
     const dataSource = {
         submitAssessment: async input => {
@@ -41,7 +41,7 @@ test('submitQuizWithDataSource writes assessment, mastery status, and cache usag
 
     const result = await submitQuizWithDataSource({
         username: 'student',
-        testId: 'real-gate4',
+        testId: 'test-gate4',
         answers: [{ option: 1, confidence: 'sure' }],
         questions: [{
             record_id: 'rec-word-1',
@@ -69,10 +69,62 @@ test('submitQuizWithDataSource writes assessment, mastery status, and cache usag
     assert.equal(calls[0][1].sourceWordRecordId, 'rec-word-1');
     assert.equal(calls[0][1].correctness, 'correct');
     assert.equal(calls[0][1].yourAnswer, 'B');
-    assert.equal(calls[1][0], 'updateWordMastery');
-    assert.equal(calls[1][1][2], 'consolidating');
-    assert.equal(calls[2][0], 'incrementCacheUsedCount');
-    assert.equal(calls[2][1], 'cache-1');
+    assert.equal(calls[1][0], 'incrementCacheUsedCount');
+    assert.equal(calls[1][1], 'cache-1');
+});
+
+test('submitQuizWithDataSource rejects duplicate or missing meaning IDs before assessment writes', async () => {
+    const question = index => ({
+        record_id: `meaning-${index + 1}`,
+        word: `word-${index + 1}`,
+        type: 1,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+        cacheRecordId: `cache-${index + 1}`,
+        source: 'question_cache',
+    });
+    for (const { testId, questions, expected } of [
+        {
+            testId: 'real-duplicate-meaning',
+            questions: Array.from({ length: 10 }, (_, index) => ({
+                ...question(index),
+                record_id: index === 9 ? 'meaning-1' : `meaning-${index + 1}`,
+            })),
+            expected: 'FORMAL_QUIZ_DUPLICATE_MEANING_ID',
+        },
+        {
+            testId: 'legacy-real-missing-meaning',
+            questions: Array.from({ length: 10 }, (_, index) => {
+                const { record_id, ...rest } = question(index);
+                return rest;
+            }),
+            expected: 'FORMAL_QUIZ_MEANING_ID_REQUIRED',
+        },
+    ]) {
+        let writes = 0;
+        const dataSource = {
+            submitAssessments: async () => {
+                writes += 1;
+                return [];
+            },
+            submitAssessment: async () => {
+                writes += 1;
+                return {};
+            },
+        };
+        await assert.rejects(
+            submitQuizWithDataSource({
+                username: 'student',
+                testId,
+                answers: questions.map(() => ({ option: 0 })),
+                questions,
+                dataSource,
+            }),
+            error => error.message === expected
+        );
+        assert.equal(writes, 0);
+    }
 });
 
 test('submitQuizWithDataSource uses one batch assessment write when the data source supports it', async () => {
@@ -109,4 +161,86 @@ test('submitQuizWithDataSource uses one batch assessment write when the data sou
     assert.equal(calls[0].length, 2);
     assert.equal(result.correct, 2);
     assert.equal(result.total, 2);
+});test('submit result carries exact Chinese sentence translation', async () => { const dataSource = { submitAssessment: async input => ({ id: 'assessment-translation', source_word_record_id: input.sourceWordRecordId, test_id: input.testId, assessed_at: new Date(input.recordTime).toISOString(), is_correct: input.correctness, submitted_answer: input.yourAnswer }), incrementCacheUsedCount: async () => ({}) }; const result = await submitQuizWithDataSource({ username: 'student', testId: 'test-translation', answers: [{ option: 0 }], questions: [{ record_id: 'rec-translation', word: 'apple', type: 1, context: 'I ate an _____.', contextCN: '????????', options: ['A. apple', 'B. pear', 'C. desk', 'D. book'], answer: 'A', correctAnswer: 'A', cacheRecordId: 'cache-translation' }], dataSource }); assert.equal(result.results[0].translation, '????????'); });
+test('accepts any configured valid answer for a bad question', async () => { let written; const dataSource = { submitAssessment: async input => { written = input; return {}; } }; const result = await submitQuizWithDataSource({ username: 'student', testId: 'test-multi-valid', answers: [{ option: 1 }], questions: [{ record_id: 'rec-bad', word: 'bank', type: 1, context: 'She sat by the bank.', options: ['A. bank', 'B. bank', 'C. desk', 'D. chair'], answer: 'A', acceptableAnswers: ['A', 'B'] }], dataSource }); assert.equal(result.results[0].correct, true); assert.equal(written.correctness, 'correct'); });
+
+test('voids a formal question with no valid answer without scoring or learning side effects', async () => {
+    const calls = [];
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        record_id: `meaning-${index + 1}`,
+        word: `word-${index + 1}`,
+        type: 1,
+        context: `Choose word ${index + 1}.`,
+        options: ['A. one', 'B. two', 'C. three', 'D. four'],
+        answer: '',
+        correctAnswer: '',
+        cacheRecordId: `cache-${index + 1}`,
+        source: 'question_cache',
+        id: `challenge-question-${index + 1}`,
+    }));
+    const dataSource = {
+        submitAssessment: async input => {
+            calls.push(['submitAssessment', input]);
+            return {};
+        },
+        submitAssessments: async inputs => {
+            calls.push(['submitAssessments', inputs]);
+            return [];
+        },
+        getWordsForUser: async () => [],
+        getAssessmentsForUser: async () => [],
+        invalidateFormalQuizQuestion: async input => calls.push(['invalidateFormalQuizQuestion', input]),
+        updateWordMastery: async (...args) => calls.push(['updateWordMastery', args]),
+        incrementCacheUsedCount: async cacheId => calls.push(['incrementCacheUsedCount', cacheId]),
+    };
+
+    const result = await submitQuizWithDataSource({
+        username: 'student',
+        testId: 'real-bad-question',
+        answers: questions.map(() => ({ option: 0 })),
+        questions,
+        dataSource,
+    });
+
+    assert.equal(result.correct, 0);
+    assert.equal(result.results[0].correct, false);
+    assert.equal(result.results[0].counted, false);
+    assert.equal(result.results[0].invalid, true);
+    assert.equal(result.results[0].replacementRequired, true);
+    assert.equal(result.replacementRequired, true);
+    assert.equal(calls.length, 10);
+    assert.equal(calls.every(([name]) => name === 'invalidateFormalQuizQuestion'), true);
+    assert.equal(calls[0][1].challengeQuestionId, 'challenge-question-1');
+});
+
+test('voids a formal question when its configured answers are absent from all four options', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        record_id: `meaning-missing-option-${index + 1}`,
+        word: `word-${index + 1}`,
+        type: 1,
+        context: `Choose word ${index + 1}.`,
+        options: ['B. one', 'C. two', 'D. three', 'B. four'],
+        answer: 'A',
+        correctAnswer: 'A',
+        cacheRecordId: `cache-missing-option-${index + 1}`,
+        source: 'question_cache',
+    }));
+    const writes = [];
+    const result = await submitQuizWithDataSource({
+        username: 'student',
+        testId: 'real-missing-option',
+        answers: questions.map(() => ({ option: 0 })),
+        questions,
+        dataSource: {
+            getWordsForUser: async () => [],
+            getAssessmentsForUser: async () => [],
+            submitAssessments: async inputs => { writes.push(inputs); return []; },
+            updateWordMastery: async () => writes.push('mastery'),
+            incrementCacheUsedCount: async () => writes.push('cache'),
+        },
+    });
+
+    assert.equal(result.replacementRequired, true);
+    assert.equal(result.results.every(item => item.invalid && item.counted === false), true);
+    assert.deepEqual(writes, []);
 });

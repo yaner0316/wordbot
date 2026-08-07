@@ -156,3 +156,9 @@ test('blocks a known account-carrier row that no longer contains account fields'
   });
   assert.equal(result.blockingErrors.some(message => message.includes('has no account fields')), true);
 });
+
+
+test('backfill auto-loads dotenv before reading migration credentials', () => {
+  const source = require('node:fs').readFileSync(require('node:path').join(__dirname, 'backfill.js'), 'utf8');
+  assert.match(source, /^require\('dotenv'\)\.config\(\);/);
+});

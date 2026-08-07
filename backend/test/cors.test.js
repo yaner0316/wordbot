@@ -20,7 +20,7 @@ function corsRequestHeaders(origin) {
 test('credentialed CORS precisely permits the production web origin for a session API', async () => {
     const app = createApp({
         submitAnswers: async () => ({}),
-        getActiveQuizSession: async () => null,
+        getActiveFormalQuizChallenge: async () => null,
     });
 
     await withServer(app, async baseUrl => {
@@ -168,5 +168,47 @@ test('requests without Origin retain normal same-origin API behavior', async () 
 
         assert.equal(response.status, 200);
         assert.equal(response.headers.get('access-control-allow-origin'), null);
+    });
+});
+
+function productionPreflightHeaders() {
+    return {
+        Origin: 'https://wordbot-web.onrender.com',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type',
+    };
+}
+
+test('production origin permits the real JSON rebuild preflight with credentials', async () => {
+    const app = createApp({ submitAnswers: async () => ({}) });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/questionCache/rebuild`, {
+            method: 'OPTIONS',
+            headers: productionPreflightHeaders(),
+        });
+
+        assert.equal(response.status, 204);
+        assert.equal(response.headers.get('access-control-allow-origin'), 'https://wordbot-web.onrender.com');
+        assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+        assert.match(response.headers.get('access-control-allow-methods') || '', /(?:^|,)POST(?:,|$)/);
+        assert.equal(response.headers.get('access-control-allow-headers'), 'content-type');
+        assert.match(response.headers.get('vary') || '', /Origin/);
+    });
+});
+
+test('unknown origin cannot preflight the JSON rebuild request', async () => {
+    const app = createApp({ submitAnswers: async () => ({}) });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/questionCache/rebuild`, {
+            method: 'OPTIONS',
+            headers: { ...productionPreflightHeaders(), Origin: 'https://attacker.example' },
+        });
+
+        assert.equal(response.headers.get('access-control-allow-origin'), null);
+        assert.equal(response.headers.get('access-control-allow-credentials'), null);
+        assert.equal(response.headers.get('access-control-allow-methods'), null);
+        assert.equal(response.headers.get('access-control-allow-headers'), null);
     });
 });

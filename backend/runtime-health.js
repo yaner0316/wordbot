@@ -18,7 +18,10 @@ function getRuntimeHealth({
     for (const name of REQUIRED_ENV) {
         envStatus[name] = Boolean(env[name]);
     }
-    const missing = REQUIRED_ENV.filter(name => !envStatus[name]);
+    const dataSource = String(env.DATA_SOURCE || env.WORDBOT_DATA_SOURCE || 'supabase').trim().toLowerCase() === 'feishu'
+        ? 'feishu'
+        : 'supabase';
+    const missing = dataSource === 'feishu' ? REQUIRED_ENV.filter(name => !envStatus[name]) : [];
     const questionCache = {
         appTokenConfigured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN),
         tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),

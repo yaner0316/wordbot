@@ -81,12 +81,52 @@ function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExp
     }
 }
 
+function formalCacheRows(count = 10) {
+    return Array.from({ length: count }, (_, index) => [1, 2].map(variantSlot => ({
+        id: `cache-${index + 1}-${variantSlot}`,
+        feishu_record_id: `cache-rec-${index + 1}-${variantSlot}`,
+        source_word_record_id: `rec-word-${index + 1}`,
+        word: `word${index + 1}`,
+        level: 'middle',
+        round_type: 'primary',
+        quality_status: 'ready',
+        cache_state: 'active',
+        variant_slot: variantSlot,
+        question_fingerprint: `fp-${index + 1}-${variantSlot}`,
+        question_type: 1,
+        question_text: `Variant ${variantSlot} uses word${index + 1} naturally today.`,
+        context_zh: '\u8fd9\u662f\u5f53\u524d\u9898\u5e72\u5bf9\u5e94\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002',
+        options: [`A. word${index + 1}`, `B. pear-${variantSlot}`, `C. desk-${variantSlot}`, `D. chair-${variantSlot}`],
+        answer: 'A',
+        option_meanings: ['\u91ca\u4e49', '\u6c34\u679c', '\u684c\u5b50', '\u6905\u5b50'],
+        correct_meaning: '\u91ca\u4e49',
+        used_count: 0,
+    }))).flat();
+}
+
+
+function formalWordRows(count = 10) {
+    return Array.from({ length: count }, (_, index) => ({
+        id: `word-${index + 1}`,
+        feishu_record_id: `rec-word-${index + 1}`,
+        username: 'qiuqiu',
+        word: `word${index + 1}`,
+        meaning_en: `meaning ${index + 1}`,
+        meaning_zh: `meaning ${index + 1}`,
+        context_en: `A clear sentence uses word${index + 1} naturally.`,
+        context_zh: `Chinese sentence ${index + 1}.`,
+        level: 'middle',
+        mastery_status: 'pending',
+        entered_at: '2026-01-01T00:00:00.000Z',
+    }));
+}
 test('generateQuiz resumes an active complete type-one session before building a new quiz', async () => {
     const questions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
         word: 'word' + (index + 1),
         record_id: 'rec-' + (index + 1),
         cacheRecordId: 'cache-' + (index + 1),
+        source: 'question_cache',
         options: ['A. answer', 'B. other', 'C. another', 'D. last'],
         answer: 'A',
         context: 'Sentence ' + (index + 1) + '.',
@@ -113,7 +153,127 @@ test('generateQuiz resumes an active complete type-one session before building a
     assert.equal(quiz.progress.currentQuestion, 7);
 });
 
-test('generateQuiz resumes a partial formal cache session with explicit challenge metadata', async () => {
+test('generateQuiz forwards mode for real-test-real session recovery', async () => {
+    const sessionForMode = mode => ({
+        test_id: `${mode}-active`,
+        mode,
+        questions: mode === 'real'
+            ? Array.from({ length: 10 }, (_, index) => ({
+                type: 1, word: `real-${index}`, record_id: `meaning-${index}`,
+                cacheRecordId: `cache-${index}`, source: 'question_cache',
+            }))
+            : [{ type: 1, word: 'test-word' }],
+        progress: { currentQuestion: 0, answers: [] },
+    });
+    const requestedModes = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async (_user, mode) => {
+                requestedModes.push(mode);
+                return sessionForMode(mode);
+            },
+        },
+    });
+
+    const realFirst = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+    const test = await dataSource.generateQuiz('qiuqiu', 'middle', 'test');
+    const realAgain = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.deepEqual(requestedModes, ['real', 'test', 'real']);
+    assert.equal(realFirst.testId, 'real-active');
+    assert.equal(test.testId, 'test-active');
+    assert.equal(realAgain.testId, 'real-active');
+});
+
+test('formal quiz generation creates the authoritative Supabase challenge before persistence', async () => {
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => null,
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            createFormalQuizChallenge: async input => {
+                calls.push(input);
+                return { challenge_id: 'challenge-1', test_id: input.testId, question_count: 10 };
+            },
+            saveQuizSession: async () => ({}),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(quiz.error, undefined);
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].username, 'qiuqiu');
+    assert.equal(calls[0].testId, quiz.testId);
+    assert.equal(calls[0].questions.length, 10);
+    assert.equal(calls[0].questions.every(question => question.source === 'question_cache'), true);
+    assert.equal(calls[0].questions[0].cacheRecordId, 'cache-1-1');
+});
+
+test('formal generation blocks when authoritative challenge creation is unavailable', async () => {
+    let saved = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            saveQuizSession: async () => { saved += 1; return {}; },
+        },
+    });
+
+    await assert.rejects(
+        dataSource.generateQuiz('qiuqiu', 'middle', 'real'),
+        /FORMAL_CHALLENGE_NOT_CREATED/
+    );
+    assert.equal(saved, 0);
+});
+
+test('test-mode generation never creates a formal Supabase challenge', async () => {
+    let calls = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            createFormalQuizChallenge: async () => { calls += 1; },
+            saveQuizSession: async () => ({}),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'test');
+
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(calls, 0);
+});
+
+test('formal challenge creation failure blocks the quiz and legacy session persistence', async () => {
+    let saved = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            createFormalQuizChallenge: async () => { throw new Error('FORMAL_CHALLENGE_RPC_FAILED'); },
+            saveQuizSession: async () => { saved += 1; return {}; },
+        },
+    });
+
+    await assert.rejects(
+        dataSource.generateQuiz('qiuqiu', 'middle', 'real'),
+        /FORMAL_CHALLENGE_RPC_FAILED/
+    );
+    assert.equal(saved, 0);
+});
+
+
+test('generateQuiz discards a seven-question formal session and refuses its submission', async () => {
     const questions = Array.from({ length: 7 }, (_, index) => ({
         type: 1,
         word: 'word' + (index + 1),
@@ -124,39 +284,250 @@ test('generateQuiz resumes a partial formal cache session with explicit challeng
         answer: 'A',
         context: 'Sentence ' + (index + 1) + '.',
     }));
+    const deletedSessions = [];
     const dataSource = loadDataSource({
+
         supabaseExports: {
             getActiveQuizSession: async () => ({
                 test_id: 'real-partial-active',
                 questions,
                 progress: { currentQuestion: 4, answers: Array(4).fill({ option: 0, confidence: 'sure' }) },
             }),
+            getQuizSession: async () => ({ questions }),
+            deleteQuizSession: async (username, testId) => {
+                deletedSessions.push([username, testId]);
+                return { deleted: 1 };
+            },
         },
     });
 
     const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
 
-    assert.equal(quiz.testId, 'real-partial-active');
-    assert.equal(quiz.partialFormalChallenge, true);
-    assert.equal(quiz.questions.length, 7);
-    assert.equal(quiz.readyCount, 7);
-    assert.equal(quiz.requiredCount, 10);
-    assert.deepEqual(quiz.diagnostics, {
-        fallbackUsed: false,
-        resumed: true,
-        requiredCount: 10,
-        readyCount: 7,
-        finalQuestionCount: 7,
-    });
+    assert.notEqual(quiz.testId, 'real-partial-active');
+    assert.deepEqual(quiz.questions, []);
+    assert.deepEqual(deletedSessions, [['qiuqiu', 'real-partial-active']]);
+    assert.equal(await dataSource.getActiveQuizSession('qiuqiu', 'real'), null);
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-partial-active', questions.map(() => ({ option: 0, confidence: 'sure' }))),
+        /FORMAL_QUIZ_INCOMPLETE/
+    );
 });
 
-test('formal session recovery accepts cache-only partial sessions and rejects invalid sources or meanings', () => {
+test('generateQuiz resumes an active authoritative formal challenge before legacy sessions', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1, word: `word-${index + 1}`, record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`, source: 'question_cache',
+        context: `Sentence ${index + 1}.`, options: ['A', 'B', 'C', 'D'], answer: 'A',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => ({
+                challenge_id: 'challenge-1', test_id: 'real-authoritative-1',
+                mode: 'real', level: 'middle', questions,
+                progress: { currentQuestion: 4, answers: Array(4).fill({ option: 0 }) },
+            }),
+            getActiveQuizSession: async () => ({ test_id: 'real-legacy-1', questions }),
+        },
+    });
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+    assert.equal(quiz.testId, 'real-authoritative-1');
+    assert.equal(quiz.challengeId, 'challenge-1');
+    assert.equal(quiz.progress.currentQuestion, 4);
+    assert.equal(quiz.questions.length, 10);
+});
+
+test('formal generation skips legacy sessions when challenge storage has no active challenge', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1, word: `legacy-${index + 1}`, record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`, source: 'question_cache',
+        options: ['A', 'B', 'C', 'D'], answer: 'A', context: `Legacy ${index + 1}.`,
+    }));
+    let legacySessionReads = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => null,
+            getActiveQuizSession: async () => {
+                legacySessionReads += 1;
+                return { test_id: 'real-legacy-1', questions };
+            },
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(quiz.testId, undefined);
+    assert.equal(quiz.code, 'QUESTION_POOL_EXHAUSTED');
+    assert.deepEqual(quiz.questions, []);
+    assert.equal(legacySessionReads, 0, 'migrated formal mode must not inspect legacy quiz_sessions');
+});
+test('legacy seven-question real session with seven assessments is not treated as complete', async () => {
+    const questions = Array.from({ length: 7 }, (_, index) => ({
+        type: 1,
+        word: `word-${index + 1}`,
+        record_id: `word-record-${index + 1}`,
+
+        cacheRecordId: `cache-${index + 1}`,
+        source: 'question_cache',
+        context: `Context ${index + 1}`,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    }));
+    const assessments = questions.map((question, index) => ({
+        id: `assessment-${index + 1}`,
+        test_id: 'real-legacy-seven',
+        word_snapshot: question.word,
+        source_word_record_id: question.record_id,
+        submitted_answer: 'A',
+        answer_confidence: 'sure',
+        correct_answer: 'A',
+        is_correct: 'correct',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => ({ questions }),
+            getAssessmentsForTest: async () => assessments,
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-legacy-seven', questions.map(() => ({ option: 0, confidence: 'sure' }))),
+        error => error.message === 'FORMAL_QUIZ_INCOMPLETE'
+    );
+});
+
+test('formal progress updates authoritative challenge instead of legacy quiz session', async () => {
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            updateFormalQuizChallengeProgress: async (...args) => {
+                calls.push(args);
+                return { challenge_id: 'challenge-1', session_state: args[2] };
+            },
+            updateQuizSessionProgress: async () => { throw new Error('LEGACY_PROGRESS_MUST_NOT_BE_USED'); },
+        },
+    });
+    const result = await dataSource.updateQuizSessionProgress('qiuqiu', 'real-authoritative-1', {
+        currentQuestion: 5, answers: [{ option: 0 }],
+    });
+    assert.equal(result.challenge_id, 'challenge-1');
+    assert.deepEqual(calls, [['qiuqiu', 'real-authoritative-1', { currentQuestion: 5, answers: [{ option: 0 }] }]]);
+});
+
+test('formal submission rejects ten-question fallback or cache-id-less sessions', async () => {
+    const validQuestion = index => ({
+        type: 1,
+        word: `word-${index + 1}`,
+
+        record_id: `word-record-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        source: 'question_cache',
+        context: `Context ${index + 1}`,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    });
+
+    for (const questions of [
+        Array.from({ length: 10 }, (_, index) => ({ ...validQuestion(index), source: 'live_fallback' })),
+        Array.from({ length: 10 }, (_, index) => {
+            const { cacheRecordId, ...question } = validQuestion(index);
+            return question;
+        }),
+    ]) {
+        const dataSource = loadDataSource({
+            supabaseExports: {
+                getQuizSession: async () => ({ questions }),
+                getAssessmentsForTest: async () => [],
+                submitAssessment: async () => {
+                    throw new Error('SUBMISSION_REACHED');
+                },
+            },
+        });
+
+        await assert.rejects(
+            dataSource.submitAnswers('qiuqiu', 'real-untrusted-cache', questions.map(() => ({ option: 0, confidence: 'sure' }))),
+            error => error.message === 'FORMAL_QUIZ_CACHE_ONLY_REQUIRED'
+        );
+    }
+});
+
+test('formal submission rejects duplicate or missing meaning IDs before assessment writes', async () => {
+    const question = index => ({
+        type: 1,
+        word: `word-${index + 1}`,
+        record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        source: 'question_cache',
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    });
+    for (const { testId, questions, expected } of [
+        {
+            testId: 'real-duplicate-meaning',
+            questions: Array.from({ length: 10 }, (_, index) => ({
+                ...question(index),
+                record_id: index === 9 ? 'meaning-1' : `meaning-${index + 1}`,
+            })),
+            expected: 'FORMAL_QUIZ_DUPLICATE_MEANING_ID',
+        },
+        {
+            testId: 'legacy-real-missing-meaning',
+            questions: Array.from({ length: 10 }, (_, index) => {
+                const { record_id, ...rest } = question(index);
+                return rest;
+            }),
+            expected: 'FORMAL_QUIZ_MEANING_ID_REQUIRED',
+        },
+    ]) {
+        let writes = 0;
+        const dataSource = loadDataSource({
+            supabaseExports: {
+                getQuizSession: async () => ({ questions }),
+                getAssessmentsForTest: async () => [],
+                submitAssessment: async () => {
+                    writes += 1;
+                    return {};
+                },
+            },
+        });
+        await assert.rejects(
+            dataSource.submitAnswers('qiuqiu', testId, questions.map(() => ({ option: 0 }))),
+            error => error.message === expected
+        );
+        assert.equal(writes, 0);
+    }
+});
+
+test('requesting real mode does not delete an active test session', async () => {
+
+    const deletedSessions = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveQuizSession: async () => ({
+                test_id: 'test-active-session',
+                questions: [{ type: 1, word: 'test-word' }],
+            }),
+            deleteQuizSession: async (user, testId) => {
+                deletedSessions.push([user, testId]);
+                return { deleted: 1 };
+            },
+        },
+    });
+
+    await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.deepEqual(deletedSessions, []);
+});
+test('formal session recovery accepts only complete cache sessions and rejects invalid sources or meanings', () => {
     const dataSource = loadDataSource();
     const cachedQuestions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
         word: 'word-' + index,
         record_id: 'meaning-' + index,
         cacheRecordId: 'cache-' + index,
+        source: 'question_cache',
     }));
 
     assert.equal(dataSource.isResumableQuizSession({
@@ -174,7 +545,7 @@ test('formal session recovery accepts cache-only partial sessions and rejects in
     assert.equal(dataSource.isResumableQuizSession({
         test_id: 'real-partial',
         questions: cachedQuestions.slice(0, 9),
-    }, 'real'), true);
+    }, 'real'), false);
     assert.equal(dataSource.isResumableQuizSession({
         test_id: 'real-empty',
         questions: [],
@@ -193,6 +564,7 @@ test('formal session recovery accepts cache-only partial sessions and rejects in
     }, 'real'), false);
 });
 test('defaults DATA_SOURCE to supabase and exposes the unified interface', async () => {
+
     const dataSource = loadDataSource();
 
     assert.equal(dataSource.name, 'supabase');
@@ -312,23 +684,7 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
                 entered_at: '2026-01-01T00:00:00.000Z',
             })),
             getAssessmentsForUser: async () => [],
-            getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
-                id: `cache-${index + 1}`,
-                feishu_record_id: `cache-rec-${index + 1}`,
-                source_word_record_id: `rec-word-${index + 1}`,
-                word: `word${index + 1}`,
-                level: 'middle',
-                round_type: 'primary',
-                quality_status: 'ready',
-                question_type: 1,
-                question_text: `I learned word${index + 1} today.`,
-                context_zh: `\u6211\u4eca\u5929\u5b66\u4e86word${index + 1}\u8fd9\u4e2a\u5355\u8bcd\u3002`,
-                options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
-                answer: 'A',
-                option_meanings: ['释义', '水果', '家具', '家具'],
-                correct_meaning: '释义',
-                used_count: 0,
-            })),
+            getQuestionCache: async () => formalCacheRows(10),
             submitAssessment: async input => ({ id: 'assessment-1', ...input }),
             updateWordMastery: async () => [],
             incrementCacheUsedCount: async () => ({}),
@@ -348,6 +704,60 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(result.total, 10);
 });
 
+test('formal submission replaces a void question from the same meaning cache pair before closing the challenge', async () => {
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getUserByUsername: async username => ({ username }),
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10).map(row => ({
+                ...row,
+                word_record_id: row.source_word_record_id,
+                context_cn: row.context_zh,
+                ...(row.variant_slot === 2
+                    ? { cache_state: 'reserved_next_day', available_from: '2999-01-01T00:00:00.000Z' }
+                    : {}),
+            })),
+            submitAssessments: async inputs => {
+                calls.push(['submitAssessments', inputs]);
+                return inputs.map(input => ({ id: `assessment-${input.sourceWordRecordId}`, ...input }));
+            },
+            updateWordMastery: async (...args) => calls.push(['updateWordMastery', args]),
+            incrementCacheUsedCount: async cacheId => calls.push(['incrementCacheUsedCount', cacheId]),
+            invalidateFormalQuizQuestion: async input => {
+                calls.push(['invalidateFormalQuizQuestion', input]);
+                return { invalidated: true, replacement_required: true };
+            },
+            replaceFormalQuizQuestion: async input => {
+                calls.push(['replaceFormalQuizQuestion', input]);
+                return { replaced: true, cache_question_id: input.cacheQuestionId };
+            },
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+    const bad = quiz.questions[0];
+    bad.id = 'challenge-question-1';
+    bad.answer = '';
+    bad.correctAnswer = '';
+    const result = await dataSource.submitAnswers(
+        'qiuqiu',
+        quiz.testId,
+        quiz.questions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(result.replacementRequired, true);
+    assert.equal(result.code, 'FORMAL_QUESTION_REPLACED');
+    assert.equal(Array.isArray(result.replacementQuestions), true);
+    assert.equal(result.replacementQuestions.length, 1);
+    assert.equal(result.replacementQuestions[0].cacheRecordId, 'cache-1-2');
+    assert.notEqual(result.replacementQuestions[0].cacheRecordId, bad.cacheRecordId);
+    assert.equal(calls.some(([name]) => name === 'invalidateFormalQuizQuestion'), true);
+    assert.equal(calls.some(([name]) => name === 'replaceFormalQuizQuestion'), true);
+    assert.equal(calls.some(([name, cacheId]) => name === 'incrementCacheUsedCount' && cacheId === bad.cacheRecordId), false);
+});
+
 test('supabase quiz generation falls back to memory when quiz_sessions table is missing', async () => {
     const missingTableError = new Error("Could not find the table 'public.quiz_sessions' in the schema cache");
     missingTableError.code = 'PGRST205';
@@ -363,23 +773,7 @@ test('supabase quiz generation falls back to memory when quiz_sessions table is 
                 entered_at: '2026-01-01T00:00:00.000Z',
             })),
             getAssessmentsForUser: async () => [],
-            getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
-                id: `cache-${index + 1}`,
-                feishu_record_id: `cache-rec-${index + 1}`,
-                source_word_record_id: `rec-word-${index + 1}`,
-                word: `word${index + 1}`,
-                level: 'middle',
-                round_type: 'primary',
-                quality_status: 'ready',
-                question_type: 1,
-                question_text: `I learned word${index + 1} today.`,
-                context_zh: `\u6211\u4eca\u5929\u5b66\u4e86word${index + 1}\u8fd9\u4e2a\u5355\u8bcd\u3002`,
-                options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
-                answer: 'A',
-                option_meanings: ['释义', '水果', '家具', '家具'],
-                correct_meaning: '释义',
-                used_count: 0,
-            })),
+            getQuestionCache: async () => formalCacheRows(10),
             saveQuizSession: async () => {
                 throw missingTableError;
             },
@@ -413,6 +807,7 @@ test('supabase submitAnswers restores questions from persisted session when memo
         answer: 'A',
         correctAnswer: 'A',
         source: 'question_cache',
+        cacheRecordId: `cache-${index + 1}`,
     }));
     const calls = [];
     const dataSource = loadDataSource({
@@ -445,6 +840,41 @@ test('supabase submitAnswers restores questions from persisted session when memo
     ]);
 });
 
+test('formal submit fails closed when challenge storage is available but the challenge is missing', async () => {
+    const legacyReads = [];
+    const persistedQuestions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word${index + 1}`,
+        record_id: `meaning-${index + 1}`,
+        level: 'middle',
+        context: `I learned word${index + 1} today.`,
+        options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
+        answer: 'A',
+        correctAnswer: 'A',
+        source: 'question_cache',
+        cacheRecordId: `cache-${index + 1}`,
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getFormalQuizChallenge: async () => null,
+            getQuizSession: async (...args) => {
+                legacyReads.push(args);
+                return { questions: persistedQuestions };
+            },
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers(
+            'Qiu Qiu',
+            'real-missing-authoritative-challenge',
+            persistedQuestions.map(() => ({ option: 0 }))
+        ),
+        error => error.message === 'FORMAL_CHALLENGE_NOT_FOUND'
+    );
+    assert.deepEqual(legacyReads, []);
+});
+
 test('supabase quiz session survives data-source module reload smoke path', async () => {
     const sessionStore = new Map();
     const quizRows = {
@@ -458,23 +888,7 @@ test('supabase quiz session survives data-source module reload smoke path', asyn
             entered_at: '2026-01-01T00:00:00.000Z',
         })),
         getAssessmentsForUser: async () => [],
-        getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => ({
-            id: `cache-${index + 1}`,
-            feishu_record_id: `cache-rec-${index + 1}`,
-            source_word_record_id: `rec-word-${index + 1}`,
-            word: `word${index + 1}`,
-            level: 'middle',
-            round_type: 'primary',
-            quality_status: 'ready',
-            question_type: 1,
-            question_text: `I learned word${index + 1} today.`,
-            context_zh: `\u6211\u4eca\u5929\u5b66\u4e86word${index + 1}\u8fd9\u4e2a\u5355\u8bcd\u3002`,
-            options: [`A. word${index + 1}`, 'B. pear', 'C. desk', 'D. chair'],
-            answer: 'A',
-            option_meanings: ['释义', '水果', '家具', '家具'],
-            correct_meaning: '释义',
-            used_count: 0,
-        })),
+        getQuestionCache: async () => formalCacheRows(10),
         saveQuizSession: async (username, testId, questions) => {
             sessionStore.set(`${username}:${testId}`, { username, testId, questions });
             return { test_id: testId, questions };
@@ -511,7 +925,9 @@ test('repeated submit after the first request deletes the session returns the st
     const questions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
         word: `word${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
         record_id: `rec-word-${index + 1}`,
+        source: 'question_cache',
         context: `Context ${index + 1}`,
         options: ['A', 'B', 'C', 'D'],
         answer: 'A',
@@ -565,7 +981,7 @@ test('partial persisted assessment resumes the same session without inserting th
     ];
     const assessments = [{
         id: 'assessment-1',
-        test_id: 'real-partial-submit',
+        test_id: 'test-partial-submit',
         word_snapshot: 'word1',
         source_word_record_id: 'rec-word-1',
         submitted_answer: 'A',
@@ -596,7 +1012,7 @@ test('partial persisted assessment resumes the same session without inserting th
 
     const result = await dataSource.submitAnswers(
         'qiuqiu',
-        'real-partial-submit',
+        'test-partial-submit',
         [{ option: 0, confidence: 'sure' }, { option: 0, confidence: 'sure' }]
     );
 
@@ -648,7 +1064,9 @@ test('supabase submit idempotency reads only assessments for the submitted test 
     const questions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
         word: `word${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
         record_id: `rec-word-${index + 1}`,
+        source: 'question_cache',
         context: `Context ${index + 1}`,
         options: ['A', 'B', 'C', 'D'],
         answer: 'A',
@@ -711,4 +1129,30 @@ test('supabase mode uses supabase review functions instead of Feishu fallback', 
 
     assert.equal((await dataSource.createReviewRound({ userId: 'qiuqiu', sourceTestId: 'real-1' })).source, 'supabase-review');
     assert.equal((await dataSource.prebuildWrongQuestionCache({ userId: 'qiuqiu', testId: 'real-1', result: {} })).source, 'supabase-wrong-cache');
+});
+test('formal recovery does not resume legacy real sessions when challenge storage is unavailable', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1, word: `legacy-missing-table-${index + 1}`, record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`, source: 'question_cache',
+        options: ['A', 'B', 'C', 'D'], answer: 'A', context: `Legacy ${index + 1}.`,
+    }));
+    const missingChallengeTable = new Error("Could not find the table 'public.quiz_challenges' in the schema cache");
+    let legacySessionReads = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => { throw missingChallengeTable; },
+            getActiveQuizSession: async () => {
+                legacySessionReads += 1;
+                return { test_id: 'real-legacy-missing-table', questions };
+            },
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(quiz.testId, undefined);
+    assert.equal(quiz.code, 'FORMAL_CHALLENGE_NOT_READY');
+    assert.deepEqual(quiz.questions, []);
+    assert.equal(quiz.diagnostics.fallbackUsed, false);
+    assert.equal(legacySessionReads, 0, 'formal challenge storage failure must not fall through to legacy quiz_sessions');
 });

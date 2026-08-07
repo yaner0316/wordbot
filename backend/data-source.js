@@ -8,14 +8,90 @@ const {
 const { rebuildSubmittedResult } = require('./submission-coordinator');
 const {
     FORMAL_QUIZ_REQUIRED_COUNT: QUIZ_QUESTION_COUNT,
-    isResumableQuizSession,
+    assertFormalQuizQuestions,
+    isResumableQuizSession: isStructurallyResumableQuizSession,
 } = require('./formal-quiz-session');
 
+const { getAssessmentMode, isRealAssessment } = require('./assessment-mode');
+const { normalizeCacheRow, isCacheQuestionReady } = require('./question-cache');
 const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
 const quizQuestionsByTestId = new Map();
 const quizSubmitLocks = new Map();
 let lastQuizSessionCleanupAt = 0;
 
+function cacheRowId(row) {
+    return String(row?.id || row?.record_id || row?.recordId || '').trim();
+}
+
+function cacheRowMeaningId(row) {
+    return String(row?.meaning_id || row?.meaningId || row?.word_id || row?.wordRecordId
+        || row?.source_word_record_id || row?.word_record_id || '').trim();
+}
+
+function normalizeReplacementCacheRow(row) {
+    return normalizeCacheRow({
+        ...(row || {}),
+        meaning_id: row?.meaning_id || row?.meaningId || row?.word_id || '',
+        word_record_id: row?.word_record_id || row?.source_word_record_id || row?.word_feishu_record_id || '',
+        context_cn: row?.context_cn || row?.context_zh || '',
+    });
+}
+
+function isReplacementCacheAvailable(row, now = Date.now()) {
+    const normalized = normalizeReplacementCacheRow(row);
+    if (!isCacheQuestionReady(normalized)) return false;
+    if (!['active', 'reserved_next_day'].includes(normalized.cacheState)) return false;
+    if (normalized.cacheState === 'reserved_next_day') {
+        const availableAt = Date.parse(String(normalized.availableFrom || ''));
+        if (!Number.isFinite(availableAt)) return false;
+    }
+    return true;
+}
+
+function buildFormalReplacementQuestion(row, oldQuestion) {
+    const normalized = normalizeReplacementCacheRow(row);
+    return {
+        ...normalized.question,
+        source: 'question_cache',
+        cacheRecordId: normalized.recordId || cacheRowId(row),
+        cacheUsedCount: normalized.usedCount,
+        meaningId: normalized.question.meaningId || oldQuestion.meaningId || oldQuestion.record_id,
+        challengeQuestionId: oldQuestion.challengeQuestionId || oldQuestion.challenge_question_id || oldQuestion.id,
+        id: oldQuestion.id,
+        ordinal: oldQuestion.ordinal,
+        questionFingerprint: String(row?.question_fingerprint || row?.questionFingerprint || '').trim(),
+        correctAnswer: normalized.question.answer,
+    };
+}
+
+function selectFormalReplacementQuestion(cacheRows, oldQuestion, now = Date.now()) {
+    const oldCacheId = String(oldQuestion?.cacheRecordId || '').trim();
+    const meaningId = String(oldQuestion?.meaningId || oldQuestion?.meaning_id || oldQuestion?.record_id || '').trim();
+    return (cacheRows || [])
+        .filter(row => cacheRowId(row) && cacheRowId(row) !== oldCacheId)
+        .filter(row => cacheRowMeaningId(row) === meaningId
+            || String(normalizeReplacementCacheRow(row).question?.record_id || '').trim() === String(oldQuestion?.record_id || '').trim())
+        .filter(row => isReplacementCacheAvailable(row, now))
+        .map(row => buildFormalReplacementQuestion(row, oldQuestion))[0] || null;
+}
+
+function isResumableQuizSession(session, requestedMode) {
+    const mode = requestedMode || 'real';
+    if (getAssessmentMode(session?.test_id) !== mode) return false;
+
+    const questions = Array.isArray(session?.questions) ? session.questions : [];
+    if (mode === 'test') return questions.length > 0;
+    return questions.length === QUIZ_QUESTION_COUNT
+        && isStructurallyResumableQuizSession(session, mode)
+        && questions.every(question => String(question?.source || '').trim().toLowerCase() === 'question_cache'
+            && String(question?.cacheRecordId || '').trim());
+}
+
+
+function assertFormalQuizIsCompleteAndCacheOnly(testId, questions) {
+    if (!isRealAssessment(testId)) return;
+    assertFormalQuizQuestions(questions);
+}
 function normalizeDataSource(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return normalized === 'feishu' ? 'feishu' : 'supabase';
@@ -222,9 +298,37 @@ function loadSupabaseDataSource() {
         }
         return [];
     }
-
     async function generateQuiz(user, level, mode) {
-        const activeSession = await getActiveQuizSessionBestEffort(supabaseData, user);
+        const formalChallengeReaderAvailable = typeof supabaseData.getActiveFormalQuizChallenge === 'function';
+        const activeFormalChallenge = mode === 'real'
+            ? await getActiveFormalQuizChallengeBestEffort(supabaseData, user)
+            : null;
+        if (mode === 'real' && formalChallengeReaderAvailable && activeFormalChallenge?.unavailable) {
+            return {
+                error: 'Formal challenge is not ready yet.', code: 'FORMAL_CHALLENGE_NOT_READY',
+                source: 'formal_quiz_challenge', level: level || null,
+                readyCount: 0, requiredCount: QUIZ_QUESTION_COUNT, questions: [],
+                diagnostics: { fallbackUsed: false, state: 'building', readyCount: 0, requiredCount: QUIZ_QUESTION_COUNT, finalQuestionCount: 0 },
+            };
+        }
+        if (activeFormalChallenge && Array.isArray(activeFormalChallenge.questions)
+            && activeFormalChallenge.questions.length === QUIZ_QUESTION_COUNT) {
+            const questions = activeFormalChallenge.questions;
+            quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${activeFormalChallenge.test_id}`, questions);
+            return {
+                testId: activeFormalChallenge.test_id,
+                challengeId: activeFormalChallenge.challenge_id || activeFormalChallenge.id,
+                mode: 'real', level: level || activeFormalChallenge.level || null,
+                source: 'formal_quiz_challenge', questions,
+                progress: activeFormalChallenge.progress || { currentQuestion: 0, answers: [] },
+                readyCount: questions.length, requiredCount: QUIZ_QUESTION_COUNT,
+                partialFormalChallenge: false,
+                diagnostics: { fallbackUsed: false, resumed: true, requiredCount: QUIZ_QUESTION_COUNT, readyCount: questions.length, finalQuestionCount: questions.length },
+            };
+        }
+        const activeSession = mode === 'real' && formalChallengeReaderAvailable
+            ? null
+            : await getActiveQuizSessionBestEffort(supabaseData, user, mode || 'real');
         if (activeSession) {
             const questions = Array.isArray(activeSession.questions) ? activeSession.questions : [];
             if (isResumableQuizSession(activeSession, mode || 'real')) {
@@ -248,7 +352,9 @@ function loadSupabaseDataSource() {
                     questions,
                 };
             }
-            await deleteQuizSessionBestEffort(supabaseData, user, activeSession.test_id);
+            if (getAssessmentMode(activeSession.test_id) === (mode || 'real')) {
+                await deleteQuizSessionBestEffort(supabaseData, user, activeSession.test_id);
+            }
         }
         const quiz = await generateQuizWithDataSource({
             username: user,
@@ -259,6 +365,22 @@ function loadSupabaseDataSource() {
             dataSource: supabaseData,
         });
         if (!quiz.error && quiz.testId && Array.isArray(quiz.questions)) {
+            if ((mode || 'real') === 'real' && formalChallengeReaderAvailable
+                && typeof supabaseData.createFormalQuizChallenge !== 'function') {
+                throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
+            }
+            if ((mode || 'real') === 'real' && quiz.questions.length === QUIZ_QUESTION_COUNT
+                && typeof supabaseData.createFormalQuizChallenge === 'function') {
+                const challenge = await supabaseData.createFormalQuizChallenge({
+                    username: user,
+                    testId: quiz.testId,
+                    level,
+                    questions: quiz.questions,
+                });
+                if (!challenge?.challenge_id && !challenge?.challengeId) throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
+                quiz.challengeId = challenge?.challenge_id || challenge?.challengeId || null;
+                quiz.challenge = challenge;
+            }
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${quiz.testId}`, quiz.questions);
             await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);
@@ -298,7 +420,17 @@ function loadSupabaseDataSource() {
         const key = `${normalizeUserKey(user)}:${testId}`;
         let questions = quizQuestionsByTestId.get(key);
         if (!questions) {
-            if (typeof supabaseData.getQuizSession === 'function') {
+            if (isRealAssessment(testId) && typeof supabaseData.getFormalQuizChallenge === 'function') {
+                const challenge = await supabaseData.getFormalQuizChallenge(user, testId);
+                questions = Array.isArray(challenge?.questions) ? challenge.questions : null;
+                if (!questions) {
+                    const existingAssessments = await getSupabaseQuizAssessments(user, testId);
+                    const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
+                    if (existingResult) return existingResult;
+                    if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
+                    throw new Error('FORMAL_CHALLENGE_NOT_FOUND');
+                }
+            } else if (typeof supabaseData.getQuizSession === 'function') {
                 const session = await supabaseData.getQuizSession(user, testId);
                 questions = session?.questions;
             }
@@ -311,6 +443,7 @@ function loadSupabaseDataSource() {
             }
         }
         const existingAssessments = await getSupabaseQuizAssessments(user, testId);
+        assertFormalQuizIsCompleteAndCacheOnly(testId, questions);
         const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, questions.length);
         if (existingResult) return existingResult;
         const result = await submitQuizWithDataSource({
@@ -321,6 +454,64 @@ function loadSupabaseDataSource() {
             dataSource: supabaseData,
             existingAssessments,
         });
+        if (isRealAssessment(testId) && result.replacementRequired) {
+            const invalidIndexes = (result.results || [])
+                .map((item, index) => item?.replacementRequired ? index : -1)
+                .filter(index => index >= 0);
+            const replacementQuestions = [];
+            let replacementCacheRows = null;
+            for (const index of invalidIndexes) {
+                const oldQuestion = questions[index];
+                if (!replacementCacheRows) {
+                    const level = oldQuestion?.level || questions.find(question => question?.level)?.level || '';
+                    replacementCacheRows = typeof supabaseData.getQuestionCache === 'function'
+                        ? await supabaseData.getQuestionCache(user, level, 'primary')
+                        : [];
+                }
+                const replacement = selectFormalReplacementQuestion(replacementCacheRows, oldQuestion, Date.now());
+                const challengeQuestionId = oldQuestion.challengeQuestionId
+                    || oldQuestion.challenge_question_id
+                    || oldQuestion.id;
+                if (!replacement || !String(challengeQuestionId || '').trim()
+                    || typeof supabaseData.replaceFormalQuizQuestion !== 'function') {
+                    return {
+                        ...result,
+                        code: 'FORMAL_REPLACEMENT_NOT_READY',
+                        replacementQuestions: [],
+                        diagnostics: {
+                            ...(result.diagnostics || {}),
+                            replacementState: 'building',
+                            replacementReady: false,
+                        },
+                    };
+                }
+                await supabaseData.replaceFormalQuizQuestion({
+                    username: user,
+                    testId,
+                    challengeQuestionId,
+                    cacheQuestionId: replacement.cacheRecordId,
+                    stem: replacement.context,
+                    questionFingerprint: replacement.questionFingerprint,
+                    questionSnapshot: replacement,
+                });
+                replacementQuestions.push({ ...replacement, questionIndex: index });
+            }
+            const updatedQuestions = [...questions];
+            for (const replacement of replacementQuestions) {
+                updatedQuestions[replacement.questionIndex] = replacement;
+            }
+            quizQuestionsByTestId.set(key, updatedQuestions);
+            return {
+                ...result,
+                code: 'FORMAL_QUESTION_REPLACED',
+                replacementQuestions,
+                diagnostics: {
+                    ...(result.diagnostics || {}),
+                    replacementState: 'ready',
+                    replacementReady: true,
+                },
+            };
+        }
         if (typeof supabaseData.applyQuizCacheLifecycle === 'function') {
             try {
                 await supabaseData.applyQuizCacheLifecycle({ userId: user, questions, results: result.results || [] });
@@ -375,13 +566,22 @@ function loadSupabaseDataSource() {
     }
 
     async function getActiveQuizSession(user, mode = 'real') {
-        const session = await getActiveQuizSessionBestEffort(supabaseData, user);
+        const session = await getActiveQuizSessionBestEffort(supabaseData, user, mode);
         return isResumableQuizSession(session, mode) ? session : null;
     }
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
         getActiveQuizSession,
+        updateQuizSessionProgress: async (username, testId, progress) => {
+            if (isRealAssessment(testId) && typeof supabaseData.updateFormalQuizChallengeProgress === 'function') {
+                const result = await supabaseData.updateFormalQuizChallengeProgress(username, testId, progress);
+                if (!result) throw new Error('FORMAL_CHALLENGE_NOT_FOUND');
+                return result;
+            }
+            if (typeof supabaseData.updateQuizSessionProgress !== 'function') return null;
+            return supabaseData.updateQuizSessionProgress(username, testId, progress);
+        },
         getQuestionCache,
         isResumableQuizSession,
         DATA_SOURCE: 'supabase',
@@ -397,6 +597,19 @@ function loadSupabaseDataSource() {
         updateWord: (username, word, fields) => supabaseData.updateWord(username, word, fields),
         addWords,
     };
+
+async function getActiveFormalQuizChallengeBestEffort(supabaseData, user, options) {
+    if (typeof supabaseData.getActiveFormalQuizChallenge !== 'function') return null;
+    try {
+        return await supabaseData.getActiveFormalQuizChallenge(user, options);
+    } catch (error) {
+        if (String(error?.message || '').includes('quiz_challenges')) {
+            console.warn('[quiz_challenges] active-challenge lookup skipped: ' + error.message);
+            return { unavailable: true, error: error.message };
+        }
+        throw error;
+    }
+}
 }
 
 function loadFeishuFallbackExports() {
@@ -407,10 +620,10 @@ function loadFeishuFallbackExports() {
     }
 }
 
-async function getActiveQuizSessionBestEffort(supabaseData, user) {
+async function getActiveQuizSessionBestEffort(supabaseData, user, mode = 'real', options) {
     if (typeof supabaseData.getActiveQuizSession !== 'function') return null;
     try {
-        return await supabaseData.getActiveQuizSession(user);
+        return await supabaseData.getActiveQuizSession(user, mode, options);
     } catch (error) {
         if (isMissingQuizSessionsTableError(error)) {
             console.warn('[quiz_sessions] active-session lookup skipped: ' + error.message);

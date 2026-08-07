@@ -91,6 +91,7 @@ function normalizeCacheRow(row) {
     const fields = row.fields || row;
     return {
         recordId: row.record_id || row.recordId || '',
+        meaningId: fields.meaning_id || fields.word_id || row.meaning_id || row.word_id || '',
         user: fields.user || '',
         wordRecordId: fields.word_record_id || '',
         word: fields.word || '',
@@ -104,6 +105,7 @@ function normalizeCacheRow(row) {
         usedCount: Number(fields.used_count || 0),
         generatedAt: Number(fields.generated_at || 0),
         question: {
+            meaningId: fields.meaning_id || fields.word_id || row.meaning_id || row.word_id || '',
             record_id: fields.word_record_id || '',
             type: Number(fields.question_type) || 1,
             word: fields.word || '',

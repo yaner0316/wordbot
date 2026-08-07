@@ -1,6 +1,6 @@
-const { evaluateWordMastery, isSubmittedFormalQuiz } = require('./mastery-evidence');
+const { assessmentTimestamp, evaluateWordMastery, isFormalAssessment, isSubmittedFormalQuiz } = require('./mastery-evidence');
 const { getTypePolicy, isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
-const { isWordRecordPastQuizCooldown } = require('./quiz-cooldown');
+const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
 
 function fieldValue(value) {
     if (value === undefined || value === null) return '';
@@ -44,9 +44,34 @@ function recordTimestamp(record) {
     return Number.isFinite(createdTime) && createdTime > 0 ? createdTime : 0;
 }
 
-function isPastCooldown(record, { now, minAgeMs }) {
+function timestamp(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const parsed = Date.parse(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function lastDisplayedTimestamp(record) {
+    const fields = record?.fields || {};
+    return Math.max(
+        timestamp(fields.last_displayed_at),
+        timestamp(fields.lastDisplayedAt),
+        timestamp(record?.last_displayed_at),
+        timestamp(record?.lastDisplayedAt)
+    );
+}
+
+function isPastCooldown(record, { now, minAgeMs, latestFormalDisplayAt = 0 }) {
     if (!minAgeMs) return true;
-    return isWordRecordPastQuizCooldown(record, { now, minAgeMs });
+    const enteredAt = recordTimestamp(record);
+    if (!enteredAt) return false;
+    return Number(now) >= Math.max(enteredAt, lastDisplayedTimestamp(record), latestFormalDisplayAt) + minAgeMs;
+}
+function isCacheRowAvailable(row, now) {
+    if (row.cacheState !== 'reserved_next_day') return true;
+    return Boolean(row.availableFrom
+        && Number.isFinite(Date.parse(row.availableFrom))
+        && Date.parse(row.availableFrom) <= Number(now));
 }
 
 function normalizeSelectableCacheRows(cacheRows, {
@@ -70,11 +95,38 @@ function normalizeSelectableCacheRows(cacheRows, {
         .filter(row => row.roundType === roundType)
         .filter(row => row.qualityStatus === 'ready')
         .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
-        .filter(row => !requireAvailable
-            || row.cacheState !== 'reserved_next_day'
-            || (row.availableFrom && Number.isFinite(Date.parse(row.availableFrom))
-                && Date.parse(row.availableFrom) <= Number(now)))
+        .filter(row => !requireAvailable || isCacheRowAvailable(row, now))
         .filter(row => isCacheQuestionReady(row));
+}
+
+function toReadyPrimaryPairRow(row) {
+    return {
+        question_text: row.question?.context,
+        question_fingerprint: row.questionFingerprint,
+        options: row.question?.options,
+        answer: row.question?.answer,
+    };
+}
+
+function filterRowsInValidReadyPrimaryPairs(rows) {
+    const groups = new Map();
+    for (const row of rows || []) {
+        if (!row.wordRecordId) continue;
+        if (!groups.has(row.wordRecordId)) groups.set(row.wordRecordId, []);
+        groups.get(row.wordRecordId).push(row);
+    }
+    const validRows = new Set();
+    for (const group of groups.values()) {
+        for (let leftIndex = 0; leftIndex < group.length; leftIndex += 1) {
+            for (let rightIndex = leftIndex + 1; rightIndex < group.length; rightIndex += 1) {
+                const pair = [group[leftIndex], group[rightIndex]];
+                if (getReadyPrimaryPairIssues(pair.map(toReadyPrimaryPairRow)).length) continue;
+                validRows.add(pair[0]);
+                validRows.add(pair[1]);
+            }
+        }
+    }
+    return (rows || []).filter(row => validRows.has(row));
 }
 
 function buildReadyCacheRecordIds(cacheRows, { userId, level, roundType = 'primary', now = Date.now() }) {
@@ -85,8 +137,7 @@ function buildReadyCacheRecordIds(cacheRows, { userId, level, roundType = 'prima
     );
 }
 
-function buildAssessmentSummary(assessmentRecords, { userId, now }) {
-    const today = learningDay(now);
+function buildAssessmentSummary(assessmentRecords, { userId }) {
     const summary = new Map();
     for (const record of assessmentRecords || []) {
         const fields = record.fields || {};
@@ -94,20 +145,17 @@ function buildAssessmentSummary(assessmentRecords, { userId, now }) {
         if (!isSubmittedFormalQuiz(record)) continue;
         const recordId = fieldValue(fields.record_id).trim();
         if (!recordId) continue;
-        const day = learningDay(Number(fields.test_time || 0));
-        if (!summary.has(recordId)) {
-            summary.set(recordId, { hasAny: false, hasBeforeToday: false, hasCorrectToday: false });
-        }
+        if (!summary.has(recordId)) summary.set(recordId, { hasAny: false, lastWrongAt: 0, latestAttemptAt: 0 });
         const item = summary.get(recordId);
-        if (day === today && isCorrectField(fields.is_correct)) item.hasCorrectToday = true;
         item.hasAny = true;
-        if (day !== today) item.hasBeforeToday = true;
+        item.latestAttemptAt = Math.max(item.latestAttemptAt, assessmentTimestamp(record));
+        if (!isCorrectField(fields.is_correct)) item.lastWrongAt = Math.max(item.lastWrongAt, assessmentTimestamp(record));
     }
     return summary;
 }
-
 function buildMasteryByRecordId(wordRecords, assessmentRecords) {
     const recordsByWord = new Map();
+    const formalDisplayRecords = (assessmentRecords || []).filter(isFormalAssessment);
     for (const record of wordRecords || []) {
         const word = fieldValue(record.fields?.Word).trim().toLowerCase();
         if (!word) continue;
@@ -117,7 +165,7 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
     const masteryByRecordId = new Map();
     for (const group of recordsByWord.values()) {
         const recordIds = group.map(record => record.record_id).filter(Boolean);
-        const evaluation = evaluateWordMastery(recordIds, assessmentRecords || [], isCorrectField);
+        const evaluation = evaluateWordMastery(recordIds, formalDisplayRecords, isCorrectField);
         for (const recordId of recordIds) {
             masteryByRecordId.set(recordId, evaluation.meanings?.[recordId]);
         }
@@ -125,55 +173,55 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
     return masteryByRecordId;
 }
 
-function buildRecentQuestionTextsByWord(assessmentRecords, { userId } = {}) {
-    const latestByWord = new Map();
-    for (const record of assessmentRecords || []) {
+function buildFormalDisplaySummary(displayEvents, { userId }) {
+    const summary = new Map();
+    for (const record of displayEvents || []) {
+        const fields = record?.fields || {};
+        if (userId && userKey(fields.user) !== userKey(userId)) continue;
+        if (!isFormalAssessment(record)) continue;
+        const recordId = fieldValue(fields.record_id).trim();
+        const displayedAt = assessmentTimestamp(record);
+        if (!recordId || !displayedAt) continue;
+        summary.set(recordId, Math.max(summary.get(recordId) || 0, displayedAt));
+    }
+    return summary;
+}
+
+function buildRecentQuestionTextsByWord(displayEvents, { userId, now = Date.now(), historyWindowMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+    const result = new Map();
+    const earliest = Number(now) - historyWindowMs;
+    for (const record of displayEvents || []) {
         const fields = record.fields || {};
         if (userId && userKey(fields.user) !== userKey(userId)) continue;
-        if (!isSubmittedFormalQuiz(record)) continue;
-        const word = normalizeWord(fields.word);
+        if (!isFormalAssessment(record)) continue;
+        const recordId = fieldValue(fields.record_id).trim();
         const questionText = normalizeQuestionText(fields.context || fields.question_text);
-        if (!word || !questionText) continue;
-        const timestamp = Number(fields.test_time || fields.record_time || record.created_time || 0) || 0;
-        const current = latestByWord.get(word);
-        if (!current || timestamp >= current.timestamp) latestByWord.set(word, { timestamp, questionText });
+        const shownAt = assessmentTimestamp(record);
+        if (!recordId || !questionText || !shownAt || shownAt < earliest || shownAt > Number(now)) continue;
+        if (!result.has(recordId)) result.set(recordId, new Set());
+        result.get(recordId).add(questionText);
     }
-    return new Map([...latestByWord].map(([word, item]) => [word, new Set([item.questionText])]));
+    return result;
 }
-function buildQuizWordQueue({
-    cacheRows = [],
-    wordRecords,
-    assessmentRecords = [],
-    userId,
-    level = '',
-    limit = 10,
-    now = Date.now(),
-    minAgeMs = 0,
-}) {
-    const assessmentSummary = buildAssessmentSummary(assessmentRecords, { userId, now });
+function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [], userId, level = '', limit = 10, now = Date.now(), minAgeMs = 0 }) {
+    const assessmentSummary = buildAssessmentSummary(assessmentRecords, { userId });
+    const formalDisplayByRecordId = buildFormalDisplaySummary(assessmentRecords, { userId });
     const masteryByRecordId = buildMasteryByRecordId(wordRecords, assessmentRecords);
-    const readyCacheRecordIds = level
-        ? buildReadyCacheRecordIds(cacheRows, { userId, level, roundType: 'primary', now })
-        : new Set();
+    const readyCacheRecordIds = level ? buildReadyCacheRecordIds(cacheRows, { userId, level, roundType: 'primary', now }) : new Set();
     const targetUser = userKey(userId);
-
     const eligible = (wordRecords || [])
         .filter(record => userKey(record.fields?.user) === targetUser)
-        .filter(record => {
-            if (!level) return true;
-            const recordLevel = fieldValue(record.fields?.Level).trim();
-            return !recordLevel || recordLevel === level || readyCacheRecordIds.has(record.record_id);
-        })
-        .filter(record => isPastCooldown(record, { now, minAgeMs }))
-        .sort((left, right) => recordTimestamp(left) - recordTimestamp(right))
+        .filter(record => !level || !fieldValue(record.fields?.Level).trim() || fieldValue(record.fields?.Level).trim() === level || readyCacheRecordIds.has(record.record_id))
+        .filter(record => isPastCooldown(record, { now, minAgeMs, latestFormalDisplayAt: formalDisplayByRecordId.get(record.record_id) || 0 }))
         .filter(record => !masteryByRecordId.get(record.record_id)?.mastered);
-
-    const availableToday = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasCorrectToday);
-    const due = availableToday.filter(record => assessmentSummary.get(record.record_id)?.hasAny);
-    const unseen = availableToday.filter(record => !assessmentSummary.get(record.record_id)?.hasAny);
-    return [...due, ...unseen].slice(0, limit).map(record => record.record_id);
+    const oldWrong = eligible.filter(record => assessmentSummary.get(record.record_id)?.lastWrongAt)
+        .sort((left, right) => assessmentSummary.get(left.record_id).lastWrongAt - assessmentSummary.get(right.record_id).lastWrongAt || recordTimestamp(left) - recordTimestamp(right));
+    const untested = eligible.filter(record => !assessmentSummary.get(record.record_id)?.hasAny)
+        .sort((left, right) => recordTimestamp(left) - recordTimestamp(right));
+    const touchedCorrectOnly = eligible.filter(record => assessmentSummary.get(record.record_id)?.hasAny && !assessmentSummary.get(record.record_id)?.lastWrongAt)
+        .sort((left, right) => assessmentSummary.get(left.record_id).latestAttemptAt - assessmentSummary.get(right.record_id).latestAttemptAt || recordTimestamp(left) - recordTimestamp(right));
+    return [...oldWrong, ...touchedCorrectOnly, ...untested].slice(0, limit).map(record => record.record_id);
 }
-
 function countEligibleReadyMeaningsByLevel({
     cacheRows = [],
     wordRecords = [],
@@ -197,21 +245,12 @@ function countEligibleReadyMeaningsByLevel({
             minAgeMs,
         });
         const queuedRecordIds = new Set(queue);
-        const groups = new Map();
-        for (const row of normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now, requireAvailable: false })) {
-            if (!queuedRecordIds.has(row.wordRecordId)) continue;
-            const fingerprint = String(row.questionFingerprint || '').trim();
-            const stem = normalizeQuestionText(row.question?.context);
-            if (!fingerprint || !stem) continue;
-            if (!groups.has(row.wordRecordId)) {
-                groups.set(row.wordRecordId, { fingerprints: new Set(), stems: new Set() });
-            }
-            groups.get(row.wordRecordId).fingerprints.add(fingerprint);
-            groups.get(row.wordRecordId).stems.add(stem);
-        }
-        counts[level] = [...groups.values()].filter(group =>
-            group.fingerprints.size >= 2 && group.stems.size >= 2
-        ).length;
+        const validPairRows = filterRowsInValidReadyPrimaryPairs(
+            normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now, requireAvailable: false })
+        );
+        counts[level] = new Set(validPairRows
+            .map(row => row.wordRecordId)
+            .filter(recordId => queuedRecordIds.has(recordId))).size;
     }
     return counts;
 }
@@ -222,21 +261,25 @@ function selectCachedQuestionsForWordQueue({
     userId,
     level,
     roundType = 'primary',
+    requireReadyPair = false,
     limit = 10,
     recentQuestionTextsByWord = new Map(),
     now = Date.now(),
 }) {
     const { quota, allowed } = getTypePolicy(level, limit);
-    const normalizedRows = normalizeSelectableCacheRows(cacheRows, {
+    const storedRows = normalizeSelectableCacheRows(cacheRows, {
         userId,
         level,
         roundType,
         now,
+        requireAvailable: false,
     });
+    const pairCheckedRows = requireReadyPair ? filterRowsInValidReadyPrimaryPairs(storedRows) : storedRows;
+    const normalizedRows = pairCheckedRows.filter(row =>
+        isCacheRowAvailable(row, now));
     const byRecordId = new Map();
     for (const row of normalizedRows) {
-        const wordKey = normalizeWord(row.word);
-        const excluded = new Set([...(recentQuestionTextsByWord.get(wordKey) || [])].map(normalizeQuestionText));
+        const excluded = new Set([...(recentQuestionTextsByWord.get(row.wordRecordId) || [])].map(normalizeQuestionText));
         if (excluded.has(normalizeQuestionText(row.question.context))) continue;
         const current = byRecordId.get(row.wordRecordId);
         if (!current || row.usedCount < current.usedCount) {

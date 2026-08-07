@@ -19,7 +19,10 @@ with claim_proc as (
     ('fail_question_generation_job', 'public.fail_question_generation_job(uuid,text,bigint,uuid,integer,bigint,bigint,text,text,jsonb)'),
     ('enqueue_question_generation_job_if_needed', 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)'),
     ('fence_word_question_generation', 'public.fence_word_question_generation(uuid,uuid)'),
-    ('finalize_word_question_generation_edit', 'public.finalize_word_question_generation_edit(uuid,uuid)')
+    ('finalize_word_question_generation_edit', 'public.finalize_word_question_generation_edit(uuid,uuid)'),
+    ('create_formal_quiz_challenge', 'public.create_formal_quiz_challenge(uuid,text,text,jsonb,timestamptz)')
+    ,('invalidate_formal_quiz_question', 'public.invalidate_formal_quiz_question(uuid,text,uuid,text,timestamptz)')
+    ,('replace_formal_quiz_question', 'public.replace_formal_quiz_question(uuid,text,uuid,uuid,text,text,jsonb,timestamptz)')
 ), rpc_proc as (
   select spec.name, spec.signature, to_regprocedure(spec.signature)::oid as oid
   from rpc_specs as spec
@@ -44,12 +47,18 @@ with claim_proc as (
 )
 select
   to_regclass('public.question_generation_jobs') is not null as jobs_table,
+  to_regclass('public.quiz_challenges') is not null as formal_challenges_table,
+  to_regclass('public.quiz_challenge_questions') is not null as formal_challenge_questions_table,
+  to_regclass('public.quiz_display_events') is not null as formal_display_events_table,
   coalesce((
     select cls.relrowsecurity
     from pg_catalog.pg_class as cls
     join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace
     where namespace.nspname = 'public' and cls.relname = 'question_generation_jobs'
   ), false) as jobs_rls_enabled,
+  coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_challenges'), false) as formal_challenges_rls_enabled,
+  coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_challenge_questions'), false) as formal_challenge_questions_rls_enabled,
+  coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_display_events'), false) as formal_display_events_rls_enabled,
   exists (
     select 1
     from pg_catalog.pg_trigger as trigger
@@ -69,6 +78,8 @@ select
       and index_meta.indpred is null
       and pg_get_indexdef(index_meta.indexrelid) like '%(user_id, word_id, question_fingerprint)%'
   ) as fingerprint_unique_index,
+  exists (select 1 from pg_catalog.pg_class as index_class join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace where namespace.nspname = 'public' and index_class.relname = 'quiz_display_events_meaning_time_idx') as formal_display_events_index,
+  exists (select 1 from pg_catalog.pg_class as index_class join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace where namespace.nspname = 'public' and index_class.relname = 'quiz_challenges_user_status_idx') as formal_challenges_index,
   exists (
     select 1
     from pg_catalog.pg_attribute as attribute
@@ -152,6 +163,24 @@ select
   (select anon_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_anon_execute,
   (select authenticated_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_service_role_execute,
+  (select signature from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_signature,
+  (select security_definer from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_security_definer,
+  (select public_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_public_execute,
+  (select anon_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_service_role_execute,
+  (select signature from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_signature,
+  (select security_definer from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_security_definer,
+  (select public_execute from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_public_execute,
+  (select anon_execute from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_service_role_execute,
+  (select signature from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_signature,
+  (select security_definer from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_security_definer,
+  (select public_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_public_execute,
+  (select anon_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_service_role_execute,
   (select signature from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_signature,
   (select security_definer from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_security_definer,
   (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_public_execute,
@@ -168,6 +197,8 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260803_question_generation_claim_rpc.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260804_question_generation_backfill_hardening.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260806_word_edit_generation_version.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260807_formal_quiz_challenges.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260808_formal_bad_question_replacement.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -179,6 +210,9 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
   'enqueue_question_generation_job_if_needed',
   'fence_word_question_generation',
   'finalize_word_question_generation_edit',
+  'create_formal_quiz_challenge',
+  'invalidate_formal_quiz_question',
+  'replace_formal_quiz_question',
 ].flatMap(name => [
   `rpc_${name}_signature`,
   `rpc_${name}_security_definer`,
@@ -190,6 +224,14 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 
 const EXPECTED_STATE = Object.freeze({
   jobs_table: true,
+  formal_challenges_table: true,
+  formal_challenge_questions_table: true,
+  formal_display_events_table: true,
+  formal_challenges_rls_enabled: true,
+  formal_challenge_questions_rls_enabled: true,
+  formal_display_events_rls_enabled: true,
+  formal_display_events_index: true,
+  formal_challenges_index: true,
   jobs_rls_enabled: true,
   enqueue_trigger: true,
   fingerprint_unique_index: true,
@@ -206,6 +248,9 @@ const EXPECTED_STATE = Object.freeze({
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),
   ])),
+  rpc_create_formal_quiz_challenge_security_definer: false,
+  rpc_invalidate_formal_quiz_question_security_definer: false,
+  rpc_replace_formal_quiz_question_security_definer: false,
   rpc_old_claim_signature_absent: true,
   rpc_old_renew_signature_absent: true,
   rpc_old_publish_signature_absent: true,

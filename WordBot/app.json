@@ -23,7 +23,6 @@
       "package": "com.wordbot.app"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "extra": {

@@ -26,9 +26,9 @@ function word(index, extra = {}) {
     };
 }
 
-function cacheRow(index) {
+function cacheRow(index, variantSlot = 1) {
     return {
-        id: `cache-${index}`,
+        id: `cache-${index}-${variantSlot}`,
         word_id: `word-${index}`,
         word_record_id: `rec-${index}`,
         word: WORDS[index - 1],
@@ -37,10 +37,12 @@ function cacheRow(index) {
         round_type: 'primary',
         quality_status: 'ready',
         cache_state: 'active',
+        variant_slot: variantSlot,
+        question_fingerprint: `fp-${index}-${variantSlot}`,
         question_type: '1',
-        question_text: 'A clear sentence uses _____ in context.',
+        question_text: `Variant ${variantSlot} uses _____ naturally in context.`,
         context_zh: `\u8fd9\u662f\u7b2c${index}\u9053\u7ec3\u4e60\u4e2d\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
-        options: [`A. ${WORDS[index - 1]}`, 'B. alpha', 'C. bravo', 'D. charlie'],
+        options: [`A. ${WORDS[index - 1]}`, `B. alpha-${variantSlot}`, `C. bravo-${variantSlot}`, `D. charlie-${variantSlot}`],
         answer: 'A',
         option_meanings: ['中文释义', '阿尔法', '布拉沃', '查理'],
         correct_meaning: `中文释义${index}`,
@@ -74,29 +76,64 @@ test('meaning fallback uses a concise Chinese sense when the stored meaning is t
     assert.equal(quiz.questions.every(question => question.context.length <= 50), true);
 });
 
-test('real quiz returns a cache-only partial formal challenge when seven questions are ready', async () => {
+test('real quiz blocks a formal challenge until seven or eight cached questions reach ten', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1));
+    for (const readyCount of [7, 8]) {
+        const quiz = await generateQuizWithDataSource({
+            username: 'qiuqiu', level: MIDDLE, mode: 'real', createId: () => `partial-cache-${readyCount}`,
+            dataSource: {
+                name: 'supabase',
+                getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+                getWordsForUser: async () => words,
+                getAssessmentsForUser: async () => [],
+                getQuestionCache: async () => Array.from({ length: readyCount }, (_, index) => [
+                    cacheRow(index + 1, 1),
+                    cacheRow(index + 1, 2),
+                ]).flat(),
+            },
+        });
+
+        assert.equal(quiz.testId, undefined);
+        assert.equal(quiz.code, 'QUESTION_CACHE_NOT_READY');
+        assert.equal(quiz.source, 'question_cache');
+        assert.equal(quiz.partialFormalChallenge, false);
+        assert.equal(quiz.readyCount, readyCount);
+        assert.equal(quiz.requiredCount, 10);
+        assert.deepEqual(quiz.questions, []);
+        assert.equal(quiz.diagnostics.fallbackUsed, false);
+        assert.equal(quiz.diagnostics.readyCount, readyCount);
+        assert.equal(quiz.diagnostics.eligibleReadyMeanings, readyCount);
+        assert.equal(quiz.diagnostics.remainingCount, 10 - readyCount);
+        assert.equal(quiz.diagnostics.finalQuestionCount, 0);
+    }
+});
+
+test('real quiz excludes an invalid distractor pair from the formal ready count', async () => {
+    const words = Array.from({ length: 10 }, (_, index) => word(index + 1));
+    const cacheRows = words.flatMap((_, index) => [cacheRow(index + 1, 1), cacheRow(index + 1, 2)]);
+    const sharedOptions = [`A. ${WORDS[9]}`, 'B. shared-1', 'C. shared-2', 'D. shared-3'];
+    for (const row of cacheRows.filter(candidate => candidate.word_id === 'word-10')) {
+        row.options = sharedOptions;
+    }
+
     const quiz = await generateQuizWithDataSource({
-        username: 'qiuqiu', level: MIDDLE, mode: 'real', createId: () => 'partial-cache',
+        username: 'qiuqiu',
+        level: MIDDLE,
+        mode: 'real',
+        createId: () => 'invalid-pair-formal',
         dataSource: {
             name: 'supabase',
             getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
             getWordsForUser: async () => words,
             getAssessmentsForUser: async () => [],
-            getQuestionCache: async () => Array.from({ length: 7 }, (_, index) => cacheRow(index + 1)),
+            getQuestionCache: async () => cacheRows,
         },
     });
 
-    assert.equal(quiz.error, undefined);
-    assert.equal(quiz.testId, 'real-partial-cache');
-    assert.equal(quiz.source, 'question_cache');
-    assert.equal(quiz.partialFormalChallenge, true);
-    assert.equal(quiz.readyCount, 7);
-    assert.equal(quiz.requiredCount, 10);
-    assert.equal(quiz.questions.length, 7);
-    assert.equal(quiz.questions.every(question => question.source === 'question_cache'), true);
-    assert.equal(quiz.diagnostics.fallbackUsed, false);
-    assert.equal(quiz.diagnostics.finalQuestionCount, 7);
+    assert.equal(quiz.code, 'QUESTION_CACHE_NOT_READY');
+    assert.equal(quiz.readyCount, 9);
+    assert.equal(quiz.diagnostics.eligibleReadyMeanings, 9);
+    assert.deepEqual(quiz.questions, []);
 });
 
 test('real quiz keeps the existing error when no cached questions are ready', async () => {

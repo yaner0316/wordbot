@@ -2,8 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 const {
     ANSWER_CONFIDENCE,
+    assessmentTimestamp,
     evaluateMeaningMastery,
     evaluateWordMastery,
+    isFormalAssessment,
+    isSubmittedFormalQuiz,
     normalizeSubmittedAnswer,
     parseStoredAnswer,
     encodeAnswer,
@@ -102,6 +105,33 @@ test('evaluateMeaningMastery: two correct attempts different days returns master
     assert.strictEqual(result.mastered, true);
     assert.strictEqual(result.correctAfterLastWrongCount, 2);
     assert.strictEqual(result.distinctDays, 2);
+});
+
+test('evaluateMeaningMastery uses the inclusive 18-hour to 720-hour interval after the latest formal wrong answer', () => {
+    const first = getTimestamp(2026, 8, 1, 10);
+    const atMinimum = evaluateMeaningMastery([
+        createRecord({ testTime: first, isCorrect: '0' }),
+        createRecord({ testTime: first + 1, isCorrect: '1' }),
+        createRecord({ testTime: first + 1 + 18 * 60 * 60 * 1000, isCorrect: '1', yourAnswer: '1|guess' }),
+    ], value => value === '1');
+    const atMaximum = evaluateMeaningMastery([
+        createRecord({ testTime: first, isCorrect: '1' }),
+        createRecord({ testTime: first + 720 * 60 * 60 * 1000, isCorrect: '1' }),
+    ], value => value === '1');
+    const belowMinimum = evaluateMeaningMastery([
+        createRecord({ testTime: first, isCorrect: '1' }),
+        createRecord({ testTime: first + 18 * 60 * 60 * 1000 - 1, isCorrect: '1' }),
+    ], value => value === '1');
+    const aboveMaximum = evaluateMeaningMastery([
+        createRecord({ testTime: first, isCorrect: '1' }),
+        createRecord({ testTime: first + 720 * 60 * 60 * 1000 + 1, isCorrect: '1' }),
+    ], value => value === '1');
+
+    assert.strictEqual(atMinimum.mastered, true);
+    assert.strictEqual(atMinimum.uncertainCorrectCount, 1);
+    assert.strictEqual(atMaximum.mastered, true);
+    assert.strictEqual(belowMinimum.mastered, false);
+    assert.strictEqual(aboveMaximum.mastered, false);
 });
 
 test('evaluateMeaningMastery: wrong answer resets progress', () => {
@@ -222,4 +252,72 @@ test('evaluateMeaningMastery: mixed sure and guess answers', () => {
     const result = evaluateMeaningMastery(records, v => v === '1');
     assert.strictEqual(result.mastered, true);
     assert.strictEqual(result.uncertainCorrectCount, 1);
+});
+
+test('exports shared formal classifier and robust assessment timestamp parser', () => {
+    assert.strictEqual(typeof isFormalAssessment, 'function');
+    assert.strictEqual(typeof assessmentTimestamp, 'function');
+    if (typeof assessmentTimestamp === 'function') {
+        const latest = getTimestamp(2026, 8, 4);
+        assert.strictEqual(assessmentTimestamp({
+            created_time: latest,
+            fields: {
+                test_time: 'malformed',
+                record_time: getTimestamp(2026, 8, 1),
+                assessed_at: new Date(getTimestamp(2026, 8, 3)).toISOString(),
+                created_at: getTimestamp(2026, 8, 2),
+            },
+        }), latest);
+    }
+});
+
+test('formal submission accepts true-like and legacy absent flags', () => {
+    for (const flag of [true, 1, '1', 'true', 'yes', undefined, '']) {
+        const record = createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' });
+        if (flag !== undefined) record.fields.is_real_assessment = flag;
+        assert.strictEqual(isSubmittedFormalQuiz(record), true, `flag ${String(flag)}`);
+    }
+});
+
+test('formal submission rejects false-like and malformed explicit flags', () => {
+    for (const flag of [false, 0, '0', 'false', 'no', 'unexpected']) {
+        const record = createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' });
+        record.fields.is_real_assessment = flag;
+        assert.strictEqual(isSubmittedFormalQuiz(record), false, `flag ${String(flag)}`);
+    }
+});
+
+test('formal classifier excludes reserved IDs and non-formal kinds without relying on both', () => {
+    for (const testId of ['real-review-source', 'real-preview-source', 'real-test-source']) {
+        const record = createRecord({ testId, testTime: getTimestamp(2026, 8, 1), isCorrect: '1' });
+        assert.strictEqual(isSubmittedFormalQuiz(record), false, testId);
+    }
+    for (const kind of ['review', 'test', 'preview']) {
+        const record = createRecord({ testId: 'real-quiz-source', testTime: getTimestamp(2026, 8, 1), isCorrect: '1' });
+        record.fields.assessment_kind = kind;
+        assert.strictEqual(isSubmittedFormalQuiz(record), false, kind);
+    }
+});
+
+test('evaluateMeaningMastery orders attempts with fallback assessment timestamps', () => {
+    const olderCorrect = createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1' });
+    const newerWrong = createRecord({ testTime: 'malformed', isCorrect: '0' });
+    newerWrong.fields.record_time = getTimestamp(2026, 8, 2);
+
+    const result = evaluateMeaningMastery([newerWrong, olderCorrect], value => value === '1');
+
+    assert.strictEqual(result.stage, 'recognized');
+    assert.strictEqual(result.correctAfterLastWrongCount, 0);
+});
+
+test('evaluateMeaningMastery computes intervals from fallback assessment timestamps', () => {
+    const first = createRecord({ testTime: 'malformed-first', isCorrect: '1' });
+    first.fields.record_time = getTimestamp(2026, 8, 1);
+    const second = createRecord({ testTime: 'malformed-second', isCorrect: '1' });
+    second.fields.assessed_at = getTimestamp(2026, 8, 2);
+
+    const result = evaluateMeaningMastery([first, second], value => value === '1');
+
+    assert.strictEqual(result.mastered, true);
+    assert.strictEqual(result.latestCorrectIntervalMs, 24 * 60 * 60 * 1000);
 });

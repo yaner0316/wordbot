@@ -8,6 +8,14 @@ const DEFAULT_CORS_ALLOWED_ORIGINS = Object.freeze([
     'https://wordbot-web.onrender.com',
 ]);
 
+
+function isCompleteCacheOnlyFormalSession(session) {
+    const questions = Array.isArray(session?.questions) ? session.questions : [];
+    return questions.length === FORMAL_QUIZ_REQUIRED_COUNT
+        && isResumableQuizSession(session)
+        && questions.every(question => String(question?.source || '').trim().toLowerCase() === 'question_cache'
+            && String(question?.cacheRecordId || '').trim());
+}
 function getCorsAllowedOrigins(environment = process.env) {
     const configuredOrigins = String(environment.WORDBOT_CORS_ALLOWED_ORIGINS || '')
         .split(',')
@@ -132,7 +140,7 @@ function createApp({
     verifyParentLogin,
     setParentCredentials,
     resetChildPassword,
-    getActiveQuizSession,
+    getActiveFormalQuizChallenge,
     createReviewRound,
     prebuildWrongQuestionCache,
     getActiveReviewRound,
@@ -211,13 +219,13 @@ function createApp({
         });
     }
 
-    if (typeof getActiveQuizSession === 'function') {
+    if (typeof getActiveFormalQuizChallenge === 'function') {
         app.get('/api/quiz/session', async (req, res) => {
             try {
                 const { user } = req.query;
                 if (!user) return res.status(400).json({ error: '缂哄皯鐢ㄦ埛ID' });
-                const session = await getActiveQuizSession(user);
-                if (!isResumableQuizSession(session)) return res.json({ active: false });
+                const session = await getActiveFormalQuizChallenge(user);
+                if (!isCompleteCacheOnlyFormalSession(session)) return res.json({ active: false });
                 const questions = session.questions;
                 const readyCount = questions.length;
                 res.json({

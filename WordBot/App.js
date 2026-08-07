@@ -140,6 +140,24 @@ export default function App() {
         body: JSON.stringify({ user, testId, answers: ans })
       });
       const data = await res.json();
+      if (data.replacementRequired) {
+        const replacements = Array.isArray(data.replacementQuestions) ? data.replacementQuestions : [];
+        if (replacements.length > 0) {
+          const byIndex = new Map(replacements.map(question => [question.questionIndex, question]));
+          setQuiz(previous => (previous || []).map((question, index) => byIndex.get(index) || question));
+          setAnswers({});
+          setCurrent(0);
+          setResults(null);
+          setMessage('\u53d1\u73b0\u65e0\u6548\u9898\u76ee\uff0c\u5df2\u6362\u6210\u65b0\u9898\uff0c\u8bf7\u91cd\u65b0\u4f5c\u7b54\u3002');
+          setScreen('quiz');
+        } else {
+          setResults(null);
+          setMessage('\u8be5\u9898\u5df2\u4f5c\u5e9f\uff0c\u5907\u7528\u9898\u6b63\u5728\u751f\u6210\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002');
+          setScreen('actions');
+        }
+        setLoading(false);
+        return;
+      }
       setResults(data);
       setScreen('results');
     } catch { setMessage('提交失败'); }
@@ -284,6 +302,7 @@ export default function App() {
       {results.results?.map((r, i) => (
         <View key={i} style={[s.card, r.correct ? s.greenCard : s.redCard]}>
           <Text>第{i+1}题: {r.correct ? '✓ 正确' : `你的答案：${r.your || '未答'}；正确答案：${r.answer}`}</Text>
+          <Text style={s.translation}>{r.translation || quiz?.[i]?.contextCN || ''}</Text>
         </View>
       ))}
       <TouchableOpacity style={s.btn} onPress={() => { setQuiz(null); setResults(null); setScreen('actions'); }}>
@@ -505,6 +524,7 @@ const s = StyleSheet.create({
   hint: { fontSize: 12, color: '#999', marginBottom: 10 },
   label: { fontSize: 14, color: '#6200EE', marginBottom: 10 },
   context: { fontSize: 18, color: '#333', lineHeight: 28 },
+  translation: { marginTop: 8, fontSize: 16, color: '#555', lineHeight: 24 },
   option: { backgroundColor: '#fff', padding: 15, borderRadius: 10, marginBottom: 10, borderWidth: 2, borderColor: '#e0e0e0' },
   selected: { borderColor: '#6200EE', backgroundColor: '#EDE7F6' },
   nav: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },

@@ -1,12 +1,13 @@
+require('./startup-env');
+
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveQuizSession, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
-const { createDefaultQuestionGenerationRuntime } = require('./question-generation-bootstrap');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -14,6 +15,10 @@ const {
     normalizeAssessmentMode,
 } = require('./assessment-mode');
 const { parseStoredAnswer } = require('./mastery-evidence');
+
+function createDefaultQuestionGenerationRuntime(options) {
+    return require('./question-generation-bootstrap').createDefaultQuestionGenerationRuntime(options);
+}
 
 const getFieldVal = (v) => {
     if (!v) return '';
@@ -220,7 +225,7 @@ function installShutdownSignalHandlers(server, { processObject = process } = {})
 
 const app = createApp({
     submitAnswers,
-    getActiveQuizSession,
+    getActiveFormalQuizChallenge,
     updateQuizSessionProgress,
     prebuildWrongQuestionCache,
     registerUser,

@@ -341,6 +341,10 @@ const ELEMENTARY_ANIMAL_WORDS = new Set([
     'piglet', 'fawn', 'colt', 'pony', 'bird', 'hen', 'rooster',
 ]);
 
+const PROBLEM_SOLVING_METHOD_WORDS = new Set([
+    'approach', 'technique', 'method', 'strategy', 'solution', 'plan',
+]);
+
 function hasAmbiguousFillInContext(question) {
     const type = Number(question?.type);
     if (type !== 1) return false;
@@ -356,6 +360,14 @@ function hasAmbiguousFillInContext(question) {
     }
 
     const publicationOptionCount = optionWords.filter(word => PUBLICATION_CATEGORY_WORDS.has(word)).length;
+    const problemSolvingMethodOptionCount = optionWords.filter(word => PROBLEM_SOLVING_METHOD_WORDS.has(word)).length;
+    const hasNewMethodCue = /\b(?:need|needs|needed|require|requires|required)\s+(?:a|an|the)?\s*(?:new|different|better|effective|practical)\s+_____\b/.test(context);
+    const hasProblemSolvingAction = /\b(?:solv(?:e|ing)|address(?:ing)?|tackl(?:e|ing)|handl(?:e|ing)|overcom(?:e|ing))\b/.test(context);
+    const hasProblemSolvingCue = hasProblemSolvingAction && /\b(?:problem|challenge|issue)\b/.test(context);
+    if (problemSolvingMethodOptionCount >= 3 && hasNewMethodCue && hasProblemSolvingCue) {
+        return true;
+    }
+
     if (
         publicationOptionCount >= 3 &&
         /\b(?:this|that|the|a|an)\s+[a-z]+\s+_____\s+(?:explains|teaches|describes|introduces|covers|shows)\b/.test(context)

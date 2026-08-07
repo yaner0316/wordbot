@@ -5,7 +5,8 @@ const crypto = require('crypto');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const supabase = require('./supabase-client');
-const { isRealAssessment, getAssessmentMode } = require('./assessment-mode');
+const { isRealAssessment, getAssessmentMode, normalizeAssessmentMode } = require('./assessment-mode');
+const { assertFormalQuizQuestions } = require('./formal-quiz-session');
 const { isMeaningAnswerCorrect } = require('./meaning-review');
 const { evaluateMeaningMastery } = require('./mastery-evidence');
 const { summarizeReviewRound } = require('./review-session');
@@ -1010,10 +1011,59 @@ async function deleteQuestionCacheRowsWithClient(client, username, type = null) 
     return { deleted: (data || []).length };
 }
 
+const EXECUTABLE_QUESTION_GENERATION_JOB_STATUSES = new Set([
+    'pending',
+    'generating',
+    'validating',
+    'repairing',
+    'retry_wait',
+]);
+
+async function isolatePrimaryCachePairForReplacementWithClient(client, userId, wordId) {
+    const { error } = await client
+        .from('question_cache')
+        .update({
+            cache_state: 'replace_pending',
+            updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('word_id', wordId)
+        .eq('round_type', 'primary')
+        .eq('question_type', '1')
+        .eq('quality_status', 'ready')
+        .in('cache_state', ['active', 'reserved_next_day'])
+        .select('id');
+    ensureNoError(error, 'rebuildQuestionCache.isolateBadPair');
+}
+
+async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wordId, reason }) {
+    const { data, error } = await client.rpc(
+        'enqueue_question_generation_job_if_needed',
+        {
+            p_user_id: userId,
+            p_word_id: wordId,
+            p_reason: reason,
+        },
+    );
+    ensureNoError(error, 'rebuildQuestionCache.enqueueJob');
+    if (data === true) return;
+
+    const { data: job, error: jobError } = await client
+        .from('question_generation_jobs')
+        .select('id,status')
+        .eq('user_id', userId)
+        .eq('word_id', wordId)
+        .maybeSingle();
+    ensureNoError(jobError, 'rebuildQuestionCache.confirmEnqueueJob');
+    const status = String(job?.status || '').trim().toLowerCase();
+    if (!job || !EXECUTABLE_QUESTION_GENERATION_JOB_STATUSES.has(status)) {
+        throw new Error(`rebuildQuestionCache.enqueueJob: durable job was not confirmed for word ${wordId}`);
+    }
+}
 async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null) {
     const user = await requireUserByUsername(client, username);
-    const level = normalizeOptionalLearningLevel(user.learning_level);
-    if (!level) return { configured: true, skipped: true, level: null, count: 0 };
+    const level = normalizeOptionalLearningLevel(user.learning_level) || normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL);
+    const defaultWordLevel = level;
     const words = await getWordsForUserWithClient(client, username);
     const wordsById = new Map(words.map(word => [word.id, word]));
     const assessmentRows = await getAssessmentsForUserWithClient(client, username);
@@ -1038,10 +1088,6 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     }));
     const isEvidenceMastered = word => Boolean(word && masteryByWordId.get(word.id)?.mastered);
     const candidateWords = words
-        .filter(row => {
-            const wordLevel = normalizeOptionalLearningLevel(row.level);
-            return !wordLevel || wordLevel === level;
-        })
         .filter(row => !isEvidenceMastered(row))
         .sort((left, right) => {
             const priority = { pending: 0, recognized: 1, consolidating: 2, mastered: 3 };
@@ -1052,8 +1098,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     const { data: existingCacheRows, error: existingCacheError } = await client
         .from('question_cache')
         .select('*')
-        .eq('user_id', user.id)
-        .eq('level', level);
+        .eq('user_id', user.id);
     ensureNoError(existingCacheError, 'rebuildQuestionCache.readExisting');
     const staleMasteredCacheIds = (existingCacheRows || [])
         .filter(row => isEvidenceMastered(wordsById.get(row.word_id)))
@@ -1169,12 +1214,31 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of wordsNeedingRebuild) {
-        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator });
+        const wordLevel = normalizeOptionalLearningLevel(word.level) || defaultWordLevel;
+        const wordId = String(word.id || '').trim();
+        const hasSelectablePrimaryRows = nonMasteredCacheRows.some(row =>
+            String(row.word_id || '').trim() === wordId
+            && row.round_type === 'primary'
+            && String(row.question_type) === '1'
+            && row.quality_status === 'ready'
+            && ['active', 'reserved_next_day'].includes(row.cache_state)
+        );
+        if (hasSelectablePrimaryRows) {
+            await isolatePrimaryCachePairForReplacementWithClient(client, user.id, word.id);
+        }
+        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level: wordLevel, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
-        if (!primaryRows.length) continue;
-        const wordId = String(primaryRows[0].source_word_record_id || primaryRows[0].word_id || '').trim();
-        if (!wordId || seededPrimaryWordIds.has(wordId)) continue;
-        seededPrimaryWordIds.add(wordId);
+        if (!primaryRows.length) {
+            await enqueueQuestionGenerationJobWithConfirmation(client, {
+                userId: user.id,
+                wordId: word.id,
+                reason: 'cache_backfill',
+            });
+            continue;
+        }
+        const primaryWordId = String(primaryRows[0].source_word_record_id || primaryRows[0].word_id || '').trim();
+        if (!primaryWordId || seededPrimaryWordIds.has(primaryWordId)) continue;
+        seededPrimaryWordIds.add(primaryWordId);
         rows.push(...wordRows);
     }
 
@@ -1209,7 +1273,10 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         for (const row of nonMasteredCacheRows) {
             const wordId = wordIdForRow(row);
             const fingerprint = fingerprintForRow(row);
-            if (!rebuiltWordIds.has(wordId) || !fingerprint || requestedFingerprints.has(cacheIdentity(row))) continue;
+            if (row.round_type !== 'primary'
+                || !rebuiltWordIds.has(wordId)
+                || !fingerprint
+                || requestedFingerprints.has(cacheIdentity(row))) continue;
             retirementRowsByIdentity.set(cacheIdentity(row), {
                 ...row,
                 cache_state: 'retired',
@@ -1708,6 +1775,7 @@ async function applyQuizCacheLifecycleWithClient(client, { userId, questions = [
             .eq('word_id', current.word_id)
             .eq('round_type', 'primary')
             .eq('cache_state', 'reserved_next_day')
+            .lte('available_from', new Date().toISOString())
             .order('available_from', { ascending: true })
             .limit(1)
             .maybeSingle();
@@ -1970,14 +2038,174 @@ function requireQuestions(questions) {
     return questions;
 }
 
+function assertFormalQuizSessionQuestions(testId, questions) {
+    if (!isRealAssessment(testId)) return;
+    assertFormalQuizQuestions(questions);
+}
+
+function normalizeFormalChallengeQuestion(question) {
+    const meaningId = String(question?.meaningId || question?.meaning_id || '').trim();
+    const cacheQuestionId = String(question?.cacheRecordId || question?.cache_question_id || '').trim();
+    const stem = String(question?.context || question?.stem || question?.question_text || '').trim();
+    if (!meaningId || !cacheQuestionId || !stem) throw new Error('FORMAL_CHALLENGE_QUESTION_CANONICAL_IDS_REQUIRED');
+    return {
+        meaning_id: meaningId,
+        cache_question_id: cacheQuestionId,
+        stem,
+        question_fingerprint: String(question?.questionFingerprint || question?.question_fingerprint || '').trim() || null,
+        question_snapshot: question,
+    };
+}
+
+async function createFormalQuizChallengeWithClient(client, options = {}) {
+    const username = String(options.username || '').trim();
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) throw new Error(`USER_NOT_FOUND: ${username}`);
+    const testId = requireTestId(options.testId);
+    const questions = options.questions;
+    if (!Array.isArray(questions) || questions.length !== 10) throw new Error('FORMAL_QUIZ_INCOMPLETE');
+    const payload = {
+        p_user_id: user.id,
+        p_test_id: testId,
+        p_level: String(options.level || '').trim(),
+        p_questions: questions.map(normalizeFormalChallengeQuestion),
+    };
+    if (options.now !== undefined && options.now !== null) payload.p_now = options.now;
+    const { data, error } = await client.rpc('create_formal_quiz_challenge', payload);
+    ensureNoError(error, 'createFormalQuizChallenge');
+    return data;
+}
+
+
+function normalizeFormalChallengeProgress(progress) {
+    return {
+        currentQuestion: Math.max(0, Number(progress?.currentQuestion) || 0),
+        answers: Array.isArray(progress?.answers) ? progress.answers : [],
+    };
+}
+
+async function getFormalQuizChallengeWithClient(client, username, testId) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const normalizedTestId = requireTestId(testId);
+    const { data: challenge, error: challengeError } = await client
+        .from('quiz_challenges')
+        .select('*')
+        .eq('test_id', normalizedTestId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+    ensureNoError(challengeError, 'getFormalQuizChallenge');
+    if (!challenge) return null;
+    const { data: questionRows, error: questionError } = await client
+        .from('quiz_challenge_questions')
+        .select('*')
+        .eq('challenge_id', challenge.id)
+        .order('ordinal', { ascending: true });
+    ensureNoError(questionError, 'getFormalQuizChallenge.questions');
+    return {
+        ...challenge,
+        challenge_id: challenge.id,
+        progress: normalizeFormalChallengeProgress(challenge.session_state),
+        questions: (questionRows || []).map(row => ({
+            ...(row.question_snapshot && typeof row.question_snapshot === 'object' ? row.question_snapshot : {}),
+            id: row.id,
+            ordinal: row.ordinal,
+            meaningId: row.meaning_id,
+            cacheRecordId: row.cache_question_id,
+            stem: row.stem,
+        })),
+    };
+}
+
+async function updateFormalQuizChallengeProgressWithClient(client, username, testId, progress) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const state = normalizeFormalChallengeProgress(progress);
+    const { data, error } = await client
+        .from('quiz_challenges')
+        .update({ session_state: state })
+        .eq('test_id', requireTestId(testId))
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .select('*')
+        .maybeSingle();
+    ensureNoError(error, 'updateFormalQuizChallengeProgress');
+    return data ? { ...data, progress: normalizeFormalChallengeProgress(data.session_state) } : null;
+}
+
+async function invalidateFormalQuizQuestionWithClient(client, options = {}) {
+    const username = String(options.username || '').trim();
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const testId = requireTestId(options.testId);
+    const challengeQuestionId = String(options.challengeQuestionId || options.challenge_question_id || '').trim();
+    if (!challengeQuestionId) throw new Error('FORMAL_CHALLENGE_QUESTION_ID_REQUIRED');
+    const reason = String(options.reason || '').trim();
+    if (!reason) throw new Error('FORMAL_CHALLENGE_INVALID_REASON_REQUIRED');
+    const { data, error } = await client.rpc('invalidate_formal_quiz_question', {
+        p_user_id: user.id,
+        p_test_id: testId,
+        p_challenge_question_id: challengeQuestionId,
+        p_reason: reason,
+    });
+    ensureNoError(error, 'invalidateFormalQuizQuestion');
+    return data;
+}
+
+async function replaceFormalQuizQuestionWithClient(client, options = {}) {
+    const username = String(options.username || '').trim();
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const testId = requireTestId(options.testId);
+    const challengeQuestionId = String(options.challengeQuestionId || options.challenge_question_id || '').trim();
+    const cacheQuestionId = String(options.cacheQuestionId || options.cache_question_id || '').trim();
+    const stem = String(options.stem || '').trim();
+    const questionSnapshot = options.questionSnapshot || options.question_snapshot;
+    if (!challengeQuestionId || !cacheQuestionId) throw new Error('FORMAL_REPLACEMENT_ID_REQUIRED');
+    if (!stem || !questionSnapshot || typeof questionSnapshot !== 'object' || Array.isArray(questionSnapshot)) {
+        throw new Error('FORMAL_REPLACEMENT_QUESTION_INVALID');
+    }
+    const args = {
+        p_user_id: user.id,
+        p_test_id: testId,
+        p_challenge_question_id: challengeQuestionId,
+        p_cache_question_id: cacheQuestionId,
+        p_stem: stem,
+        p_question_fingerprint: String(options.questionFingerprint || options.question_fingerprint || '').trim() || null,
+        p_question_snapshot: questionSnapshot,
+    };
+    if (options.now !== undefined && options.now !== null) args.p_now = options.now;
+    const { data, error } = await client.rpc('replace_formal_quiz_question', args);
+    ensureNoError(error, 'replaceFormalQuizQuestion');
+    return data;
+}
 async function saveQuizSessionWithClient(client, username, testId, questions, options = {}) {
+
+async function getActiveFormalQuizChallengeWithClient(client, username, options = {}) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const { data, error } = await client
+        .from('quiz_challenges')
+        .select('test_id')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+    ensureNoError(error, 'getActiveFormalQuizChallenge');
+    return data ? getFormalQuizChallengeWithClient(client, username, data.test_id) : null;
+}
     const user = await requireUserByUsername(client, username);
+    const normalizedTestId = requireTestId(testId);
+    const sessionQuestions = requireQuestions(questions);
+    assertFormalQuizSessionQuestions(normalizedTestId, sessionQuestions);
     const createdAt = toIsoString(options.now ? options.now() : Date.now());
     const expiresAt = toIsoString(toMillis(createdAt) + QUIZ_SESSION_TTL_MS);
     const row = {
-        test_id: requireTestId(testId),
+        test_id: normalizedTestId,
         user_id: user.id,
-        questions: requireQuestions(questions),
+        questions: sessionQuestions,
         created_at: createdAt,
         expires_at: expiresAt,
         session_state: options.progress || { currentQuestion: 0, answers: [] },
@@ -2009,29 +2237,59 @@ async function getQuizSessionWithClient(client, username, testId, options = {}) 
     };
 }
 
-async function getActiveQuizSessionWithClient(client, username, options = {}) {
+async function getActiveQuizSessionWithClient(client, username, mode = 'real', options = {}) {
+    if (mode && typeof mode === 'object') {
+        options = mode;
+        mode = 'real';
+    }
+    const normalizedMode = normalizeAssessmentMode(mode || 'real');
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return null;
-    const { data, error } = await client
+    let query = client
         .from('quiz_sessions')
         .select('*')
         .eq('user_id', user.id)
-        .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
+        .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()));
+
+    query = normalizedMode === 'test'
+        ? query.like('test_id', 'test-%')
+        : query.not('test_id', 'like', 'test-%');
+
+    const { data, error } = await query
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
     ensureNoError(error, 'getActiveQuizSession');
-    if (!data) return null;
+    const activeSession = data;
+    if (!activeSession) return null;
     return {
-        ...data,
-        questions: Array.isArray(data.questions) ? data.questions : [],
-        progress: data.session_state && typeof data.session_state === 'object' ? data.session_state : { currentQuestion: 0, answers: [] },
+        ...activeSession,
+        questions: Array.isArray(activeSession.questions) ? activeSession.questions : [],
+        progress: activeSession.session_state && typeof activeSession.session_state === 'object'
+            ? activeSession.session_state
+            : { currentQuestion: 0, answers: [] },
     };
 }
 
 async function updateQuizSessionProgressWithClient(client, username, testId, progress) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return null;
+    const normalizedTestId = requireTestId(testId);
+    if (isRealAssessment(normalizedTestId)) {
+        const { data: session, error: sessionError } = await client
+            .from('quiz_sessions')
+            .select('questions')
+            .eq('test_id', normalizedTestId)
+            .eq('user_id', user.id)
+            .maybeSingle();
+        ensureNoError(sessionError, 'updateQuizSessionProgress.getSession');
+        if (session) {
+            assertFormalQuizSessionQuestions(
+                normalizedTestId,
+                Array.isArray(session.questions) ? session.questions : []
+            );
+        }
+    }
     const state = {
         currentQuestion: Math.max(0, Number(progress?.currentQuestion) || 0),
         answers: Array.isArray(progress?.answers) ? progress.answers : [],
@@ -2039,7 +2297,7 @@ async function updateQuizSessionProgressWithClient(client, username, testId, pro
     const { data, error } = await client
         .from('quiz_sessions')
         .update({ session_state: state })
-        .eq('test_id', requireTestId(testId))
+        .eq('test_id', normalizedTestId)
         .eq('user_id', user.id)
         .select('*')
         .maybeSingle();
@@ -2220,13 +2478,22 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             getQuizSessionWithClient(client, username, testId, options),
         deleteQuizSession: (username, testId) =>
             deleteQuizSessionWithClient(client, username, testId),
-        getActiveQuizSession: (username, options) =>
-            getActiveQuizSessionWithClient(client, username, options),
+        getActiveQuizSession: (username, mode, options) =>
+            getActiveQuizSessionWithClient(client, username, mode, options),
         updateQuizSessionProgress: (username, testId, progress) =>
             updateQuizSessionProgressWithClient(client, username, testId, progress),
+        getFormalQuizChallenge: (username, testId) =>
+            getFormalQuizChallengeWithClient(client, username, testId),
+        updateFormalQuizChallengeProgress: (username, testId, progress) =>
+            updateFormalQuizChallengeProgressWithClient(client, username, testId, progress),
+        invalidateFormalQuizQuestion: input => invalidateFormalQuizQuestionWithClient(client, input),
+        replaceFormalQuizQuestion: input => replaceFormalQuizQuestionWithClient(client, input),
+        createFormalQuizChallenge: input => createFormalQuizChallengeWithClient(client, input),
         cleanupExpiredQuizSessions: options =>
             cleanupExpiredQuizSessionsWithClient(client, options),
         createReviewRound: input => createReviewRoundWithLock(client, input),
+        getActiveFormalQuizChallenge: (username, options) =>
+            getActiveFormalQuizChallengeWithClient(client, username, options),
         getActiveReviewRound: input => getActiveReviewRoundWithClient(client, input),
         deferReviewRound: input => deferReviewRoundWithClient(client, input),
         getReviewSummary: input => getReviewSummaryWithClient(client, input),
@@ -2270,6 +2537,8 @@ module.exports = {
     addWords: defaultAdapter.addWords,
     saveQuizSession: defaultAdapter.saveQuizSession,
     getQuizSession: defaultAdapter.getQuizSession,
+    getActiveQuizSession: defaultAdapter.getActiveQuizSession,
+    updateQuizSessionProgress: defaultAdapter.updateQuizSessionProgress,
     deleteQuizSession: defaultAdapter.deleteQuizSession,
     cleanupExpiredQuizSessions: defaultAdapter.cleanupExpiredQuizSessions,
     createReviewRound: defaultAdapter.createReviewRound,
@@ -2277,5 +2546,11 @@ module.exports = {
     deferReviewRound: defaultAdapter.deferReviewRound,
     getReviewSummary: defaultAdapter.getReviewSummary,
     prebuildWrongQuestionCache: defaultAdapter.prebuildWrongQuestionCache,
+    createFormalQuizChallenge: defaultAdapter.createFormalQuizChallenge,
+    getFormalQuizChallenge: defaultAdapter.getFormalQuizChallenge,
+    updateFormalQuizChallengeProgress: defaultAdapter.updateFormalQuizChallengeProgress,
+    invalidateFormalQuizQuestion: defaultAdapter.invalidateFormalQuizQuestion,
+    replaceFormalQuizQuestion: defaultAdapter.replaceFormalQuizQuestion,
+    getActiveFormalQuizChallenge: defaultAdapter.getActiveFormalQuizChallenge,
     submitReviewRound: defaultAdapter.submitReviewRound,
 };

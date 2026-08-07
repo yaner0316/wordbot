@@ -85,6 +85,7 @@ test('Supabase game state persists shared minutes and garden state', async () =>
 });
 function createFakeSupabase(seed = {}, options = {}) {
     const operations = [];
+    const readOperations = [];
     const db = {
         users: [],
         words: [],
@@ -106,12 +107,22 @@ function createFakeSupabase(seed = {}, options = {}) {
         };
     });
 
+    function matchesLike(value, pattern) {
+        assert.equal(pattern, 'test-%', 'fake Supabase only implements the LIKE pattern used by quiz sessions');
+        return String(value ?? '').startsWith('test-');
+    }
+
     function matches(row, filters) {
         return filters.every(filter => {
             if (filter.type === 'eq') return row[filter.column] === filter.value;
             if (filter.type === 'in') return filter.values.includes(row[filter.column]);
             if (filter.type === 'gt') return row[filter.column] > filter.value;
             if (filter.type === 'lt') return row[filter.column] < filter.value;
+            if (filter.type === 'lte') return row[filter.column] <= filter.value;
+            if (filter.type === 'like') return matchesLike(row[filter.column], filter.value);
+            if (filter.type === 'not' && filter.operator === 'like') {
+                return !matchesLike(row[filter.column], filter.value);
+            }
             return true;
         });
     }
@@ -120,19 +131,29 @@ function createFakeSupabase(seed = {}, options = {}) {
         constructor(table) {
             this.table = table;
             this.filters = [];
+            this.orders = [];
             this.limitCount = null;
             this.operation = 'select';
             this.payload = null;
         }
 
         select(columns) { this.selectColumns = columns; return this; }
-        order() { return this; }
+        order(column, orderOptions = {}) {
+            this.orders.push({ column, ascending: orderOptions.ascending !== false });
+            return this;
+        }
         range() { return Promise.resolve(this._result()); }
         limit(count) { this.limitCount = count; return this; }
         eq(column, value) { this.filters.push({ type: 'eq', column, value }); return this; }
         in(column, values) { this.filters.push({ type: 'in', column, values }); return this; }
         gt(column, value) { this.filters.push({ type: 'gt', column, value }); return this; }
         lt(column, value) { this.filters.push({ type: 'lt', column, value }); return this; }
+        lte(column, value) { this.filters.push({ type: 'lte', column, value }); return this; }
+        like(column, value) { this.filters.push({ type: 'like', column, value }); return this; }
+        not(column, operator, value) {
+            this.filters.push({ type: 'not', column, operator, value });
+            return this;
+        }
 
         insert(payload) {
             this.operation = 'insert';
@@ -180,6 +201,8 @@ function createFakeSupabase(seed = {}, options = {}) {
                 table: this.table,
                 operation: this.operation,
                 filters: this.filters.map(filter => ({ ...filter })),
+                orders: this.orders.map(order => ({ ...order })),
+                limitCount: this.limitCount,
                 payload: Array.isArray(this.payload)
                     ? this.payload.map(row => ({ ...row }))
                     : this.payload && { ...this.payload },
@@ -189,6 +212,8 @@ function createFakeSupabase(seed = {}, options = {}) {
             if (this.operation !== 'select') {
                 options.beforeOperation?.({ ...operation, db, operations });
                 operations.push(operation);
+            } else {
+                readOperations.push(operation);
             }
 
             if (this.operation === 'update' && options.failUpdateForOnce === this.table) {
@@ -307,7 +332,14 @@ function createFakeSupabase(seed = {}, options = {}) {
                     return row;
                 });
             }
-            if (this.limitCount !== null) rows = rows.slice(0, this.limitCount);
+            for (const order of this.orders.slice().reverse()) {
+                rows.sort((left, right) => {
+                    const comparison = String(left[order.column] ?? '').localeCompare(String(right[order.column] ?? ''));
+                    return order.ascending ? comparison : -comparison;
+                });
+            }
+            const rowLimits = [this.limitCount, options.maxSelectRows].filter(Number.isInteger);
+            if (rowLimits.length) rows = rows.slice(0, Math.min(...rowLimits));
             return { data: rows, error: null };
         }
     }
@@ -376,6 +408,7 @@ function createFakeSupabase(seed = {}, options = {}) {
         },
         db,
         queries: [],
+        readOperations,
         operations,
         from(table) {
             this.queries.push(table);
@@ -767,7 +800,7 @@ test('question cache status reports formal eligible meanings by level', async ()
             question_fingerprint: `fp-${id}`,
             question_type: 1,
             question_text: `We used the word ${targetWord} naturally in example ${id}.`,
-            options: [`A. ${targetWord}`, 'B. chair', 'C. pencil', 'D. window'],
+            options: [`A. ${targetWord}`, `B. chair-${id}`, `C. pencil-${id}`, `D. window-${id}`],
             answer: 'A',
             option_meanings: ['正确词义', '错误词义一', '错误词义二', '错误词义三'],
             correct_meaning: '正确词义',
@@ -1131,16 +1164,16 @@ test('quiz session persistence saves and restores unexpired Supabase sessions', 
     });
     const questions = [{ word: 'Apple', answer: 'A', options: ['A. Apple', 'B. Pear'] }];
 
-    await adapter.saveQuizSession('qiuqiu', 'quiz-1', questions, {
+    await adapter.saveQuizSession('qiuqiu', 'test-quiz-1', questions, {
         now: () => '2026-07-20T00:00:00.000Z',
     });
-    const session = await adapter.getQuizSession('qiuqiu', 'quiz-1', {
+    const session = await adapter.getQuizSession('qiuqiu', 'test-quiz-1', {
         now: () => '2026-07-20T01:00:00.000Z',
     });
 
     assert.deepEqual(session.questions, questions);
     assert.equal(session.user_id, 'user-1');
-    assert.equal(client.db.quiz_sessions[0].test_id, 'quiz-1');
+    assert.equal(client.db.quiz_sessions[0].test_id, 'test-quiz-1');
     assert.equal(client.db.quiz_sessions[0].expires_at, '2026-07-21T00:00:00.000Z');
 });
 
@@ -1149,11 +1182,11 @@ test('quiz session persistence stores progress and finds the latest unfinished s
     const adapter = createSupabaseDataAdapter(client);
     const questions = [{ word: 'Apple', answer: 'A', options: ['A. Apple', 'B. Pear'] }];
     const progress = { currentQuestion: 1, answers: [0] };
-    await adapter.saveQuizSession('qiuqiu', 'quiz-progress', questions, { progress, now: () => '2026-07-20T00:00:00.000Z' });
-    await adapter.updateQuizSessionProgress('qiuqiu', 'quiz-progress', progress);
-    const session = await adapter.getActiveQuizSession('qiuqiu', { now: () => '2026-07-20T01:00:00.000Z' });
+    await adapter.saveQuizSession('qiuqiu', 'test-quiz-progress', questions, { progress, now: () => '2026-07-20T00:00:00.000Z' });
+    await adapter.updateQuizSessionProgress('qiuqiu', 'test-quiz-progress', progress);
+    const session = await adapter.getActiveQuizSession('qiuqiu', 'test', { now: () => '2026-07-20T01:00:00.000Z' });
     assert.deepEqual(session.progress, progress);
-    assert.equal(session.test_id, 'quiz-progress');
+    assert.equal(session.test_id, 'test-quiz-progress');
 });
 test('quiz session persistence ignores expired sessions and deletes submitted sessions', async () => {
     const client = createFakeSupabase({
@@ -1894,6 +1927,28 @@ test('correct cache answer promotes the reserved next-day variant and retires th
     assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').cache_state, 'active');
     assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').available_from, null);
 });
+test('correct cache answer does not promote a reserved variant before its availability time', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{ id: 'word-1', user_id: 'user-1', word: 'apple', level: MIDDLE }],
+        question_cache: [
+            { id: 'cache-a', feishu_record_id: 'cache-a-ref', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', level: MIDDLE, round_type: 'primary', cache_state: 'active', quality_status: 'ready', question_type: '1', question_text: 'The child ate an apple.', options: [], answer: 'A', option_meanings: [] },
+            { id: 'cache-b', feishu_record_id: 'cache-b-ref', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', level: MIDDLE, round_type: 'primary', cache_state: 'reserved_next_day', available_from: '2999-07-31T00:00:00.000Z', quality_status: 'ready', question_type: '1', question_text: 'The child packed an apple.', options: [], answer: 'A', option_meanings: [] },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    await adapter.applyQuizCacheLifecycle({
+        userId: 'qiuqiu',
+        questions: [{ cacheRecordId: 'cache-a-ref' }],
+        results: [{ correct: true }],
+    });
+
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-a').cache_state, 'active');
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').cache_state, 'reserved_next_day');
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-b').available_from, '2999-07-31T00:00:00.000Z');
+});
+
 
 
 test('rebuildQuestionCacheForUser preserves complete pairs beyond ten while repairing only the invalid pair', async () => {
@@ -2454,7 +2509,7 @@ test('rebuildQuestionCacheForUser covers every unmastered meaning beyond the for
     }
 });
 
-test('rebuildQuestionCacheForUser keeps both old rows when a bad translation replacement write fails', async () => {
+test('rebuildQuestionCacheForUser keeps a bad pair isolated when replacement writing fails', async () => {
     const word = rebuildCoverageWord('write-failure', 'lucky');
     const oldRows = rebuildCoverageInvalidPair(word);
     oldRows[0].context_zh = DEFAULT_TEST_CONTEXT_TRANSLATION;
@@ -2467,13 +2522,12 @@ test('rebuildQuestionCacheForUser keeps both old rows when a bad translation rep
         missingColumns: { question_cache: ['question_fingerprint'] },
     });
 
-    const beforeRows = structuredClone(client.db.question_cache);
     await assert.rejects(
         createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu'),
         /rebuildQuestionCache\.(?:insert|upsert)/
     );
 
-    assert.deepEqual(client.db.question_cache, beforeRows);
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
 });
 
 test('rebuildQuestionCacheForUser upserts a matching fingerprint and atomically retires the other old row', async () => {
@@ -2619,4 +2673,390 @@ test('rebuildQuestionCacheForUser prioritizes previously tested meanings before 
         ...untested.map(word => word.feishu_record_id),
         testedToday[0].feishu_record_id,
     ]);
+});
+
+
+test('rebuildQuestionCacheForUser repairs an unmastered meaning outside the user learning level', async () => {
+    const highLevel = String.fromCharCode(0x9ad8, 0x4e2d);
+    const word = { ...rebuildCoverageWord('cross-level', 'lucky'), level: highLevel };
+    const oldRows = rebuildCoverageInvalidPair(word).map(row => ({ ...row, level: highLevel }));
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: oldRows,
+    });
+
+    const result = await createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+    const activeRows = client.db.question_cache.filter(row =>
+        row.word_id === word.id && ['active', 'reserved_next_day'].includes(row.cache_state)
+    );
+
+    assert.equal(result.count, 2);
+    assert.equal(activeRows.length, 2);
+    assert.equal(activeRows.every(row => row.level === highLevel), true);
+    assert.equal(client.db.question_cache.filter(row => row.id && oldRows.some(old => old.id === row.id))
+        .every(row => row.cache_state === 'retired'), true);
+});
+
+test('rebuildQuestionCacheForUser isolates a duplicate-stem pair before scheduling its durable repair job', async () => {
+    const word = rebuildCoverageWord('durable-retry', 'lucky');
+    const oldRows = rebuildCoverageInvalidPair(word).map(row => ({
+        ...row,
+        context_zh: DEFAULT_TEST_CONTEXT_TRANSLATION,
+        question_text: 'The lucky student saw _____ after school.',
+    }));
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: oldRows,
+        question_generation_jobs: [],
+    });
+
+    const result = await createRebuildCoverageAdapter(client, {
+        generateDistractors: async () => null,
+    }).rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
+    assert.deepEqual(client.operations.filter(operation => operation.table === 'rpc' || operation.table === 'question_cache')
+        .map(operation => `${operation.table}:${operation.operation}`), [
+            'question_cache:update',
+            'rpc:rpc',
+        ]);
+    assert.deepEqual(client.db.question_generation_jobs.map(job => ({
+        user_id: job.user_id,
+        word_id: job.word_id,
+        status: job.status,
+        reason: job.reason,
+    })), [{
+        user_id: 'user-1',
+        word_id: word.id,
+        status: 'pending',
+        reason: 'cache_backfill',
+    }]);
+});
+
+test('rebuildQuestionCacheForUser confirms a false enqueue response against an executable durable job', async () => {
+    const word = rebuildCoverageWord('durable-existing', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: rebuildCoverageInvalidPair(word),
+        question_generation_jobs: [{ id: 'job-1', user_id: 'user-1', word_id: word.id, status: 'generating' }],
+    }, { rpcDataFalseAlways: true });
+
+    await createRebuildCoverageAdapter(client, {
+        generateDistractors: async () => null,
+    }).rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
+    assert.equal(client.queries.includes('question_generation_jobs'), true);
+});
+
+test('rebuildQuestionCacheForUser throws but keeps the bad pair isolated when enqueue cannot be confirmed', async () => {
+    const word = rebuildCoverageWord('durable-missing', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: rebuildCoverageInvalidPair(word),
+        question_generation_jobs: [],
+    }, { rpcDataFalseAlways: true });
+
+    await assert.rejects(
+        createRebuildCoverageAdapter(client, {
+            generateDistractors: async () => null,
+        }).rebuildQuestionCacheForUser('qiuqiu'),
+        /rebuildQuestionCache\.enqueueJob: durable job was not confirmed/
+    );
+
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
+});
+
+test('rebuildQuestionCacheForUser keeps a bad pair isolated when enqueue itself fails', async () => {
+    const word = rebuildCoverageWord('durable-rpc-error', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: rebuildCoverageInvalidPair(word),
+        question_generation_jobs: [],
+    }, { failRpcName: 'enqueue_question_generation_job_if_needed' });
+
+    await assert.rejects(
+        createRebuildCoverageAdapter(client, {
+            generateDistractors: async () => null,
+        }).rebuildQuestionCacheForUser('qiuqiu'),
+        /rebuildQuestionCache\.enqueueJob/
+    );
+
+    assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
+});
+
+test('rebuildQuestionCacheForUser does not retire a review cache row for a rebuilt primary pair', async () => {
+    const word = rebuildCoverageWord('primary-only-retirement', 'lucky');
+    const oldPrimaryRows = rebuildCoverageInvalidPair(word);
+    const reviewRow = {
+        id: 'review-cache-row',
+        user_id: 'user-1',
+        word_id: word.id,
+        source_word_record_id: word.feishu_record_id,
+        level: MIDDLE,
+        round_type: 'review',
+        quality_status: 'ready',
+        cache_state: 'active',
+        question_type: '4',
+        question_fingerprint: 'review-fingerprint',
+        question_text: 'Review the meaning of lucky.',
+        answer: word.meaning_zh,
+        used_count: 3,
+        last_used_at: '2026-08-01T00:00:00.000Z',
+    };
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: [...oldPrimaryRows, reviewRow],
+    });
+
+    await createRebuildCoverageAdapter(client).rebuildQuestionCacheForUser('qiuqiu');
+
+    const finalReviewRow = client.db.question_cache.find(row => row.id === reviewRow.id);
+    const reviewRetirement = client.operations
+        .flatMap(operation => operation.payload || [])
+        .find(row => row.id === reviewRow.id && row.cache_state === 'retired');
+    assert.equal(finalReviewRow.cache_state, 'active');
+    assert.equal(finalReviewRow.used_count, 3);
+    assert.equal(finalReviewRow.last_used_at, reviewRow.last_used_at);
+    assert.equal(reviewRetirement, undefined);
+});
+
+
+test('quiz session persistence isolates real and test sessions by requested mode', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_sessions: [
+            {
+                test_id: 'test-newer', user_id: 'user-1', questions: [{ word: 'test' }],
+                created_at: '2026-07-20T02:00:00.000Z', expires_at: '2026-07-21T00:00:00.000Z',
+            },
+            {
+                test_id: 'legacy-real', user_id: 'user-1', questions: [{ word: 'real' }],
+                created_at: '2026-07-20T01:00:00.000Z', expires_at: '2026-07-21T00:00:00.000Z',
+            },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+    const now = { now: () => '2026-07-20T03:00:00.000Z' };
+
+    assert.equal((await adapter.getActiveQuizSession('qiuqiu', 'real', now)).test_id, 'legacy-real');
+    assert.equal((await adapter.getActiveQuizSession('qiuqiu', 'test', now)).test_id, 'test-newer');
+});
+
+test('active quiz session pushes mode filtering and row limit into Supabase', async () => {
+    const newerTestSessions = Array.from({ length: 1001 }, (_, index) => ({
+        test_id: 'test-' + index,
+        user_id: 'user-1',
+        questions: [{ word: 'test' }],
+        created_at: new Date(Date.parse('2026-07-20T01:00:00.000Z') + index * 1000).toISOString(),
+        expires_at: '2026-07-21T00:00:00.000Z',
+    }));
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_sessions: [
+            { test_id: 'legacy-real', user_id: 'user-1', questions: [{ word: 'real' }], created_at: '2026-07-20T00:00:00.000Z', expires_at: '2026-07-21T00:00:00.000Z' },
+            ...newerTestSessions,
+        ],
+    }, { maxSelectRows: 1000 });
+    const adapter = createSupabaseDataAdapter(client);
+    const now = { now: () => '2026-07-20T03:00:00.000Z' };
+
+    const realSession = await adapter.getActiveQuizSession('qiuqiu', 'real', now);
+    const testSession = await adapter.getActiveQuizSession('qiuqiu', 'test', now);
+
+    assert.equal(realSession?.test_id, 'legacy-real');
+    assert.equal(testSession?.test_id, 'test-1000');
+
+    const sessionQueries = client.readOperations.filter(operation => operation.table === 'quiz_sessions');
+    assert.equal(sessionQueries.length, 2);
+    assert.deepEqual(sessionQueries[0].filters.at(-1),
+        { type: 'not', column: 'test_id', operator: 'like', value: 'test-%' });
+    assert.equal(sessionQueries[0].limitCount, 1);
+    assert.deepEqual(sessionQueries[1].filters.at(-1),
+        { type: 'like', column: 'test_id', value: 'test-%' });
+    assert.equal(sessionQueries[1].limitCount, 1);
+});
+
+test('quiz session persistence rejects legacy real sessions that cannot be formally resumed', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const incompleteQuestions = [{ type: 1, record_id: 'meaning-1', cacheRecordId: 'cache-1', source: 'question_cache' }];
+
+    await assert.rejects(
+        adapter.saveQuizSession('qiuqiu', 'legacy-real', incompleteQuestions),
+        /FORMAL_QUIZ_INCOMPLETE/
+    );
+    client.db.quiz_sessions.push({
+        test_id: 'legacy-real', user_id: 'user-1', questions: incompleteQuestions,
+        created_at: '2026-07-20T00:00:00.000Z', expires_at: '2026-07-21T00:00:00.000Z',
+    });
+    await assert.rejects(
+        adapter.updateQuizSessionProgress('qiuqiu', 'legacy-real', { currentQuestion: 1, answers: [0] }),
+        /FORMAL_QUIZ_INCOMPLETE/
+    );
+});
+test('formal challenge adapter creates the authoritative Supabase challenge through the canonical RPC', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const client = {
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { challenge_id: 'challenge-1', question_count: 10 }, error: null };
+        },
+    };
+    const adapter = createSupabaseDataAdapter(client);
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        meaningId: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        context: `Sentence ${index + 1} with _____.`,
+        questionFingerprint: `fingerprint-${index + 1}`,
+        type: 1,
+        word: 'bank',
+        options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
+        answer: 'A',
+    }));
+
+    const result = await adapter.createFormalQuizChallenge({
+        username: 'qiuqiu',
+        testId: 'real-challenge-1',
+        level: MIDDLE,
+        questions,
+        now: '2026-08-07T00:00:00.000Z',
+    });
+
+    assert.deepEqual(result, { challenge_id: 'challenge-1', question_count: 10 });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].name, 'create_formal_quiz_challenge');
+    assert.equal(calls[0].args.p_user_id, 'user-1');
+    assert.equal(calls[0].args.p_test_id, 'real-challenge-1');
+    assert.equal(calls[0].args.p_level, MIDDLE);
+    assert.equal(calls[0].args.p_now, '2026-08-07T00:00:00.000Z');
+    assert.deepEqual(calls[0].args.p_questions, questions.map(question => ({
+        meaning_id: question.meaningId,
+        cache_question_id: question.cacheRecordId,
+        stem: question.context,
+        question_fingerprint: question.questionFingerprint,
+        question_snapshot: question,
+    })));
+});
+
+test('formal challenge adapter reads authoritative questions and updates challenge progress', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_challenges: [{
+            id: 'challenge-1', test_id: 'real-challenge-1', user_id: 'user-1',
+            mode: 'real', level: MIDDLE, status: 'active',
+            session_state: { currentQuestion: 2, answers: [{ option: 0 }] },
+        }],
+        quiz_challenge_questions: [{
+            id: 'challenge-question-1', challenge_id: 'challenge-1', ordinal: 1,
+            meaning_id: 'meaning-1', cache_question_id: 'cache-1',
+            stem: 'Sentence with _____.', question_snapshot: { word: 'bank', answer: 'A' },
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(baseClient);
+
+    const challenge = await adapter.getFormalQuizChallenge('qiuqiu', 'real-challenge-1');
+    assert.equal(challenge.test_id, 'real-challenge-1');
+    assert.equal(challenge.challenge_id, 'challenge-1');
+    assert.deepEqual(challenge.questions, [{
+        id: 'challenge-question-1', ordinal: 1, meaningId: 'meaning-1',
+        cacheRecordId: 'cache-1', stem: 'Sentence with _____.',
+        ...baseClient.db.quiz_challenge_questions[0].question_snapshot,
+    }]);
+
+    const progress = await adapter.updateFormalQuizChallengeProgress('qiuqiu', 'real-challenge-1', {
+        currentQuestion: 3, answers: [{ option: 0 }, { option: 1 }],
+    });
+    assert.equal(progress.session_state.currentQuestion, 3);
+    assert.deepEqual(baseClient.db.quiz_challenges[0].session_state, progress.session_state);
+});
+
+test('formal challenge adapter invalidates a bad displayed question through the canonical RPC', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const client = {
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { invalidated: true, replacement_required: true }, error: null };
+        },
+    };
+    const adapter = createSupabaseDataAdapter(client);
+
+    const result = await adapter.invalidateFormalQuizQuestion({
+        username: 'qiuqiu',
+        testId: 'real-challenge-1',
+        challengeQuestionId: 'challenge-question-1',
+        reason: 'NO_VALID_ANSWER',
+    });
+
+    assert.deepEqual(result, { invalidated: true, replacement_required: true });
+    assert.deepEqual(calls, [{
+        name: 'invalidate_formal_quiz_question',
+        args: {
+            p_user_id: 'user-1',
+            p_test_id: 'real-challenge-1',
+            p_challenge_question_id: 'challenge-question-1',
+            p_reason: 'NO_VALID_ANSWER',
+        },
+    }]);
+});
+
+test('formal challenge adapter replaces an invalidated question through the canonical RPC', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const client = {
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { replaced: true, cache_question_id: 'cache-question-2' }, error: null };
+        },
+    };
+    const adapter = createSupabaseDataAdapter(client);
+
+    const snapshot = { word: 'bank', answer: 'A', options: ['A', 'B', 'C', 'D'] };
+    const result = await adapter.replaceFormalQuizQuestion({
+        username: 'qiuqiu',
+        testId: 'real-challenge-1',
+        challengeQuestionId: 'challenge-question-1',
+        cacheQuestionId: 'cache-question-2',
+        stem: 'The children sat on the _____.',
+        questionFingerprint: 'fingerprint-2',
+        questionSnapshot: snapshot,
+    });
+
+    assert.deepEqual(result, { replaced: true, cache_question_id: 'cache-question-2' });
+    assert.deepEqual(calls[0], {
+        name: 'replace_formal_quiz_question',
+        args: {
+            p_user_id: 'user-1',
+            p_test_id: 'real-challenge-1',
+            p_challenge_question_id: 'challenge-question-1',
+            p_cache_question_id: 'cache-question-2',
+            p_stem: 'The children sat on the _____.',
+            p_question_fingerprint: 'fingerprint-2',
+            p_question_snapshot: snapshot,
+        },
+    });
 });

@@ -276,10 +276,11 @@ test('active formal quiz session response exposes trusted cache-only metadata', 
         word: `word-${index}`,
         wordRecordId: `meaning-${index}`,
         cacheRecordId: `cache-${index}`,
+        source: 'question_cache',
     }));
     const app = createApp({
         submitAnswers: async () => ({}),
-        getActiveQuizSession: async user => ({
+        getActiveFormalQuizChallenge: async user => ({
             test_id: `real-${user}`,
             questions,
             progress: { currentQuestion: 3, answers: ['A'] },
@@ -312,7 +313,30 @@ test('active formal quiz session response exposes trusted cache-only metadata', 
     });
 });
 
-test('active session DTO preserves a partial formal cache challenge', async () => {
+test('active session DTO rejects a complete formal session with missing question source', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word-${index}`,
+        wordRecordId: `meaning-${index}`,
+        cacheRecordId: `cache-${index}`,
+    }));
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveFormalQuizChallenge: async () => ({
+            test_id: 'real-missing-question-source',
+            questions,
+            progress: { currentQuestion: 3, answers: ['A'] },
+        }),
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { active: false });
+    });
+});
+
+test('active session DTO rejects a partial formal cache challenge', async () => {
     const questions = Array.from({ length: 7 }, (_, index) => ({
         type: 1,
         word: `word-${index}`,
@@ -322,7 +346,7 @@ test('active session DTO preserves a partial formal cache challenge', async () =
     }));
     const app = createApp({
         submitAnswers: async () => ({}),
-        getActiveQuizSession: async () => ({
+        getActiveFormalQuizChallenge: async () => ({
             test_id: 'real-partial-student',
             questions,
             progress: { currentQuestion: 3, answers: ['A'] },
@@ -332,31 +356,14 @@ test('active session DTO preserves a partial formal cache challenge', async () =
     await withServer(app, async baseUrl => {
         const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            active: true,
-            testId: 'real-partial-student',
-            source: 'question_cache',
-            mode: 'real',
-            partialFormalChallenge: true,
-            readyCount: 7,
-            requiredCount: 10,
-            diagnostics: {
-                fallbackUsed: false,
-                resumed: true,
-                requiredCount: 10,
-                readyCount: 7,
-                finalQuestionCount: 7,
-            },
-            questions,
-            progress: { currentQuestion: 3, answers: ['A'] },
-        });
+        assert.deepEqual(await response.json(), { active: false });
     });
 });
 
 test('inactive quiz session response does not fabricate formal cache metadata', async () => {
     const app = createApp({
         submitAnswers: async () => ({}),
-        getActiveQuizSession: async () => null,
+        getActiveFormalQuizChallenge: async () => null,
     });
 
     await withServer(app, async baseUrl => {
@@ -364,6 +371,32 @@ test('inactive quiz session response does not fabricate formal cache metadata', 
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { active: false });
     });
+});
+
+test('active formal session endpoint fails closed instead of reading a legacy quiz session', async () => {
+    const legacyReads = [];
+    const legacyQuestions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word-${index}`,
+        wordRecordId: `meaning-${index}`,
+        cacheRecordId: `cache-${index}`,
+        source: 'question_cache',
+    }));
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveFormalQuizChallenge: async () => null,
+        getActiveQuizSession: async (...args) => {
+            legacyReads.push(args);
+            return { test_id: 'real-legacy', questions: legacyQuestions };
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/quiz/session?user=student`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { active: false });
+    });
+    assert.deepEqual(legacyReads, []);
 });
 test('health endpoint reports runtime and configuration presence', async () => {
     const app = createApp({
@@ -431,7 +464,7 @@ test('active session DTO rejects sessions that are not resumable formal cache ch
         await t.test(name, async () => {
             const app = createApp({
                 submitAnswers: async () => ({}),
-                getActiveQuizSession: async () => session,
+                getActiveFormalQuizChallenge: async () => session,
             });
 
             await withServer(app, async baseUrl => {

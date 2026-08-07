@@ -6,6 +6,9 @@ const {
     selectCachedQuestionsForWordQueue,
 } = require('./quiz-word-queue');
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
+const {
+    assertFormalQuizQuestions,
+} = require('./formal-quiz-session');
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
@@ -15,6 +18,7 @@ const { normalizeSubmittedAnswer } = require('./mastery-evidence');
 const { evaluateMeaning } = require('./mastery-service');
 
 const ANSWER_LETTERS = ['A', 'B', 'C', 'D'];
+
 
 function toMillis(value) {
     if (value === undefined || value === null || value === '') return 0;
@@ -112,9 +116,10 @@ function toFeishuCacheRow(row, { username }) {
         ''
     ).trim();
     return {
-        record_id: row.feishu_record_id || row.id || sourceRecordId(row),
+        record_id: row.id || row.feishu_record_id || sourceRecordId(row),
         created_time: generatedAt,
         fields: {
+            meaning_id: row.meaning_id || row.word_id || '',
             user: row.username || username,
             word_record_id: wordRecordId,
             word: row.word || '',
@@ -158,7 +163,7 @@ function masteryStageToStatus(stage) {
     return 'pending';
 }
 
-function buildSubmitResult({ testId, results, correct }) {
+function buildSubmitResult({ testId, results, correct, replacementRequired = false }) {
     const total = results.length;
     const mode = getAssessmentMode(testId);
     return {
@@ -167,6 +172,7 @@ function buildSubmitResult({ testId, results, correct }) {
         results,
         correct,
         total,
+        replacementRequired,
         accuracy: total > 0 ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
         masteredWords: [],
         gameReward: calculateGameReward({
@@ -319,6 +325,7 @@ async function generateQuizWithDataSource({
         userId: canonicalUsername,
         level: effectiveLevel,
         roundType,
+        requireReadyPair: true,
         limit,
         recentQuestionTextsByWord: buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername }),
         now,
@@ -346,28 +353,6 @@ async function generateQuizWithDataSource({
 
     if (questions.length < limit) {
         if (mode === 'real') {
-            if (questions.length > 0) {
-                return {
-                    testId,
-                    mode,
-                    source: 'question_cache',
-                    level: effectiveLevel,
-                    partialFormalChallenge: true,
-                    readyCount: questions.length,
-                    requiredCount: limit,
-                    diagnostics: {
-                        ...diagnostics,
-                        source: 'question_cache',
-                        fallbackUsed: false,
-                        fallbackQuestionCount: 0,
-                        finalQuestionCount: questions.length,
-                        readyCount: questions.length,
-                        requiredCount: limit,
-                    },
-                    questions,
-                };
-            }
-
             const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
             return {
                 error: code === 'QUESTION_POOL_EXHAUSTED'
@@ -381,14 +366,15 @@ async function generateQuizWithDataSource({
                     ...diagnostics,
                     source: 'question_cache',
                     state: code === 'QUESTION_POOL_EXHAUSTED' ? 'exhausted' : 'building',
-                    readyCount: 0,
-                    eligibleReadyMeanings: 0,
+                    readyCount: questions.length,
+                    eligibleReadyMeanings: questions.length,
+                    remainingCount: limit - questions.length,
                     requiredCount: limit,
                     fallbackUsed: false,
                     fallbackQuestionCount: 0,
                     finalQuestionCount: 0,
                 },
-                readyCount: 0,
+                readyCount: questions.length,
                 requiredCount: limit,
                 questions: [],
             };
@@ -515,6 +501,7 @@ async function submitQuizWithDataSource({
     if (!testId) throw new Error('TEST_ID_REQUIRED');
     if (!Array.isArray(questions) || questions.length === 0) throw new Error('QUESTIONS_REQUIRED');
     if (!Array.isArray(answers) || answers.length !== questions.length) throw new Error('ANSWERS_COUNT_MISMATCH');
+    if (isRealAssessment(testId)) assertFormalQuizQuestions(questions);
 
     const normalizedAnswers = answers.map(answer => {
         const normalized = normalizeSubmittedAnswer(answer);
@@ -528,6 +515,7 @@ async function submitQuizWithDataSource({
     const results = [];
     const insertedAssessments = [];
     const pendingSubmissions = [];
+    let replacementRequired = false;
     const existingBySourceRecordId = new Map(
         (existingAssessments || [])
             .filter(row => row?.submitted_answer !== null && row?.submitted_answer !== undefined && row?.is_correct)
@@ -558,7 +546,40 @@ async function submitQuizWithDataSource({
         const submitted = normalizedAnswers[index];
         const yourAnswer = ANSWER_LETTERS[submitted.option];
         const correctAnswer = String(question.correctAnswer || question.answer || '').trim();
+        const availableAnswerLetters = new Set((Array.isArray(question.options) ? question.options : [])
+            .map(option => String(option || '').trim().toUpperCase().match(/^([A-D])(?:[.)]|\s|$)/)?.[1])
+            .filter(Boolean));
+        const validAnswers = [correctAnswer, ...(Array.isArray(question.acceptableAnswers) ? question.acceptableAnswers : Array.isArray(question.validAnswers) ? question.validAnswers : [])]
+            .map(value => String(value || '').trim().toUpperCase())
+            .filter(value => value && availableAnswerLetters.has(value));
         const sourceWordRecordId = String(question.record_id || question.wordRecordId || '').trim();
+        if (validAnswers.length === 0) {
+            replacementRequired = true;
+            if (isRealAssessment(testId)
+                && typeof dataSource.invalidateFormalQuizQuestion === 'function'
+                && String(question.challengeQuestionId || question.challenge_question_id || question.id || '').trim()) {
+                await dataSource.invalidateFormalQuizQuestion({
+                    username,
+                    testId,
+                    challengeQuestionId: question.challengeQuestionId || question.challenge_question_id || question.id,
+                    reason: 'NO_VALID_ANSWER',
+                });
+            }
+            results.push({
+                q: index + 1,
+                word: String(question.word || '').toLowerCase(),
+                recordId: sourceWordRecordId,
+                your: yourAnswer,
+                answer: '',
+                correct: false,
+                counted: false,
+                invalid: true,
+                replacementRequired: true,
+                confidence: submitted.confidence,
+                translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
+            });
+            continue;
+        }
         const existing = existingBySourceRecordId.get(sourceWordRecordId);
         if (existing) {
             const existingAnswer = String(existing.submitted_answer || '').split('|')[0].trim().toUpperCase();
@@ -572,11 +593,12 @@ async function submitQuizWithDataSource({
                 answer: correctAnswer,
                 correct: existingCorrect,
                 confidence: existing.answer_confidence || String(existing.submitted_answer || '').split('|')[1] || '',
+                translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
             });
             continue;
         }
 
-        const isCorrect = yourAnswer === correctAnswer;
+        const isCorrect = validAnswers.includes(yourAnswer);
         if (isCorrect) correct++;
         const input = {
             username,
@@ -603,6 +625,7 @@ async function submitQuizWithDataSource({
             answer: correctAnswer,
             correct: isCorrect,
             confidence: submitted.confidence,
+            translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
         });
     }
 
@@ -637,7 +660,7 @@ async function submitQuizWithDataSource({
         .filter(({ question }) => question.cacheRecordId && typeof dataSource.incrementCacheUsedCount === 'function')
         .map(({ question }) => dataSource.incrementCacheUsedCount(question.cacheRecordId)));
 
-    return buildSubmitResult({ testId, results, correct });
+    return buildSubmitResult({ testId, results, correct, replacementRequired });
 }
 module.exports = {
     generateQuizWithDataSource,

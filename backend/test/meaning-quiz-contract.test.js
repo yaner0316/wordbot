@@ -23,9 +23,9 @@ function word(index, enteredAt) {
     };
 }
 
-function cache(index) {
+function cache(index, variantSlot = 1) {
     return {
-        id: `cache-${index}`,
+        id: `cache-${index}-${variantSlot}`,
         word_id: `word-${index}`,
         source_word_record_id: `rec-${index}`,
         word: TERMS[index - 1],
@@ -34,14 +34,20 @@ function cache(index) {
         round_type: 'primary',
         quality_status: 'ready',
         cache_state: 'active',
+        variant_slot: variantSlot,
+        question_fingerprint: `fp-${index}-${variantSlot}`,
         question_type: '1',
-        question_text: `A clear sentence uses _____ in context number ${index}.`,
+        question_text: `Variant ${variantSlot} uses _____ in context number ${index}.`,
         context_zh: `\u8fd9\u662f\u7b2c${index}\u9053\u7ec3\u4e60\u4e2d\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
-        options: [`A. ${TERMS[index - 1]}`, 'B. alpha', 'C. bravo', 'D. charlie'],
+        options: [`A. ${TERMS[index - 1]}`, `B. alpha-${variantSlot}`, `C. bravo-${variantSlot}`, `D. charlie-${variantSlot}`],
         answer: 'A',
         option_meanings: [`释义${index}`, '甲', '乙', '丙'],
         correct_meaning: `释义${index}`,
     };
+}
+
+function cachePair(index) {
+    return [cache(index, 1), cache(index, 2)];
 }
 
 function dataSource(words, cacheRows) {
@@ -68,7 +74,7 @@ test('formal quiz never uses live generation when ready cache is empty', async (
 
 test('formal quiz accepts the exact 18-hour boundary and rejects one millisecond earlier', async () => {
     const atBoundary = Array.from({ length: 10 }, (_, index) => word(index + 1, NOW - WORD_QUIZ_COOLDOWN_MS));
-    const cacheRows = Array.from({ length: 10 }, (_, index) => cache(index + 1));
+    const cacheRows = Array.from({ length: 10 }, (_, index) => cachePair(index + 1)).flat();
     const eligible = await generateQuizWithDataSource({
         username: 'qiuqiu', level: LEVEL, mode: 'real', now: NOW,
         dataSource: dataSource(atBoundary, cacheRows), createId: () => 'at-boundary',
@@ -93,31 +99,39 @@ test('formal quiz fails closed when word timestamps are missing', async () => {
     });
     const quiz = await generateQuizWithDataSource({
         username: 'qiuqiu', level: LEVEL, mode: 'real', now: NOW,
-        dataSource: dataSource(words, Array.from({ length: 10 }, (_, index) => cache(index + 1))),
+        dataSource: dataSource(words, Array.from({ length: 10 }, (_, index) => cachePair(index + 1)).flat()),
         createId: () => 'missing-time',
     });
     assert.equal(quiz.code, 'QUESTION_POOL_EXHAUSTED');
     assert.deepEqual(quiz.questions, []);
 });
-test('formal quiz returns every available cached question when one to nine are ready', async () => {
+test('formal quiz requires all ten cached questions before issuing a challenge', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1, NOW - WORD_QUIZ_COOLDOWN_MS));
 
     for (let readyCount = 1; readyCount <= 10; readyCount += 1) {
         const quiz = await generateQuizWithDataSource({
             username: 'qiuqiu', level: LEVEL, mode: 'real', now: NOW,
-            dataSource: dataSource(words, Array.from({ length: readyCount }, (_, index) => cache(index + 1))),
+            dataSource: dataSource(words, Array.from({ length: readyCount }, (_, index) => cachePair(index + 1)).flat()),
             createId: () => `partial-${readyCount}`,
         });
 
-        assert.equal(quiz.error, undefined);
         assert.equal(quiz.source, 'question_cache');
-        assert.equal(quiz.partialFormalChallenge, readyCount < 10);
-        assert.equal(quiz.readyCount, readyCount);
         assert.equal(quiz.requiredCount, 10);
-        assert.equal(quiz.questions.length, readyCount);
-        assert.equal(quiz.questions.every(question => question.source === 'question_cache'), true);
         assert.equal(quiz.diagnostics.source, 'question_cache');
         assert.equal(quiz.diagnostics.fallbackUsed, false);
-        assert.equal(quiz.diagnostics.finalQuestionCount, readyCount);
+        if (readyCount < 10) {
+            assert.equal(quiz.testId, undefined);
+            assert.equal(quiz.code, 'QUESTION_CACHE_NOT_READY');
+            assert.equal(quiz.partialFormalChallenge, false);
+            assert.deepEqual(quiz.questions, []);
+            assert.equal(quiz.diagnostics.finalQuestionCount, 0);
+        } else {
+            assert.equal(quiz.error, undefined);
+            assert.equal(quiz.partialFormalChallenge, false);
+            assert.equal(quiz.readyCount, 10);
+            assert.equal(quiz.questions.length, 10);
+            assert.equal(quiz.questions.every(question => question.source === 'question_cache'), true);
+            assert.equal(quiz.diagnostics.finalQuestionCount, 10);
+        }
     }
 });

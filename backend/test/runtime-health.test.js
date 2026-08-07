@@ -6,6 +6,7 @@ const { REQUIRED_ENV, getRuntimeHealth } = require('../runtime-health');
 test('runtime health marks missing required environment variables', () => {
     const health = getRuntimeHealth({
         env: {
+            DATA_SOURCE: 'feishu',
             FEISHU_APP_ID: 'app-id',
         },
         version: 'test-version',
@@ -60,4 +61,9 @@ test('runtime health defaults dataSource to supabase like data-source module', (
     const health = getRuntimeHealth({ env: {} });
 
     assert.equal(health.dataSource, 'supabase');
+});
+test('runtime health does not require Feishu variables for Supabase data source', () => {
+    const health = getRuntimeHealth({ env: { DATA_SOURCE: 'supabase' } });
+    assert.equal(health.ok, true);
+    assert.deepEqual(health.missing, []);
 });

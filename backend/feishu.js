@@ -1038,9 +1038,10 @@ async function generateQuiz(userId, level = null, mode = ASSESSMENT_MODE.REAL) {
             cacheRows: cachedRows,
             queue: queuedRecordIds,
             userId,
-            recentQuestionTextsByWord: buildRecentQuestionTextsByWord(cacheAssessmentRecords, { userId }),
+            recentQuestionTextsByWord: buildRecentQuestionTextsByWord(cacheAssessmentRecords, { userId, now: Date.now() }),
             level: effectiveLevel,
             roundType: 'primary',
+            requireReadyPair: true,
             limit: requiredQuestionCount,
         });
         diagnostics.cacheReadLatencyMs = Date.now() - cacheReadStarted;

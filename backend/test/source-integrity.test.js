@@ -662,6 +662,22 @@ test('cached quiz selection excludes recent quiz words before randomizing', () =
     assert.ok(excluded > cacheSelect && excluded < randomize, 'cache selection should exclude recently used record ids');
 });
 
+test('formal Feishu quiz selection requires a fully ready cached pair', () => {
+    const quizStart = feishuSource.indexOf('async function generateQuiz');
+    const quizEnd = feishuSource.indexOf('async function validateAndFixQuiz', quizStart);
+    assert.ok(quizStart >= 0 && quizEnd > quizStart, 'generateQuiz source should be findable');
+    const quizSource = feishuSource.slice(quizStart, quizEnd);
+    const selectorStart = quizSource.indexOf('selectCachedQuestionsForWordQueue({');
+    const selectorEnd = quizSource.indexOf('});', selectorStart);
+    assert.ok(selectorStart >= 0 && selectorEnd > selectorStart, 'formal cache selector call should be findable');
+
+    const selectorSource = quizSource.slice(selectorStart, selectorEnd);
+    assert.ok(
+        selectorSource.includes('requireReadyPair: true'),
+        'formal Feishu quizzes must reject incomplete or low-quality cache pairs'
+    );
+});
+
 test('cached quiz selection imports the frontier analyzer it calls', () => {
     const importStart = feishuSource.indexOf('const {');
     const quizStart = feishuSource.indexOf('async function generateQuiz');

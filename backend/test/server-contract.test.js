@@ -134,6 +134,17 @@ test('protected route manifest stays explicit during data-layer migration', () =
     ]);
 });
 
+test('server initializes dotenv before loading data-source or question-generation worker dependencies', () => {
+    const serverSource = require('node:fs').readFileSync(SERVER_PATH, 'utf8');
+    const envBootstrap = serverSource.indexOf("require('./startup-env');");
+    const dataSource = serverSource.indexOf("require('./data-source');");
+    const workerBootstrap = serverSource.indexOf("require('./question-generation-bootstrap')");
+
+    assert.ok(envBootstrap >= 0, 'server must load the startup environment bootstrap');
+    assert.ok(dataSource > envBootstrap, 'dotenv must load before data-source is required');
+    assert.ok(workerBootstrap > envBootstrap, 'dotenv must load before worker dependencies are required');
+});
+
 test('quiz endpoint preserves request delegation and response shape', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

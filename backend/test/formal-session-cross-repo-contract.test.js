@@ -30,10 +30,11 @@ test('the real active-session HTTP DTO passes the production frontend formal gat
         word: index < 2 ? 'bank' : `word-${index}`,
         wordRecordId: `meaning-${index}`,
         cacheRecordId: `cache-${index}`,
+        source: 'question_cache',
     }));
     const app = createApp({
         submitAnswers: async () => ({}),
-        getActiveQuizSession: async () => ({
+        getActiveFormalQuizChallenge: async () => ({
             test_id: 'real-student-cross-contract',
             questions,
             progress: { currentQuestion: 2, answers: ['A'] },
@@ -53,4 +54,12 @@ test('the real active-session HTTP DTO passes the production frontend formal gat
         assert.equal(rawDto.diagnostics.finalQuestionCount, 10);
         assert.equal(new Set(rawDto.questions.map(question => question.wordRecordId)).size, 10);
     });
+});
+
+
+test('only a complete ten-question cached formal session can resume', () => {
+    const { isResumableQuizSession } = require('../formal-quiz-session');
+    const question = index => ({ type: 1, wordRecordId: `meaning-${index}`, cacheRecordId: `cache-${index}`, source: 'question_cache' });
+    assert.equal(isResumableQuizSession({ test_id: 'real-resume-seven', mode: 'real', source: 'question_cache', questions: Array.from({ length: 7 }, (_, index) => question(index)) }), false);
+    assert.equal(isResumableQuizSession({ test_id: 'real-resume-ten', mode: 'real', source: 'question_cache', questions: Array.from({ length: 10 }, (_, index) => question(index)) }), true);
 });

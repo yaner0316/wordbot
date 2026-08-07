@@ -7,6 +7,7 @@ const {
     countEligibleReadyMeaningsByLevel,
     selectCachedQuestionsForWordQueue,
 } = require('../quiz-word-queue');
+const { evaluateMeaningMastery } = require('../mastery-evidence');
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse('2026-07-15T04:00:00.000Z');
@@ -61,12 +62,13 @@ function cacheVariant(wordIndex, variantSlot, overrides = {}) {
             variant_slot: variantSlot,
             question_fingerprint: `fp-${wordIndex}-${variantSlot}`,
             question_text: `Variant ${variantSlot} sentence for word-${wordIndex}.`,
+            options: JSON.stringify(['A. word-' + wordIndex, 'B. distractor-' + variantSlot + '-1', 'C. distractor-' + variantSlot + '-2', 'D. distractor-' + variantSlot + '-3']),
             ...overrides,
         },
     });
 }
 
-function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct = false, answer = 'B|sure' } = {}) {
+function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct = false, answer = 'B|sure', questionText = '' } = {}) {
     return {
         fields: {
             user: 'student',
@@ -74,6 +76,7 @@ function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct =
             record_id: recordId,
             word: recordId.replace('rec-', 'word-'),
             question_type: 1,
+            question_text: questionText,
             test_time: time,
             is_correct: correct ? 'correct' : 'wrong',
             your_answer: answer,
@@ -100,7 +103,7 @@ test('word queue prioritizes unmastered touched words and fills with earliest un
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
-test('word queue excludes meanings answered correctly today and keeps wrong meanings retryable', () => {
+test('word queue prioritizes wrong meanings over later touched correct-only meanings', () => {
     const wordRecords = Array.from({ length: 100 }, (_, index) => word(index + 1));
     wordRecords[1].fields.Word = wordRecords[0].fields.Word;
     const cacheRows = Array.from({ length: 100 }, (_, index) => cache(index + 1));
@@ -120,7 +123,7 @@ test('word queue excludes meanings answered correctly today and keeps wrong mean
         minAgeMs: 0,
     });
 
-    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-11', 'rec-12', 'rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17']);
+    assert.deepEqual(queue, ['rec-4', 'rec-5', 'rec-1', 'rec-2', 'rec-3', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
 test('cached question selection chooses a different primary variant after the previous normal question', () => {
@@ -131,13 +134,13 @@ test('cached question selection chooses a different primary variant after the pr
     ];
     const selected = selectCachedQuestionsForWordQueue({
         cacheRows, queue, userId: 'student', level: LEVEL, roundType: 'primary',
-        recentQuestionTextsByWord: new Map([['prospect', new Set(['The company sees a bright _____ for growth.'])]]),
+        recentQuestionTextsByWord: new Map([['rec-prospect', new Set(['The company sees a bright _____ for growth.'])]]),
         limit: 1,
     });
     assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-new']);
 });
 
-test('cached question selection excludes only the latest question text so variants can rotate', () => {
+test('cached question selection tracks recent variants by word record ID', () => {
     const selected = selectCachedQuestionsForWordQueue({
         cacheRows: [
             cache('prospect-a', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: 'Question A _____.' } }),
@@ -148,13 +151,57 @@ test('cached question selection excludes only the latest question text so varian
         level: LEVEL,
         roundType: 'primary',
         recentQuestionTextsByWord: buildRecentQuestionTextsByWord([
-            { fields: { user: 'student', test_id: 'real-day-one', word: 'prospect', context: 'Question A _____.', test_time: NOW - DAY } },
-            { fields: { user: 'student', test_id: 'real-day-two', word: 'prospect', context: 'Question B _____.', test_time: NOW } },
-        ], { userId: 'student' }),
+            { fields: { user: 'student', test_id: 'real-day-one', record_id: 'rec-prospect', word: 'prospect', context: 'Question A _____.', test_time: NOW - DAY, is_correct: 'wrong' } },
+            { fields: { user: 'student', test_id: 'real-day-two', record_id: 'rec-prospect', word: 'prospect', context: 'Question B _____.', test_time: NOW, is_correct: 'wrong' } },
+        ], { userId: 'student', now: NOW }),
         limit: 1,
     });
-    assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-a']);
+    assert.deepEqual(selected.map(question => question.cacheRecordId), []);
 });
+test('cached question selection keeps same-spelling meanings independent by word record ID', () => {
+    const financeRecent = 'The _____ approved the loan.';
+    const riverRecent = 'She walked along the _____ after work.';
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: [
+            cache('bank-finance-old', { fields: { word_record_id: 'rec-bank-finance', word: 'bank', question_text: financeRecent } }),
+            cache('bank-finance-other-sense-stem', { fields: { word_record_id: 'rec-bank-finance', word: 'bank', question_text: riverRecent } }),
+            cache('bank-river-old', { fields: { word_record_id: 'rec-bank-river', word: 'bank', question_text: riverRecent } }),
+            cache('bank-river-other-sense-stem', { fields: { word_record_id: 'rec-bank-river', word: 'bank', question_text: financeRecent } }),
+        ],
+        queue: ['rec-bank-finance', 'rec-bank-river'],
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        recentQuestionTextsByWord: buildRecentQuestionTextsByWord([
+            { fields: { user: 'student', test_id: 'real-finance', record_id: 'rec-bank-finance', word: 'bank', context: financeRecent, test_time: NOW - DAY, is_correct: 'wrong' } },
+            { fields: { user: 'student', test_id: 'real-river', record_id: 'rec-bank-river', word: 'bank', context: riverRecent, test_time: NOW, is_correct: 'wrong' } },
+        ], { userId: 'student' }),
+        limit: 2,
+    });
+    assert.deepEqual(selected.map(question => question.cacheRecordId), [
+        'cache-bank-finance-other-sense-stem',
+        'cache-bank-river-other-sense-stem',
+    ]);
+});
+
+test('cached question selection skips a normal word when only its recent question is available', () => {
+    const context = 'The company sees a bright _____ for growth.';
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: [
+            cache('prospect-only', { fields: { word_record_id: 'rec-prospect', word: 'prospect', question_text: context } }),
+        ],
+        queue: ['rec-prospect'],
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        recentQuestionTextsByWord: buildRecentQuestionTextsByWord([
+            { fields: { user: 'student', test_id: 'real-prospect', record_id: 'rec-prospect', word: 'prospect', context, test_time: NOW, is_correct: 'wrong' } },
+        ], { userId: 'student', now: NOW }),
+        limit: 1,
+    });
+    assert.deepEqual(selected, []);
+});
+
 test('word queue allows retrying words generated today when no answer was submitted', () => {
     const wordRecords = Array.from({ length: 20 }, (_, index) => word(index + 1));
     const cacheRows = Array.from({ length: 20 }, (_, index) => cache(index + 1));
@@ -356,7 +403,7 @@ test('cached question selection does not backfill bad ready rows outside the que
     assert.equal(selected.some(question => question.word === 'genaine'), false);
 });
 
-test('word queue excludes only the answered meaning and keeps another meaning with the same spelling', () => {
+test('word queue keeps same-spelling meanings independent while retaining an unmastered correct-only meaning', () => {
     const wordRecords = Array.from({ length: 12 }, (_, index) => word(index + 1));
     wordRecords[0].fields.Word = 'bank';
     wordRecords[1].fields.Word = 'bank';
@@ -379,7 +426,7 @@ test('word queue excludes only the answered meaning and keeps another meaning wi
         minAgeMs: 0,
     });
 
-    assert.deepEqual(queue, ['rec-2', 'rec-3', 'rec-4']);
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3']);
 });
 
 test('review and empty submissions do not exclude a meaning from the formal queue', () => {
@@ -450,6 +497,37 @@ test('eligible ready meaning count requires two active distinct ready variants',
     });
 
     assert.deepEqual(counts, { [LEVEL]: 1 });
+});
+
+test('readiness and selection reject a pair with overlapping distractors', () => {
+    const sharedOptions = JSON.stringify(['A. word-1', 'B. shared-1', 'C. shared-2', 'D. shared-3']);
+    const rows = [
+        cacheVariant(1, 1, { options: sharedOptions }),
+        cacheVariant(1, 2, { options: sharedOptions }),
+    ];
+
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1)],
+        cacheRows: rows,
+        assessmentRecords: [],
+        userId: 'student',
+        levels: [LEVEL],
+        now: NOW,
+        minAgeMs: 0,
+    });
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: rows,
+        queue: ['rec-1'],
+        userId: 'student',
+        level: LEVEL,
+        roundType: 'primary',
+        requireReadyPair: true,
+        limit: 1,
+        now: NOW,
+    });
+
+    assert.equal(counts[LEVEL], 0);
+    assert.deepEqual(selected, []);
 });
 
 test('eligible ready meaning count accepts a stored pair when the reserved variant is for the next learning day', () => {
@@ -535,7 +613,7 @@ test('eligible ready meaning count enforces the formal cooldown', () => {
     assert.equal(counts[LEVEL], 0);
 });
 
-test('eligible ready meaning count excludes mastered and correct-today meanings', () => {
+test('eligible ready meaning count excludes mastered but retains correct-today unmastered meanings', () => {
     const counts = countEligibleReadyMeaningsByLevel({
         wordRecords: [word(1), word(2), word(3)],
         cacheRows: [1, 2, 3].flatMap(index => [cacheVariant(index, 1), cacheVariant(index, 2)]),
@@ -550,5 +628,333 @@ test('eligible ready meaning count excludes mastered and correct-today meanings'
         minAgeMs: 0,
     });
 
+    assert.equal(counts[LEVEL], 2);
+});
+
+
+test('word queue prioritizes old wrong meanings, then correct-only meanings, then untested meanings', () => {
+    const wordRecords = [word(1), word(2), word(3), word(4)];
+    wordRecords.forEach((record, index) => {
+        record.fields.record_time = NOW - (30 + index) * DAY;
+        record.created_time = record.fields.record_time;
+    });
+    const queue = buildQuizWordQueue({
+        wordRecords,
+        cacheRows: Array.from({ length: 4 }, (_, index) => cache(index + 1)),
+        assessmentRecords: [
+            assessment('rec-1', { testId: 'real-wrong-newer', time: NOW - 4 * DAY, correct: false }),
+            assessment('rec-2', { testId: 'real-wrong-older', time: NOW - 6 * DAY, correct: false }),
+            assessment('rec-3', { testId: 'real-correct-only', time: NOW - 8 * DAY, correct: true }),
+        ],
+        userId: 'student', level: LEVEL, limit: 4, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    assert.deepEqual(queue, ['rec-2', 'rec-1', 'rec-3', 'rec-4']);
+});
+
+test('word queue uses the later of entry and meaning display cooldown timestamps', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 3 * DAY;
+    record.fields.last_displayed_at = NOW - 18 * 60 * 60 * 1000 + 1;
+    record.created_time = record.fields.record_time;
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [], userId: 'student',
+        level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    assert.deepEqual(queue, []);
+});
+
+test('recent question history keeps all formal display stems for each meaning inside 30 days', () => {
+    const recent = buildRecentQuestionTextsByWord([
+        assessment('rec-bank-finance', { testId: 'real-display-1', time: NOW - DAY, answer: '', questionText: 'Finance stem _____.' }),
+        assessment('rec-bank-finance', { testId: 'real-display-2', time: NOW - 2 * DAY, answer: '', questionText: 'Second finance stem _____.' }),
+        assessment('rec-bank-river', { testId: 'real-display-3', time: NOW - DAY, answer: '', questionText: 'River stem _____.' }),
+        assessment('rec-bank-finance', { testId: 'real-display-old', time: NOW - 31 * DAY, answer: '', questionText: 'Expired stem _____.' }),
+        assessment('rec-bank-finance', { testId: 'test-preview', time: NOW - DAY, answer: '', questionText: 'Preview stem _____.' }),
+        assessment('rec-bank-finance', { testId: 'real-review-1', time: NOW - DAY, answer: '', questionText: 'Review stem _____.' }),
+    ], { userId: 'student', now: NOW });
+    assert.deepEqual([...(recent.get('rec-bank-finance') || [])].sort(), ['finance stem _____.', 'second finance stem _____.']);
+    assert.deepEqual([...(recent.get('rec-bank-river') || [])], ['river stem _____.']);
+});
+
+test('correct-once meaning remains queued and ready after formal cooldown', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 3 * DAY;
+    record.created_time = record.fields.record_time;
+    const assessmentRecords = [assessment('rec-1', { testId: 'real-correct-once', time: NOW - 2 * DAY, correct: true })];
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cacheVariant(1, 1), cacheVariant(1, 2)], assessmentRecords,
+        userId: 'student', level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [record], cacheRows: [cacheVariant(1, 1), cacheVariant(1, 2)], assessmentRecords,
+        userId: 'student', levels: [LEVEL], now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, ['rec-1']);
     assert.equal(counts[LEVEL], 1);
+});
+
+test('multiple correct but unmastered meanings remain queued after cooldown', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 4 * DAY;
+    record.created_time = record.fields.record_time;
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cache(1)],
+        assessmentRecords: [
+            assessment('rec-1', { testId: 'real-correct-1', time: NOW - 3 * DAY, correct: true }),
+            assessment('rec-1', { testId: 'real-correct-2', time: NOW - 3 * DAY + 60 * 60 * 1000, correct: true }),
+        ],
+        userId: 'student', level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, ['rec-1']);
+});
+
+test('display-only formal row one millisecond before cooldown excludes queue and ready count', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 3 * DAY;
+    record.created_time = record.fields.record_time;
+    const display = assessment('rec-1', { testId: 'real-display-only', time: NOW - 18 * 60 * 60 * 1000 + 1, answer: '', questionText: 'Display-only stem ____.' });
+    display.fields.is_correct = null;
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cacheVariant(1, 1), cacheVariant(1, 2)], assessmentRecords: [display],
+        userId: 'student', level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [record], cacheRows: [cacheVariant(1, 1), cacheVariant(1, 2)], assessmentRecords: [display],
+        userId: 'student', levels: [LEVEL], now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, []);
+    assert.equal(counts[LEVEL], 0);
+});
+
+test('display-only formal row at exact cooldown boundary is eligible', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 3 * DAY;
+    record.created_time = record.fields.record_time;
+    const display = assessment('rec-1', { testId: 'real-display-boundary', time: NOW - 18 * 60 * 60 * 1000, answer: '', questionText: 'Boundary stem ____.' });
+    display.fields.is_correct = null;
+    const queue = buildQuizWordQueue({ wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [display], userId: 'student', level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000 });
+
+    assert.deepEqual(queue, ['rec-1']);
+});
+
+
+test('display-only formal rows enter question history without becoming mastery evidence', () => {
+    const display = assessment('rec-1', { testId: 'real-display-only', time: NOW - DAY, answer: '', questionText: 'Display-only stem ____.' });
+    display.fields.is_correct = null;
+    const history = buildRecentQuestionTextsByWord([display], { userId: 'student', now: NOW });
+    const mastery = evaluateMeaningMastery([display], value => value === 'correct');
+
+    assert.deepEqual([...history.get('rec-1')], ['display-only stem ____.']);
+    assert.equal(mastery.stage, 'unseen');
+});
+
+test('test, preview, review, and non-real display rows do not cool or enter formal history', () => {
+    const wordRecords = [word(1), word(2), word(3), word(4)];
+    wordRecords.forEach(record => { record.fields.record_time = NOW - 3 * DAY; record.created_time = record.fields.record_time; });
+    const rows = [
+        assessment('rec-1', { testId: 'test-preview', time: NOW, answer: '', questionText: 'Test stem ____.' }),
+        assessment('rec-2', { testId: 'real-preview', time: NOW, answer: '', questionText: 'Preview stem ____.' }),
+        assessment('rec-3', { testId: 'real-review-source', time: NOW, answer: '', questionText: 'Review stem ____.' }),
+        assessment('rec-4', { testId: 'real-non-real', time: NOW, answer: '', questionText: 'Non-real stem ____.' }),
+    ];
+    rows[1].fields.assessment_kind = 'preview';
+    rows[2].fields.assessment_kind = 'review';
+    rows[3].fields.is_real_assessment = false;
+    rows.forEach(row => { row.fields.is_correct = null; });
+    const queue = buildQuizWordQueue({
+        wordRecords, cacheRows: wordRecords.map((_, index) => cache(index + 1)), assessmentRecords: rows,
+        userId: 'student', level: LEVEL, limit: 4, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const history = buildRecentQuestionTextsByWord(rows, { userId: 'student', now: NOW });
+
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4']);
+    assert.deepEqual(history, new Map());
+});
+
+test('ID-only preview, test, and review rows are non-formal while ordinary real IDs still count', () => {
+    const wordRecords = [word(1), word(2), word(3), word(4)];
+    wordRecords.forEach(record => {
+        record.fields.record_time = NOW - 3 * DAY;
+        record.created_time = record.fields.record_time;
+    });
+    const rows = [
+        assessment('rec-1', { testId: 'real-preview-id-only', time: NOW, answer: '', questionText: 'Preview ID stem ____.' }),
+        assessment('rec-2', { testId: 'real-test-id-only', time: NOW, answer: '', questionText: 'Test ID stem ____.' }),
+        assessment('rec-3', { testId: 'real-review-id-only', time: NOW, answer: '', questionText: 'Review ID stem ____.' }),
+        assessment('rec-4', { testId: 'real-quiz-id-only', time: NOW, answer: '', questionText: 'Formal ID stem ____.' }),
+    ];
+    rows.forEach(row => {
+        row.fields.assessment_kind = '';
+        row.fields.is_correct = null;
+    });
+
+    const queue = buildQuizWordQueue({
+        wordRecords, cacheRows: wordRecords.map((_, index) => cache(index + 1)), assessmentRecords: rows,
+        userId: 'student', level: LEVEL, limit: 4, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const history = buildRecentQuestionTextsByWord(rows, { userId: 'student', now: NOW });
+
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3']);
+    assert.deepEqual([...history.keys()], ['rec-4']);
+    assert.deepEqual([...history.get('rec-4')], ['formal id stem ____.']);
+});
+
+test('display cooldown uses the maximum valid compatibility alias timestamp', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 4 * DAY;
+    record.created_time = record.fields.record_time;
+    record.fields.last_displayed_at = NOW - 3 * DAY;
+    record.fields.lastDisplayedAt = NOW - 18 * 60 * 60 * 1000 + 1;
+    record.last_displayed_at = 'invalid';
+    record.lastDisplayedAt = NOW - 2 * DAY;
+
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [], userId: 'student',
+        level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, []);
+});
+
+test('cooldown takes the maximum of entry, compatibility aliases, and formal display with an inclusive boundary', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 4 * DAY;
+    record.created_time = record.fields.record_time;
+    record.fields.last_displayed_at = NOW - 3 * DAY;
+    record.lastDisplayedAt = NOW - 2 * DAY;
+    const display = assessment('rec-1', {
+        testId: 'real-quiz-boundary', time: NOW - 18 * 60 * 60 * 1000, answer: '', questionText: 'Formal boundary stem ____.',
+    });
+    display.fields.is_correct = null;
+
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [display], userId: 'student',
+        level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, ['rec-1']);
+});
+
+test('wrong meanings with the same last wrong time sort by entered time', () => {
+    const laterEntered = word(1);
+    laterEntered.fields.record_time = NOW - 3 * DAY;
+    laterEntered.created_time = laterEntered.fields.record_time;
+    const earlierEntered = word(2);
+    earlierEntered.fields.record_time = NOW - 4 * DAY;
+    earlierEntered.created_time = earlierEntered.fields.record_time;
+    const wrongAt = NOW - 2 * DAY;
+
+    const queue = buildQuizWordQueue({
+        wordRecords: [laterEntered, earlierEntered], cacheRows: [cache(1), cache(2)],
+        assessmentRecords: [
+            assessment('rec-1', { testId: 'real-wrong-1', time: wrongAt, correct: false }),
+            assessment('rec-2', { testId: 'real-wrong-2', time: wrongAt, correct: false }),
+        ],
+        userId: 'student', level: LEVEL, limit: 2, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, ['rec-2', 'rec-1']);
+});
+
+test('malformed test_time falls back to record_time for formal display cooldown', () => {
+    const record = word(1);
+    record.fields.record_time = NOW - 3 * DAY;
+    record.created_time = record.fields.record_time;
+    const display = assessment('rec-1', { testId: 'real-display-fallback', time: 'malformed', answer: '', questionText: 'Fallback display stem ____.' });
+    display.fields.record_time = NOW - 18 * 60 * 60 * 1000 + 1;
+    display.fields.is_correct = null;
+
+    const queue = buildQuizWordQueue({
+        wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [display], userId: 'student',
+        level: LEVEL, limit: 1, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, []);
+});
+
+test('malformed test_time falls back to record_time for wrong priority ordering', () => {
+    const wordRecords = [word(1), word(2)];
+    wordRecords.forEach(record => {
+        record.fields.record_time = NOW - 5 * DAY;
+        record.created_time = record.fields.record_time;
+    });
+    const fallbackWrong = assessment('rec-1', { testId: 'real-wrong-fallback', time: 'malformed', correct: false });
+    fallbackWrong.fields.record_time = NOW - 4 * DAY;
+
+    const queue = buildQuizWordQueue({
+        wordRecords, cacheRows: [cache(1), cache(2)],
+        assessmentRecords: [fallbackWrong, assessment('rec-2', { testId: 'real-wrong-valid', time: NOW - 3 * DAY, correct: false })],
+        userId: 'student', level: LEVEL, limit: 2, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+
+    assert.deepEqual(queue, ['rec-1', 'rec-2']);
+});
+
+test('false-like and malformed real flags do not cool or enter history', () => {
+    const flags = [false, 0, '0', 'false', 'no', 'unexpected'];
+    const wordRecords = flags.map((_, index) => word(index + 1));
+    wordRecords.forEach(record => {
+        record.fields.record_time = NOW - 3 * DAY;
+        record.created_time = record.fields.record_time;
+    });
+    const rows = flags.map((flag, index) => {
+        const row = assessment(`rec-${index + 1}`, { testId: `real-flag-${index + 1}`, time: NOW, answer: '', questionText: `Rejected flag stem ${index + 1} ____.` });
+        row.fields.is_real_assessment = flag;
+        row.fields.is_correct = null;
+        return row;
+    });
+
+    const queue = buildQuizWordQueue({
+        wordRecords, cacheRows: flags.map((_, index) => cache(index + 1)), assessmentRecords: rows,
+        userId: 'student', level: LEVEL, limit: flags.length, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const history = buildRecentQuestionTextsByWord(rows, { userId: 'student', now: NOW });
+
+    assert.deepEqual(queue, wordRecords.map(record => record.record_id));
+    assert.deepEqual(history, new Map());
+});
+
+test('true-like and legacy absent real flags cool and enter history', () => {
+    const flags = [true, 1, '1', 'true', 'yes', undefined, ''];
+    const wordRecords = flags.map((_, index) => word(index + 1));
+    wordRecords.forEach(record => {
+        record.fields.record_time = NOW - 3 * DAY;
+        record.created_time = record.fields.record_time;
+    });
+    const rows = flags.map((flag, index) => {
+        const row = assessment(`rec-${index + 1}`, { testId: `real-flag-${index + 1}`, time: NOW, answer: '', questionText: `Accepted flag stem ${index + 1} ____.` });
+        if (flag !== undefined) row.fields.is_real_assessment = flag;
+        row.fields.is_correct = null;
+        return row;
+    });
+
+    const queue = buildQuizWordQueue({
+        wordRecords, cacheRows: flags.map((_, index) => cache(index + 1)), assessmentRecords: rows,
+        userId: 'student', level: LEVEL, limit: flags.length, now: NOW, minAgeMs: 18 * 60 * 60 * 1000,
+    });
+    const history = buildRecentQuestionTextsByWord(rows, { userId: 'student', now: NOW });
+
+    assert.deepEqual(queue, []);
+    assert.deepEqual([...history.keys()], wordRecords.map(record => record.record_id));
+});
+
+test('cached questions preserve canonical meaning IDs separately from Feishu record IDs', () => {
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: [cache('bank-finance', {
+            fields: {
+                word_record_id: 'rec-bank-finance',
+                meaning_id: 'word-finance-uuid',
+                word: 'bank',
+                question_text: 'The _____ approved the loan.',
+            },
+        })],
+        queue: ['rec-bank-finance'],
+        userId: 'student',
+        level: LEVEL,
+        limit: 1,
+    });
+    assert.deepEqual(selected.map(question => ({ recordId: question.record_id, meaningId: question.meaningId })), [{ recordId: 'rec-bank-finance', meaningId: 'word-finance-uuid' }]);
 });
