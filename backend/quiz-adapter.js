@@ -12,7 +12,7 @@ const {
 const { calculateGameReward } = require('./game-reward');
 const { normalizeLevel } = require('./learning-level');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
-const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable } = require('./question-quality');
+const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable, getAmbiguousFillInAnswerLetters } = require('./question-quality');
 const { generateElementaryTemplateContext } = require('./elementary-context');
 const { normalizeSubmittedAnswer } = require('./mastery-evidence');
 const { evaluateMeaning } = require('./mastery-service');
@@ -549,7 +549,9 @@ async function submitQuizWithDataSource({
         const availableAnswerLetters = new Set((Array.isArray(question.options) ? question.options : [])
             .map(option => String(option || '').trim().toUpperCase().match(/^([A-D])(?:[.)]|\s|$)/)?.[1])
             .filter(Boolean));
-        const validAnswers = [correctAnswer, ...(Array.isArray(question.acceptableAnswers) ? question.acceptableAnswers : Array.isArray(question.validAnswers) ? question.validAnswers : [])]
+        const validAnswers = [correctAnswer,
+            ...(Array.isArray(question.acceptableAnswers) ? question.acceptableAnswers : Array.isArray(question.validAnswers) ? question.validAnswers : []),
+            ...getAmbiguousFillInAnswerLetters(question)]
             .map(value => String(value || '').trim().toUpperCase())
             .filter(value => value && availableAnswerLetters.has(value));
         const sourceWordRecordId = String(question.record_id || question.wordRecordId || '').trim();

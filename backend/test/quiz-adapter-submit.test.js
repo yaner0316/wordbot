@@ -164,6 +164,27 @@ test('submitQuizWithDataSource uses one batch assessment write when the data sou
 });test('submit result carries exact Chinese sentence translation', async () => { const dataSource = { submitAssessment: async input => ({ id: 'assessment-translation', source_word_record_id: input.sourceWordRecordId, test_id: input.testId, assessed_at: new Date(input.recordTime).toISOString(), is_correct: input.correctness, submitted_answer: input.yourAnswer }), incrementCacheUsedCount: async () => ({}) }; const result = await submitQuizWithDataSource({ username: 'student', testId: 'test-translation', answers: [{ option: 0 }], questions: [{ record_id: 'rec-translation', word: 'apple', type: 1, context: 'I ate an _____.', contextCN: '????????', options: ['A. apple', 'B. pear', 'C. desk', 'D. book'], answer: 'A', correctAnswer: 'A', cacheRecordId: 'cache-translation' }], dataSource }); assert.equal(result.results[0].translation, '????????'); });
 test('accepts any configured valid answer for a bad question', async () => { let written; const dataSource = { submitAssessment: async input => { written = input; return {}; } }; const result = await submitQuizWithDataSource({ username: 'student', testId: 'test-multi-valid', answers: [{ option: 1 }], questions: [{ record_id: 'rec-bad', word: 'bank', type: 1, context: 'She sat by the bank.', options: ['A. bank', 'B. bank', 'C. desk', 'D. chair'], answer: 'A', acceptableAnswers: ['A', 'B'] }], dataSource }); assert.equal(result.results[0].correct, true); assert.equal(written.correctness, 'correct'); });
 
+test('accepts tunnel for the known ambiguous underground-space fill-in and preserves the learner score', async () => {
+    let written;
+    const dataSource = { submitAssessment: async input => { written = input; return {}; } };
+    const result = await submitQuizWithDataSource({
+        username: 'student',
+        testId: 'test-underground-space',
+        answers: [{ option: 3 }],
+        questions: [{
+            record_id: 'rec-basement',
+            word: 'basement',
+            type: 1,
+            context: 'After moving in, we discovered a hidden _____ beneath the old wooden floorboards.',
+            options: ['A. subway', 'B. basement', 'C. bunker', 'D. tunnel'],
+            answer: 'B',
+        }],
+        dataSource,
+    });
+    assert.equal(result.results[0].correct, true);
+    assert.equal(written.correctness, 'correct');
+});
+
 test('voids a formal question with no valid answer without scoring or learning side effects', async () => {
     const calls = [];
     const questions = Array.from({ length: 10 }, (_, index) => ({

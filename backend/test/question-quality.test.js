@@ -543,6 +543,17 @@ test('fill-in rejects ambiguous same-category food contexts across levels', () =
     assert.equal(isQuestionQualityAcceptable(question), false);
     assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
 });
+
+test('fill-in rejects the ambiguous underground-space screenshot context', () => {
+    const issues = getQuestionQualityIssues({
+        type: 1,
+        word: 'basement',
+        context: 'After moving in, we discovered a hidden _____ beneath the old wooden floorboards.',
+        options: ['A. subway', 'B. basement', 'C. bunker', 'D. tunnel'],
+        answer: 'B',
+    });
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
 test('fill-in rejects ambiguous same-category publication contexts across levels', () => {
     const question = {
         type: 1,

@@ -57,6 +57,11 @@ test('migration paths include the versioned hardening migration in order', () =>
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
 });
 
+test('the backend service start command runs migrations before starting the server', () => {
+  const backendPackage = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(backendPackage.scripts.prestart, 'node scripts/apply-question-generation-migrations.js');
+});
+
 test('missing DATABASE_URL fails before a database client is constructed', async () => {
   let constructed = false;
   class ForbiddenClient {
@@ -329,6 +334,7 @@ test('the real runner exits nonzero without DATABASE_URL and does not start the 
     }
   );
 
+  assert.equal(result.error, undefined, result.error?.message);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /DATABASE_URL is required/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /server.*listen/i);

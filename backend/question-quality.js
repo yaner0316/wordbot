@@ -344,12 +344,26 @@ const ELEMENTARY_ANIMAL_WORDS = new Set([
 const PROBLEM_SOLVING_METHOD_WORDS = new Set([
     'approach', 'technique', 'method', 'strategy', 'solution', 'plan',
 ]);
+const UNDERGROUND_SPACE_WORDS = new Set(['basement', 'bunker', 'tunnel']);
+
+function getAmbiguousFillInAnswerLetters(question) {
+    if (Number(question?.type) !== 1) return [];
+    const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
+    const hasUndergroundSpaceCue = /\bhidden\s+_____\s+beneath\b/.test(context)
+        && /\b(?:floorboards?|wooden\s+floor)\b/.test(context);
+    if (!hasUndergroundSpaceCue) return [];
+    return (question.options || [])
+        .map((option, index) => ({ letter: String.fromCharCode(65 + index), word: getOptionWord(option) }))
+        .filter(option => UNDERGROUND_SPACE_WORDS.has(option.word))
+        .map(option => option.letter);
+}
 
 function hasAmbiguousFillInContext(question) {
     const type = Number(question?.type);
     if (type !== 1) return false;
     const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
     const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
+    if (getAmbiguousFillInAnswerLetters(question).length > 1) return true;
     const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
     const hasAmbiguousFoodContext = [
         /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/,
@@ -581,6 +595,7 @@ module.exports = {
     hasMeaningfulChineseMeaning,
     hasInvalidFillInGrammar,
     isBadQuizWord,
+    getAmbiguousFillInAnswerLetters,
     getQuestionQualityIssues,
     isQuestionQualityAcceptable,
 };
