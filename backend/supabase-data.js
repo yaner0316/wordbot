@@ -2179,8 +2179,6 @@ async function replaceFormalQuizQuestionWithClient(client, options = {}) {
     ensureNoError(error, 'replaceFormalQuizQuestion');
     return data;
 }
-async function saveQuizSessionWithClient(client, username, testId, questions, options = {}) {
-
 async function getActiveFormalQuizChallengeWithClient(client, username, options = {}) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return null;
@@ -2196,6 +2194,8 @@ async function getActiveFormalQuizChallengeWithClient(client, username, options 
     ensureNoError(error, 'getActiveFormalQuizChallenge');
     return data ? getFormalQuizChallengeWithClient(client, username, data.test_id) : null;
 }
+
+async function saveQuizSessionWithClient(client, username, testId, questions, options = {}) {
     const user = await requireUserByUsername(client, username);
     const normalizedTestId = requireTestId(testId);
     const sessionQuestions = requireQuestions(questions);

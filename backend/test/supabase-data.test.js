@@ -2988,6 +2988,31 @@ test('formal challenge adapter reads authoritative questions and updates challen
     assert.deepEqual(baseClient.db.quiz_challenges[0].session_state, progress.session_state);
 });
 
+test('formal challenge adapter can read the active challenge through the default adapter method', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_challenges: [{
+            id: 'challenge-1', test_id: 'real-challenge-1', user_id: 'user-1',
+            mode: 'real', level: MIDDLE, status: 'active',
+            created_at: '2026-08-08T00:00:00.000Z', expires_at: '2026-08-09T00:00:00.000Z',
+            session_state: { currentQuestion: 0, answers: [] },
+        }],
+        quiz_challenge_questions: [{
+            id: 'challenge-question-1', challenge_id: 'challenge-1', ordinal: 1,
+            meaning_id: 'meaning-1', cache_question_id: 'cache-1',
+            stem: 'Sentence with _____.', question_snapshot: { word: 'bank', answer: 'A' },
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(baseClient);
+
+    const challenge = await adapter.getActiveFormalQuizChallenge('qiuqiu', {
+        now: () => '2026-08-08T01:00:00.000Z',
+    });
+
+    assert.equal(challenge.test_id, 'real-challenge-1');
+    assert.equal(challenge.challenge_id, 'challenge-1');
+});
+
 test('formal challenge adapter invalidates a bad displayed question through the canonical RPC', async () => {
     const baseClient = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
