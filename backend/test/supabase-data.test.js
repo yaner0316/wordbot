@@ -2776,7 +2776,7 @@ test('rebuildQuestionCacheForUser requeues a manual-review job before continuing
     assert.equal(client.db.question_generation_jobs[0].attempt_count, 0);
 });
 
-test('rebuildQuestionCacheForUser throws but keeps the bad pair isolated when enqueue cannot be confirmed', async () => {
+test('rebuildQuestionCacheForUser creates a pending job when conditional enqueue returns no row', async () => {
     const word = rebuildCoverageWord('durable-missing', 'lucky');
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
@@ -2786,14 +2786,12 @@ test('rebuildQuestionCacheForUser throws but keeps the bad pair isolated when en
         question_generation_jobs: [],
     }, { rpcDataFalseAlways: true });
 
-    await assert.rejects(
-        createRebuildCoverageAdapter(client, {
-            generateDistractors: async () => null,
-        }).rebuildQuestionCacheForUser('qiuqiu'),
-        /rebuildQuestionCache\.enqueueJob: durable job was not confirmed/
-    );
+    await createRebuildCoverageAdapter(client, {
+        generateDistractors: async () => null,
+    }).rebuildQuestionCacheForUser('qiuqiu');
 
     assert.equal(client.db.question_cache.every(row => row.cache_state === 'replace_pending'), true);
+    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
 });
 
 test('rebuildQuestionCacheForUser keeps a bad pair isolated when enqueue itself fails', async () => {
