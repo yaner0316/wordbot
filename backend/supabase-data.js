@@ -1056,6 +1056,29 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
         .maybeSingle();
     ensureNoError(jobError, 'rebuildQuestionCache.confirmEnqueueJob');
     const status = String(job?.status || '').trim().toLowerCase();
+    if (status === 'needs_manual_review') {
+        const { data: requeued, error: requeueError } = await client
+            .from('question_generation_jobs')
+            .update({
+                status: 'pending',
+                reason: reason || 'cache_backfill',
+                attempt_count: 0,
+                next_attempt_at: new Date().toISOString(),
+                lease_owner: null,
+                lease_expires_at: null,
+                last_error_code: null,
+                last_error_detail: null,
+                rejection_reasons: {},
+                updated_at: new Date().toISOString(),
+            })
+            .eq('user_id', userId)
+            .eq('word_id', wordId)
+            .eq('status', 'needs_manual_review')
+            .select('id,status')
+            .maybeSingle();
+        ensureNoError(requeueError, 'rebuildQuestionCache.requeueManualReview');
+        if (requeued?.status === 'pending') return;
+    }
     if (!job || !EXECUTABLE_QUESTION_GENERATION_JOB_STATUSES.has(status)) {
         throw new Error(`rebuildQuestionCache.enqueueJob: durable job was not confirmed for word ${wordId}`);
     }

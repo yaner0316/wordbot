@@ -2758,6 +2758,24 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
     assert.equal(client.queries.includes('question_generation_jobs'), true);
 });
 
+test('rebuildQuestionCacheForUser requeues a manual-review job before continuing repair', async () => {
+    const word = rebuildCoverageWord('durable-manual-review', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: rebuildCoverageInvalidPair(word),
+        question_generation_jobs: [{ id: 'job-manual', user_id: 'user-1', word_id: word.id, status: 'needs_manual_review' }],
+    }, { rpcDataFalseAlways: true });
+
+    await createRebuildCoverageAdapter(client, {
+        generateDistractors: async () => null,
+    }).rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
+    assert.equal(client.db.question_generation_jobs[0].attempt_count, 0);
+});
+
 test('rebuildQuestionCacheForUser throws but keeps the bad pair isolated when enqueue cannot be confirmed', async () => {
     const word = rebuildCoverageWord('durable-missing', 'lucky');
     const client = createFakeSupabase({
