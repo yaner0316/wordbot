@@ -406,6 +406,16 @@ test('word loader inherits a missing word level from the user learning level', a
     assert.equal(word.level, String.fromCharCode(0x9ad8, 0x4e2d));
 });
 
+test('word loader always uses the current user learning level over a historical word level', async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-old-level', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'high' }],
+        users: [{ id: 'user-1', learning_level: 'middle' }],
+    });
+    const loadWord = createSupabaseWordLoader({ client: fake.client });
+    const word = await loadWord('word-old-level', 'user-1');
+    assert.equal(word.level, String.fromCharCode(0x4e2d, 0x5b66));
+});
+
 test('word loader uses the schema default when both word and user levels are missing', async () => {
     const fake = createFakeSupabase({
         words: [{ id: 'word-no-level', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: null }],
@@ -467,7 +477,7 @@ test('generation service publishes two variants before retiring old ready primar
     assert.equal(buildCalls[0].word.id, 'word-bank-finance');
     assert.equal(buildCalls[0].word.user_id, 'user-1');
     assert.equal(buildCalls[0].user.id, 'user-1');
-    assert.equal(buildCalls[0].level, 'middle');
+    assert.equal(buildCalls[0].level, String.fromCharCode(0x4e2d, 0x5b66));
     const publishCalls = fake.calls.filter(call => call.type === 'rpc'
         && call.name === 'publish_question_generation_variants');
     assert.equal(publishCalls.length, 1);

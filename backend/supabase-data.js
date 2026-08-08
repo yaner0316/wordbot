@@ -1144,6 +1144,9 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         if (getCacheQuestionReadinessIssues(statusRow).length) continue;
         const fields = statusRow.fields || {};
         if (fields.round_type !== 'primary' || String(fields.question_type) !== '1') continue;
+        // A complete pair generated for a previous learning level is stale
+        // for formal use and must be rebuilt at the user's current level.
+        if (normalizeOptionalLearningLevel(fields.level) !== defaultWordLevel) continue;
         const sourceId = String(fields.word_record_id || '').trim();
         if (!sourceId) continue;
         const rawRow = rawCacheRowByStatusRecordId.get(String(statusRow.record_id || '').trim());
@@ -1214,7 +1217,9 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         await translateWords(translationWords.slice(index, index + 40));
     }
     for (const word of wordsNeedingRebuild) {
-        const wordLevel = normalizeOptionalLearningLevel(word.level) || defaultWordLevel;
+        // Formal question quality follows the child's current learning level;
+        // a word's historical import level must never gate formal selection.
+        const wordLevel = defaultWordLevel;
         const wordId = String(word.id || '').trim();
         const hasSelectablePrimaryRows = nonMasteredCacheRows.some(row =>
             String(row.word_id || '').trim() === wordId

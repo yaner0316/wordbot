@@ -154,7 +154,6 @@ function createSupabaseWordLoader({ client } = {}) {
             .maybeSingle();
         throwSupabaseError(error, 'questionGeneration.loadWord');
         if (!data) return null;
-        if (String(data.level || '').trim()) return data;
         const { data: user, error: userError } = await supabase
             .from('users')
             .select('learning_level')
@@ -163,6 +162,8 @@ function createSupabaseWordLoader({ client } = {}) {
         throwSupabaseError(userError, 'questionGeneration.loadUserLevel');
         return {
             ...data,
+            // Formal question stems and quality gates follow the child's
+            // current learning level, never the word's historical level.
             level: normalizeLevel(user?.learning_level),
         };
     };

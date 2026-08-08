@@ -2676,10 +2676,12 @@ test('rebuildQuestionCacheForUser prioritizes previously tested meanings before 
 });
 
 
-test('rebuildQuestionCacheForUser repairs an unmastered meaning outside the user learning level', async () => {
+test('rebuildQuestionCacheForUser regenerates an unmastered meaning at the user learning level', async () => {
     const highLevel = String.fromCharCode(0x9ad8, 0x4e2d);
     const word = { ...rebuildCoverageWord('cross-level', 'lucky'), level: highLevel };
     const oldRows = rebuildCoverageInvalidPair(word).map(row => ({ ...row, level: highLevel }));
+    oldRows[0].options = ['A. lucky', 'B. alpha', 'C. bravo', 'D. charlie'];
+    oldRows[1].options = ['A. lucky', 'B. delta', 'C. echo', 'D. foxtrot'];
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [word],
@@ -2694,7 +2696,7 @@ test('rebuildQuestionCacheForUser repairs an unmastered meaning outside the user
 
     assert.equal(result.count, 2);
     assert.equal(activeRows.length, 2);
-    assert.equal(activeRows.every(row => row.level === highLevel), true);
+    assert.equal(activeRows.every(row => row.level === MIDDLE), true);
     assert.equal(client.db.question_cache.filter(row => row.id && oldRows.some(old => old.id === row.id))
         .every(row => row.cache_state === 'retired'), true);
 });
