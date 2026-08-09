@@ -405,6 +405,45 @@ test('history endpoint preserves grouped history response shape', async () => {
         assert.equal(body.history[0].questions[0].isCorrect, true);
     });
 });
+
+test('admin history diagnostics reports only aggregate adapter counts', async () => {
+    const previousAdminToken = process.env.WORDBOT_ADMIN_TOKEN;
+    process.env.WORDBOT_ADMIN_TOKEN = 'history-diagnostic-test-token';
+    const app = loadServerWithFeishu(createFakeFeishu({
+        getRecords: async table => table.tableId === 'test-table' ? [
+            { fields: { user: 'student', test_id: 'real-diagnostic-1', is_correct: 'correct' } },
+            { fields: { user: 'student', test_id: 'test-diagnostic-1', is_correct: 'wrong' } },
+        ] : [],
+        getQuizHistory: async () => [{
+            testId: 'real-diagnostic-1',
+            questions: [{ assessmentId: 'private-assessment-id' }],
+        }],
+    }));
+
+    try {
+        await withServer(app, async baseUrl => {
+            const response = await fetch(`${baseUrl}/api/admin/history/diagnostics?userId=student`, {
+                headers: { 'x-wordbot-admin-token': 'history-diagnostic-test-token' },
+            });
+            const body = await response.json();
+
+            assert.equal(response.status, 200);
+            assert.deepEqual(body, {
+                userId: 'student',
+                assessmentRows: 2,
+                submittedRows: 2,
+                realRows: 1,
+                testRows: 1,
+                historyTests: 1,
+                historyQuestions: 1,
+            });
+        });
+    } finally {
+        if (previousAdminToken === undefined) delete process.env.WORDBOT_ADMIN_TOKEN;
+        else process.env.WORDBOT_ADMIN_TOKEN = previousAdminToken;
+    }
+});
+
 test('history endpoint prefers the saved quiz context for fill-in records', async () => {
     const app = loadServerWithFeishu(createFakeFeishu({
         getRecords: async table => {

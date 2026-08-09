@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -123,6 +123,20 @@ function tokensMatch(left, right) {
     const a = Buffer.from(String(left || ''));
     const b = Buffer.from(String(right || ''));
     return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requireServerAdminToken(req, res, next) {
+    const configured = String(process.env.WORDBOT_ADMIN_TOKEN || '');
+    if (!configured && process.env.NODE_ENV !== 'production') return next();
+    if (!configured) return res.status(503).json({ error: 'Admin token is not configured' });
+    if (!tokensMatch(configured, req.get('x-wordbot-admin-token'))) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    return next();
+}
+
+function assessmentDiagnosticField(row, key) {
+    return row?.[key] !== undefined ? row[key] : row?.fields?.[key];
 }
 
 // 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
@@ -504,6 +518,33 @@ app.get('/api/admin/questionCache/diagnostics', async (req, res) => {
         const { userId } = req.query;
         const data = await getQuestionCacheDiagnostics(userId || null);
         res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/history/diagnostics', requireServerAdminToken, async (req, res) => {
+    try {
+        const userId = String(req.query.userId || '').trim();
+        if (!userId) return res.status(400).json({ error: 'Missing userId' });
+        const [assessments, history] = await Promise.all([
+            getAssessmentsForUser(userId),
+            getQuizHistory(userId, ASSESSMENT_MODE.REAL),
+        ]);
+        const rows = Array.isArray(assessments) ? assessments : [];
+        const groups = Array.isArray(history) ? history : [];
+        res.json({
+            userId,
+            assessmentRows: rows.length,
+            submittedRows: rows.filter(row => {
+                const value = assessmentDiagnosticField(row, 'is_correct');
+                return value !== null && value !== undefined;
+            }).length,
+            realRows: rows.filter(row => getAssessmentMode(assessmentDiagnosticField(row, 'test_id')) === ASSESSMENT_MODE.REAL).length,
+            testRows: rows.filter(row => getAssessmentMode(assessmentDiagnosticField(row, 'test_id')) === ASSESSMENT_MODE.TEST).length,
+            historyTests: groups.length,
+            historyQuestions: groups.reduce((total, group) => total + (Array.isArray(group?.questions) ? group.questions.length : 0), 0),
+        });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
