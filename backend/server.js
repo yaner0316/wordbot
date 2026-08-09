@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getRuntimeHealth } = require('./runtime-health');
 const {
@@ -304,6 +304,9 @@ app.get('/api/stats/:user', async (req, res) => {
 app.get('/api/history/:user', async (req, res) => {
     try {
         const mode = normalizeAssessmentMode(req.query.mode || ASSESSMENT_MODE.REAL);
+        if (typeof getQuizHistory === 'function') {
+            return res.json({ history: await getQuizHistory(req.params.user, mode), source: 'supabase' });
+        }
         const allRecords = await getRecords(TEST_TABLE);
         const records = filterAssessmentRecords(
             allRecords.filter(r => sameUser(r.fields.user, req.params.user)),

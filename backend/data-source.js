@@ -572,6 +572,7 @@ function loadSupabaseDataSource() {
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
+        getQuizHistory: (username, mode) => supabaseData.getQuizHistory(username, mode),
         getActiveQuizSession,
         updateQuizSessionProgress: async (username, testId, progress) => {
             if (isRealAssessment(testId) && typeof supabaseData.updateFormalQuizChallengeProgress === 'function') {

@@ -2758,6 +2758,60 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
     assert.equal(client.queries.includes('question_generation_jobs'), true);
 });
 
+test('Supabase formal history keeps the exact submitted stem and options', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        assessments: [
+            {
+                id: 'assessment-1', user_id: 'user-1', word_id: 'meaning-citizen', test_id: 'real-history-1',
+                assessed_at: '2026-08-09T08:00:00.000Z', word_snapshot: 'citizen',
+                question_type: '1', question_text: 'Every good _____ obeys the law.',
+                options: ['A. citizen', 'B. visitor', 'C. teacher', 'D. singer'],
+                correct_answer: 'A', submitted_answer: 'B|sure', is_correct: 'wrong',
+            },
+            {
+                id: 'assessment-preview', user_id: 'user-1', test_id: 'test-history-1',
+                assessed_at: '2026-08-09T08:01:00.000Z', word_snapshot: 'preview',
+                question_type: '1', question_text: 'Preview _____ only.',
+                options: ['A. preview'], correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
+            },
+            {
+                id: 'assessment-review', user_id: 'user-1', test_id: 'real-history-review', assessment_kind: 'review',
+                assessed_at: '2026-08-09T08:02:00.000Z', word_snapshot: 'review',
+                question_type: '4', question_text: 'Review only.', options: [], submitted_answer: 'A|sure', is_correct: 'correct',
+            },
+            {
+                id: 'assessment-non-formal', user_id: 'user-1', test_id: 'real-history-preview', is_real_assessment: false,
+                assessed_at: '2026-08-09T08:03:00.000Z', word_snapshot: 'preview',
+                question_type: '1', question_text: 'Not a formal result.', options: ['A. preview'], submitted_answer: 'A|sure', is_correct: 'correct',
+            },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    assert.deepEqual(await adapter.getQuizHistory('qiuqiu', 'real'), [{
+        testId: 'real-history-1',
+        mode: 'real',
+        time: Date.parse('2026-08-09T08:00:00.000Z'),
+        correct: 0,
+        total: 1,
+        questions: [{
+            assessmentId: 'assessment-1',
+            meaningId: 'meaning-citizen',
+            word: 'citizen',
+            question: 'Every good _____ obeys the law.',
+            type: 1,
+            options: ['A. citizen', 'B. visitor', 'C. teacher', 'D. singer'],
+            yourAnswer: 'B',
+            confidence: 'sure',
+            correctAnswer: 'A',
+            isCorrect: false,
+            contentState: 'complete',
+            missingFields: [],
+        }],
+    }]);
+});
+
 test('rebuildQuestionCacheForUser requeues a manual-review job before continuing repair', async () => {
     const word = rebuildCoverageWord('durable-manual-review', 'lucky');
     const client = createFakeSupabase({

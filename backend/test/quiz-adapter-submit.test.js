@@ -185,6 +185,30 @@ test('accepts tunnel for the known ambiguous underground-space fill-in and prese
     assert.equal(written.correctness, 'correct');
 });
 
+test('submit result preserves the canonical meaning ID needed by the results screen', async () => {
+    const dataSource = {
+        submitAssessment: async input => ({
+            id: 'assessment-meaning-id', source_word_record_id: input.sourceWordRecordId,
+            test_id: input.testId, assessed_at: new Date(input.recordTime).toISOString(),
+            is_correct: input.correctness, submitted_answer: input.yourAnswer,
+        }),
+    };
+
+    const result = await submitQuizWithDataSource({
+        username: 'student', testId: 'test-meaning-id',
+        answers: [{ option: 0, confidence: 'sure' }],
+        questions: [{
+            meaningId: 'meaning-citizen', record_id: 'legacy-citizen', word: 'citizen', type: 1,
+            context: 'Every good _____ obeys the law.',
+            options: ['A. citizen', 'B. visitor', 'C. teacher', 'D. singer'], answer: 'A', correctAnswer: 'A',
+        }],
+        dataSource,
+        now: () => 1786262400000,
+    });
+
+    assert.equal(result.results[0].meaningId, 'meaning-citizen');
+});
+
 test('voids a formal question with no valid answer without scoring or learning side effects', async () => {
     const calls = [];
     const questions = Array.from({ length: 10 }, (_, index) => ({

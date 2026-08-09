@@ -555,6 +555,7 @@ async function submitQuizWithDataSource({
             .map(value => String(value || '').trim().toUpperCase())
             .filter(value => value && availableAnswerLetters.has(value));
         const sourceWordRecordId = String(question.record_id || question.wordRecordId || '').trim();
+        const meaningId = String(question.meaningId || question.meaning_id || '').trim();
         if (validAnswers.length === 0) {
             replacementRequired = true;
             if (isRealAssessment(testId)
@@ -569,6 +570,7 @@ async function submitQuizWithDataSource({
             }
             results.push({
                 q: index + 1,
+                meaningId,
                 word: String(question.word || '').toLowerCase(),
                 recordId: sourceWordRecordId,
                 your: yourAnswer,
@@ -589,6 +591,7 @@ async function submitQuizWithDataSource({
             if (existingCorrect) correct++;
             results.push({
                 q: index + 1,
+                meaningId,
                 word: String(question.word || '').toLowerCase(),
                 recordId: sourceWordRecordId,
                 your: existingAnswer,
@@ -621,6 +624,7 @@ async function submitQuizWithDataSource({
         pendingSubmissions.push({ question, sourceWordRecordId, isCorrect, input });
         results.push({
             q: index + 1,
+            meaningId,
             word: String(question.word || '').toLowerCase(),
             recordId: sourceWordRecordId,
             your: yourAnswer,

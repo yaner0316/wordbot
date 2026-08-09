@@ -353,6 +353,63 @@ async function getAssessmentsForUserWithClient(client, username) {
     return decorateAssessmentRows(rows, user);
 }
 
+function toHistoryAnswer(row) {
+    const submitted = String(row?.submitted_answer || '').trim();
+    const [option, confidence = ''] = submitted.split('|');
+    return {
+        option: option.trim(),
+        confidence: String(row?.answer_confidence || confidence || '').trim(),
+    };
+}
+
+function toHistoryQuestion(row) {
+    const question = String(row?.question_text || '').trim();
+    const options = Array.isArray(row?.options) ? row.options.map(value => String(value || '').trim()).filter(Boolean) : [];
+    const missingFields = [
+        ...(question ? [] : ['question_text']),
+        ...(options.length ? [] : ['options']),
+    ];
+    const answer = toHistoryAnswer(row);
+    return {
+        assessmentId: String(row?.id || '').trim(),
+        meaningId: String(row?.word_id || '').trim(),
+        word: String(row?.word_snapshot || '').trim(),
+        question: question || '这是一条早期考核记录，当时没有保存完整题目。答题结果仍然保留。',
+        type: Number(row?.question_type) || 1,
+        options,
+        yourAnswer: answer.option,
+        confidence: answer.confidence,
+        correctAnswer: String(row?.correct_answer || '').trim(),
+        isCorrect: String(row?.is_correct || '').trim().toLowerCase() === 'correct',
+        contentState: missingFields.length ? 'legacy_incomplete' : 'complete',
+        missingFields,
+    };
+}
+
+async function getQuizHistoryWithClient(client, username, mode = 'real') {
+    const normalizedMode = normalizeAssessmentMode(mode);
+    const rows = await getAssessmentsForUserWithClient(client, username);
+    const groups = new Map();
+    for (const row of rows) {
+        if (getAssessmentMode(row.test_id) !== normalizedMode) continue;
+        if (normalizedMode === 'real' && row.is_real_assessment === false) continue;
+        if (String(row.assessment_kind || '').trim().toLowerCase() === 'review') continue;
+        const testId = String(row.test_id || '').trim();
+        if (!testId) continue;
+        if (!groups.has(testId)) {
+            groups.set(testId, { testId, mode: normalizedMode, time: 0, questions: [], correct: 0, total: 0 });
+        }
+        const group = groups.get(testId);
+        const timestamp = Date.parse(String(row.assessed_at || row.created_at || '')) || 0;
+        if (!group.time || (timestamp && timestamp < group.time)) group.time = timestamp;
+        const question = toHistoryQuestion(row);
+        group.questions.push(question);
+        group.total++;
+        if (question.isCorrect) group.correct++;
+    }
+    return [...groups.values()].sort((left, right) => right.time - left.time);
+}
+
 function decorateAssessmentRows(rows, user) {
     return (rows || []).map((row) => ({
         ...row,
@@ -2480,6 +2537,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
+        getQuizHistory: (username, mode) => getQuizHistoryWithClient(client, username, mode),
         getAssessmentsForTest: (username, testId) => getAssessmentsForTestWithClient(client, username, testId),
         getMasteryAssessmentsForWords: (username, sourceWordRecordIds) =>
             getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds),
@@ -2545,6 +2603,7 @@ module.exports = {
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
+    getQuizHistory: defaultAdapter.getQuizHistory,
     getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
     getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,
     getQuestionCache: defaultAdapter.getQuestionCache,
