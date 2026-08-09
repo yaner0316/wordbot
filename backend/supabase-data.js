@@ -393,7 +393,6 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
     for (const row of rows) {
         if (getAssessmentMode(row.test_id) !== normalizedMode) continue;
         if (normalizedMode === 'real' && row.is_real_assessment === false) continue;
-        if (String(row.assessment_kind || '').trim().toLowerCase() === 'review') continue;
         const testId = String(row.test_id || '').trim();
         if (!testId) continue;
         if (!groups.has(testId)) {

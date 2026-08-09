@@ -2776,11 +2776,6 @@ test('Supabase formal history keeps the exact submitted stem and options', async
                 options: ['A. preview'], correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
             },
             {
-                id: 'assessment-review', user_id: 'user-1', test_id: 'real-history-review', assessment_kind: 'review',
-                assessed_at: '2026-08-09T08:02:00.000Z', word_snapshot: 'review',
-                question_type: '4', question_text: 'Review only.', options: [], submitted_answer: 'A|sure', is_correct: 'correct',
-            },
-            {
                 id: 'assessment-non-formal', user_id: 'user-1', test_id: 'real-history-preview', is_real_assessment: false,
                 assessed_at: '2026-08-09T08:03:00.000Z', word_snapshot: 'preview',
                 question_type: '1', question_text: 'Not a formal result.', options: ['A. preview'], submitted_answer: 'A|sure', is_correct: 'correct',
@@ -2810,6 +2805,24 @@ test('Supabase formal history keeps the exact submitted stem and options', async
             missingFields: [],
         }],
     }]);
+});
+
+test('Supabase history retains completed real review results instead of hiding them', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        assessments: [{
+            id: 'assessment-review', user_id: 'user-1', word_id: 'meaning-review',
+            test_id: 'real-review-history', assessment_kind: 'review', assessed_at: '2026-08-09T09:00:00.000Z',
+            word_snapshot: 'citizen', question_type: '1', question_text: 'A _____ has legal rights.',
+            options: ['A. citizen', 'B. visitor', 'C. singer', 'D. teacher'],
+            correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
+        }],
+    });
+
+    const history = await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu', 'real');
+    assert.equal(history.length, 1);
+    assert.equal(history[0].questions[0].word, 'citizen');
+    assert.equal(history[0].questions[0].question, 'A _____ has legal rights.');
 });
 
 test('rebuildQuestionCacheForUser requeues a manual-review job before continuing repair', async () => {
