@@ -3013,6 +3013,7 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
         questionFingerprint: `fingerprint-${index + 1}`,
         type: 1,
         word: 'bank',
+        source: 'question_cache',
         options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
         answer: 'A',
     }));
@@ -3041,6 +3042,39 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
     })));
 });
 
+test('formal challenge adapter refuses to persist a cache question without four renderable options', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const adapter = createSupabaseDataAdapter({
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { challenge_id: 'challenge-1', question_count: 10 }, error: null };
+        },
+    });
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        meaningId: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        context: `Sentence ${index + 1} with _____.`,
+        type: 1,
+        word: `word-${index + 1}`,
+        source: 'question_cache',
+        options: ['A. answer', 'B. option', 'C. choice', 'D. other'],
+        answer: 'A',
+    }));
+    delete questions[4].options;
+
+    await assert.rejects(
+        adapter.createFormalQuizChallenge({
+            username: 'qiuqiu', testId: 'real-challenge-invalid-options', level: MIDDLE, questions,
+        }),
+        /FORMAL_QUIZ_RENDERABLE_REQUIRED/
+    );
+    assert.equal(calls.length, 0);
+});
+
 test('formal challenge adapter reads authoritative questions and updates challenge progress', async () => {
     const baseClient = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -3052,7 +3086,14 @@ test('formal challenge adapter reads authoritative questions and updates challen
         quiz_challenge_questions: [{
             id: 'challenge-question-1', challenge_id: 'challenge-1', ordinal: 1,
             meaning_id: 'meaning-1', cache_question_id: 'cache-1',
-            stem: 'Sentence with _____.', question_snapshot: { word: 'bank', answer: 'A' },
+            stem: 'Sentence with _____.', question_snapshot: {
+                word: 'bank', context: 'Sentence with _____.', answer: 'A',
+                source: 'question_cache', cacheRecordId: 'cache-1', meaningId: 'meaning-1', type: 1,
+            },
+        }],
+        question_cache: [{
+            id: 'cache-1', question_type: '1', question_text: 'Sentence with _____.',
+            options: ['A. bank', 'B. river', 'C. road', 'D. desk'], answer: 'A',
         }],
     });
     const adapter = createSupabaseDataAdapter(baseClient);
@@ -3064,6 +3105,7 @@ test('formal challenge adapter reads authoritative questions and updates challen
         id: 'challenge-question-1', ordinal: 1, meaningId: 'meaning-1',
         cacheRecordId: 'cache-1', stem: 'Sentence with _____.',
         ...baseClient.db.quiz_challenge_questions[0].question_snapshot,
+        options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
     }]);
 
     const progress = await adapter.updateFormalQuizChallengeProgress('qiuqiu', 'real-challenge-1', {
@@ -3085,7 +3127,14 @@ test('formal challenge adapter can read the active challenge through the default
         quiz_challenge_questions: [{
             id: 'challenge-question-1', challenge_id: 'challenge-1', ordinal: 1,
             meaning_id: 'meaning-1', cache_question_id: 'cache-1',
-            stem: 'Sentence with _____.', question_snapshot: { word: 'bank', answer: 'A' },
+            stem: 'Sentence with _____.', question_snapshot: {
+                word: 'bank', context: 'Sentence with _____.', answer: 'A',
+                source: 'question_cache', cacheRecordId: 'cache-1', meaningId: 'meaning-1', type: 1,
+            },
+        }],
+        question_cache: [{
+            id: 'cache-1', question_type: '1', question_text: 'Sentence with _____.',
+            options: ['A. bank', 'B. river', 'C. road', 'D. desk'], answer: 'A',
         }],
     });
     const adapter = createSupabaseDataAdapter(baseClient);

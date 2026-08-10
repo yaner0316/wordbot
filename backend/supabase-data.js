@@ -2141,6 +2141,21 @@ function normalizeFormalChallengeQuestion(question) {
     };
 }
 
+function assertFormalChallengeQuestionsRenderable(questions) {
+    if (questions.some(question => {
+        const options = question?.options;
+        const answer = String(question?.answer || question?.correctAnswer || '').trim().toUpperCase();
+        return Number(question?.type) !== 1
+            || !String(question?.context || question?.stem || '').trim()
+            || !Array.isArray(options)
+            || options.length !== 4
+            || !options.every(option => /^[A-D]\.\s+\S/.test(String(option || '').trim()))
+            || !['A', 'B', 'C', 'D'].includes(answer);
+    })) {
+        throw new Error('FORMAL_QUIZ_RENDERABLE_REQUIRED');
+    }
+}
+
 async function createFormalQuizChallengeWithClient(client, options = {}) {
     const username = String(options.username || '').trim();
     const user = await getUserByUsernameWithClient(client, username);
@@ -2148,6 +2163,8 @@ async function createFormalQuizChallengeWithClient(client, options = {}) {
     const testId = requireTestId(options.testId);
     const questions = options.questions;
     if (!Array.isArray(questions) || questions.length !== 10) throw new Error('FORMAL_QUIZ_INCOMPLETE');
+    assertFormalQuizQuestions(questions);
+    assertFormalChallengeQuestionsRenderable(questions);
     const payload = {
         p_user_id: user.id,
         p_test_id: testId,
@@ -2168,6 +2185,32 @@ function normalizeFormalChallengeProgress(progress) {
     };
 }
 
+function hasFourFormalOptions(options) {
+    return Array.isArray(options)
+        && options.length === 4
+        && options.every(option => /^[A-D]\.\s+\S/.test(String(option || '').trim()));
+}
+
+function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow) {
+    const cachedOptions = Array.isArray(cacheRow?.options) ? cacheRow.options : [];
+    const question = {
+        ...(snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {}),
+        id: row.id,
+        ordinal: row.ordinal,
+        meaningId: row.meaning_id,
+        cacheRecordId: row.cache_question_id,
+        stem: row.stem,
+    };
+    if (!hasFourFormalOptions(question.options) && hasFourFormalOptions(cachedOptions)) {
+        question.options = cachedOptions;
+    }
+    if (!question.context && cacheRow?.question_text) question.context = cacheRow.question_text;
+    if (!question.answer && cacheRow?.answer) question.answer = cacheRow.answer;
+    if (!question.type && cacheRow?.question_type) question.type = Number(cacheRow.question_type);
+    question.source = 'question_cache';
+    return question;
+}
+
 async function getFormalQuizChallengeWithClient(client, username, testId) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return null;
@@ -2186,18 +2229,25 @@ async function getFormalQuizChallengeWithClient(client, username, testId) {
         .eq('challenge_id', challenge.id)
         .order('ordinal', { ascending: true });
     ensureNoError(questionError, 'getFormalQuizChallenge.questions');
+    const cacheIds = [...new Set((questionRows || []).map(row => row.cache_question_id).filter(Boolean))];
+    let cacheById = new Map();
+    if (cacheIds.length) {
+        const { data: cacheRows, error: cacheError } = await client
+            .from('question_cache')
+            .select('id, question_type, question_text, options, answer')
+            .in('id', cacheIds);
+        ensureNoError(cacheError, 'getFormalQuizChallenge.cacheQuestions');
+        cacheById = new Map((cacheRows || []).map(row => [row.id, row]));
+    }
     return {
         ...challenge,
         challenge_id: challenge.id,
         progress: normalizeFormalChallengeProgress(challenge.session_state),
-        questions: (questionRows || []).map(row => ({
-            ...(row.question_snapshot && typeof row.question_snapshot === 'object' ? row.question_snapshot : {}),
-            id: row.id,
-            ordinal: row.ordinal,
-            meaningId: row.meaning_id,
-            cacheRecordId: row.cache_question_id,
-            stem: row.stem,
-        })),
+        questions: (questionRows || []).map(row => hydrateFormalChallengeSnapshot(
+            row.question_snapshot,
+            row,
+            cacheById.get(row.cache_question_id)
+        )),
     };
 }
 
