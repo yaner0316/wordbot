@@ -704,6 +704,44 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(result.total, 10);
 });
 
+test('generateQuiz closes an already-submitted active challenge before creating a fresh formal challenge', async () => {
+    const staleQuestions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1, word: `stale-${index + 1}`, record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`, source: 'question_cache',
+        context: `Stale sentence ${index + 1}.`, options: ['A', 'B', 'C', 'D'], answer: 'A', correctAnswer: 'A',
+    }));
+    const persistedAssessments = staleQuestions.map((question, index) => ({
+        id: `assessment-${index + 1}`, test_id: 'real-stale-challenge', word_snapshot: question.word,
+        source_word_record_id: question.record_id, submitted_answer: 'A', correct_answer: 'A',
+        is_correct: 'correct', assessed_at: new Date().toISOString(),
+    }));
+    let challengeActive = true;
+    const closedChallenges = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => challengeActive ? {
+                test_id: 'real-stale-challenge', challenge_id: 'challenge-stale', questions: staleQuestions,
+            } : null,
+            getAssessmentsForUser: async () => persistedAssessments,
+            completeFormalQuizChallenge: async (...args) => {
+                closedChallenges.push(args);
+                challengeActive = false;
+                return { test_id: args[1], status: 'submitted' };
+            },
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getQuestionCache: async () => formalCacheRows(10),
+            createFormalQuizChallenge: async input => ({ challenge_id: 'challenge-fresh', test_id: input.testId }),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.deepEqual(closedChallenges, [['qiuqiu', 'real-stale-challenge']]);
+    assert.notEqual(quiz.testId, 'real-stale-challenge');
+    assert.equal(quiz.questions.length, 10);
+});
+
 test('formal submission replaces a void question from the same meaning cache pair before closing the challenge', async () => {
     const calls = [];
     const dataSource = loadDataSource({

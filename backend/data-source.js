@@ -300,9 +300,21 @@ function loadSupabaseDataSource() {
     }
     async function generateQuiz(user, level, mode) {
         const formalChallengeReaderAvailable = typeof supabaseData.getActiveFormalQuizChallenge === 'function';
-        const activeFormalChallenge = mode === 'real'
+        let activeFormalChallenge = mode === 'real'
             ? await getActiveFormalQuizChallengeBestEffort(supabaseData, user)
             : null;
+        if (mode === 'real' && Array.isArray(activeFormalChallenge?.questions)) {
+            const submittedAssessments = await getSupabaseQuizAssessments(user, activeFormalChallenge.test_id);
+            const submittedResult = getCompleteSupabaseQuizResult(
+                activeFormalChallenge.test_id,
+                submittedAssessments,
+                activeFormalChallenge.questions.length
+            );
+            if (submittedResult) {
+                await completeFormalChallengeIfSubmitted(user, activeFormalChallenge.test_id, submittedResult);
+                activeFormalChallenge = null;
+            }
+        }
         if (mode === 'real' && formalChallengeReaderAvailable && activeFormalChallenge?.unavailable) {
             return {
                 error: 'Formal challenge is not ready yet.', code: 'FORMAL_CHALLENGE_NOT_READY',
