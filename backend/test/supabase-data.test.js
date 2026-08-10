@@ -2758,6 +2758,74 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
     assert.equal(client.queries.includes('question_generation_jobs'), true);
 });
 
+test('deleteWord removes only the owned meaning and its unreferenced cache', async () => {
+    const client = seededClient();
+    client.db.quiz_challenge_questions = [];
+    client.db.quiz_display_events = [];
+    client.db.words.push({
+        id: 'word-2', feishu_record_id: 'rec-word-2', user_id: 'user-1',
+        word: 'banana', meaning_en: 'a fruit', mastery_status: 'pending',
+    });
+    client.db.question_cache.push({
+        id: 'cache-word-2', user_id: 'user-1', word_id: 'word-2',
+        source_word_record_id: 'rec-word-2',
+    });
+
+    const result = await createSupabaseDataAdapter(client).deleteWord('qiuqiu', 'banana', {
+        recordId: 'rec-word-2',
+    });
+
+    assert.deepEqual(result, { success: true, recordId: 'rec-word-2' });
+    assert.equal(client.db.words.some(row => row.id === 'word-2'), false);
+    assert.equal(client.db.question_cache.some(row => row.id === 'cache-word-2'), false);
+});
+
+test('deleteWord refuses to remove a meaning referenced by formal challenge history', async () => {
+    const client = seededClient();
+    client.db.quiz_challenge_questions = [{
+        id: 'challenge-question-1', meaning_id: 'word-1', cache_question_id: 'cache-1',
+    }];
+
+    const result = await createSupabaseDataAdapter(client).deleteWord('qiuqiu', 'Apple', {
+        recordId: 'rec-word-1',
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY');
+    assert.equal(client.db.words.some(row => row.id === 'word-1'), true);
+});
+
+test('updateMultiDefinition marks every selected owned meaning in Supabase', async () => {
+    const client = seededClient();
+    client.db.words.push({
+        id: 'word-bank', feishu_record_id: 'rec-bank', user_id: 'user-1',
+        word: 'bank', meaning_en: 'river edge', mastery_status: 'pending',
+    });
+
+    const result = await createSupabaseDataAdapter(client).updateMultiDefinition('qiuqiu', ['Apple', 'bank']);
+
+    assert.deepEqual(result, { success: true, updated: 2 });
+    assert.equal(client.db.words.find(row => row.id === 'word-1').multi_definition, 'yes');
+    assert.equal(client.db.words.find(row => row.id === 'word-bank').multi_definition, 'yes');
+});
+
+test('validateWords checks Supabase-owned duplicates and malformed words without Feishu', async () => {
+    const client = seededClient();
+    client.db.words.push({
+        id: 'word-bank', user_id: 'user-1', word: 'bank', meaning_en: 'river edge',
+    });
+
+    const result = await createSupabaseDataAdapter(client).validateWords('qiuqiu', [
+        { word: 'Apple', meaning: 'another meaning' },
+        { word: 'bank', meaning: 'river edge' },
+        { word: 'bad!word', meaning: 'invalid' },
+    ]);
+
+    assert.deepEqual(result.errors, [{ word: 'bad!word', meaning: 'invalid' }]);
+    assert.deepEqual(result.duplicateWords.map(item => item.word).sort(), ['apple', 'bank']);
+    assert.deepEqual(result.multiMeanings, []);
+});
+
 test('Supabase word editor reads newly entered words from the authoritative words table', async () => {
     const client = seededClient();
     client.db.words.push({

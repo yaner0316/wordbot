@@ -692,6 +692,7 @@ app.delete('/api/word', async (req, res) => {
         const effectiveUserId = userId || req.wordbotSession?.user || '';
         if (!recordId && (!effectiveUserId || !word)) return res.status(400).json({ error: '缺少参数' });
         const data = await deleteWord(effectiveUserId, word, { recordId });
+        if (data?.code === 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY') return res.status(409).json(data);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

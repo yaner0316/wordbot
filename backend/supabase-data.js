@@ -2100,6 +2100,125 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     if (questionGenerationChanged) await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
     return { success: true };
 }
+
+function normalizeValidationEntries(words) {
+    return (words || []).map(input => {
+        if (typeof input === 'string') {
+            const [wordPart, ...meaningParts] = input.split('|');
+            return { word: String(wordPart || '').trim().toLowerCase(), meaning: meaningParts.join('|').trim(), raw: input };
+        }
+        return {
+            word: String(input?.word || input?.Word || '').trim().toLowerCase(),
+            meaning: String(input?.meaning || input?.Meaning || input?.cnMeaning || input?.CN_Meaning || '').trim(),
+            raw: input,
+        };
+    }).filter(entry => entry.word);
+}
+
+function duplicateValidationEntries(rows, targetUserId, entries) {
+    const requested = new Set(entries.map(entry => entry.word));
+    const existingByWord = new Map();
+    for (const row of rows || []) {
+        const normalized = String(row.word || '').trim().toLowerCase();
+        if (row.user_id !== targetUserId || !requested.has(normalized)) continue;
+        if (!existingByWord.has(normalized)) existingByWord.set(normalized, []);
+        existingByWord.get(normalized).push({
+            recordId: row.feishu_record_id || row.id,
+            word: row.word,
+            meaning: row.meaning_en || '',
+            cnMeaning: row.meaning_zh || '',
+            context: row.context_en || '',
+        });
+    }
+    return [...existingByWord.entries()].map(([word, existing]) => ({
+        word,
+        existing,
+        entries: entries.filter(entry => entry.word === word),
+    }));
+}
+
+async function validateWordsWithClient(client, targetUserOrWords, maybeWords) {
+    const targetUser = Array.isArray(targetUserOrWords) ? null : targetUserOrWords;
+    const words = Array.isArray(targetUserOrWords) ? targetUserOrWords : maybeWords;
+    const entries = normalizeValidationEntries(words);
+    const errors = entries.filter(entry => !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(entry.word)).map(entry => entry.raw || entry.word);
+    const repeatedByWord = new Map();
+    for (const entry of entries) {
+        if (!repeatedByWord.has(entry.word)) repeatedByWord.set(entry.word, []);
+        repeatedByWord.get(entry.word).push(entry);
+    }
+    const repeated = [...repeatedByWord.entries()]
+        .filter(([, repeatedEntries]) => repeatedEntries.length > 1)
+        .map(([word, repeatedEntries]) => ({
+            word,
+            existing: [{ recordId: '', word, cnMeaning: '本次输入中重复' }],
+            entries: repeatedEntries,
+        }));
+    const user = targetUser ? await requireUserByUsername(client, targetUser) : null;
+    const rows = user ? await getWordsForUserWithClient(client, user.username) : [];
+    const existing = duplicateValidationEntries(rows, user?.id, entries);
+    const merged = new Map();
+    for (const item of [...existing, ...repeated]) {
+        if (!merged.has(item.word)) merged.set(item.word, { word: item.word, existing: [], entries: [] });
+        const target = merged.get(item.word);
+        target.existing.push(...(item.existing || []));
+        target.entries.push(...(item.entries || []));
+    }
+    return {
+        errors,
+        multiMeanings: [],
+        duplicateWords: [...merged.values()].map(item => ({
+            ...item,
+            existing: item.existing.filter((record, index, list) => index === list.findIndex(other =>
+                String(other.recordId || '') === String(record.recordId || '')
+                && String(other.cnMeaning || other.meaning || '') === String(record.cnMeaning || record.meaning || '')
+            )),
+        })),
+    };
+}
+
+async function updateMultiDefinitionWithClient(client, username, words) {
+    const user = await requireUserByUsername(client, username);
+    const requested = new Set((words || []).map(word => String(word || '').trim().toLowerCase()).filter(Boolean));
+    if (!requested.size) return { success: true, updated: 0 };
+    const rows = await getWordsForUserWithClient(client, user.username);
+    const selected = rows.filter(row => requested.has(String(row.word || '').trim().toLowerCase()));
+    for (const row of selected) {
+        const { error } = await client.from('words')
+            .update({ multi_definition: 'yes', updated_at: new Date().toISOString() })
+            .eq('id', row.id)
+            .eq('user_id', user.id)
+            .select('*');
+        ensureNoError(error, 'updateMultiDefinition.words');
+    }
+    return { success: true, updated: selected.length };
+}
+
+async function hasFormalWordReferences(client, wordId) {
+    for (const table of ['quiz_challenge_questions', 'quiz_display_events']) {
+        const { data, error } = await client.from(table).select('id').eq('meaning_id', wordId).limit(1).maybeSingle();
+        ensureNoError(error, `deleteWord.${table}`);
+        if (data) return true;
+    }
+    return false;
+}
+
+async function deleteWordWithClient(client, username, word, options = {}) {
+    const user = await requireUserByUsername(client, username);
+    const [row] = await resolveWordRows(client, user.id, word, options);
+    if (await hasFormalWordReferences(client, row.id)) {
+        return {
+            success: false,
+            code: 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY',
+            error: 'Cannot delete a meaning referenced by formal challenge history',
+            recordId: row.feishu_record_id || row.id,
+        };
+    }
+    await fenceWordQuestionGeneration(client, user.id, row.id);
+    const { error } = await client.from('words').delete().eq('id', row.id).eq('user_id', user.id).select('id');
+    ensureNoError(error, 'deleteWord.words');
+    return { success: true, recordId: row.feishu_record_id || row.id };
+}
 async function ensurePartOfSpeechRows(client, codes) {
     const uniqueCodes = [...new Set(codes)];
     if (!uniqueCodes.length) return new Map();
@@ -2727,6 +2846,9 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getQuestionCacheStatus: username => getQuestionCacheStatusWithClient(client, username),
         getGameState: username => getGameStateWithClient(client, username),
         updateWord: (username, word, fields) => updateWordWithClient(client, username, word, fields),
+        deleteWord: (username, word, options) => deleteWordWithClient(client, username, word, options),
+        updateMultiDefinition: (username, words) => updateMultiDefinitionWithClient(client, username, words),
+        validateWords: (targetUser, words) => validateWordsWithClient(client, targetUser, words),
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
@@ -2796,6 +2918,9 @@ module.exports = {
     getQuestionCacheStatus: defaultAdapter.getQuestionCacheStatus,
     getGameState: defaultAdapter.getGameState,
     updateWord: defaultAdapter.updateWord,
+    deleteWord: defaultAdapter.deleteWord,
+    updateMultiDefinition: defaultAdapter.updateMultiDefinition,
+    validateWords: defaultAdapter.validateWords,
     saveGameState: defaultAdapter.saveGameState,
     getQuestionCacheDiagnostics: defaultAdapter.getQuestionCacheDiagnostics,
     deleteQuestionCacheRows: defaultAdapter.deleteQuestionCacheRows,

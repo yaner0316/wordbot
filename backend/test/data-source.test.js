@@ -42,6 +42,9 @@ function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExp
             updateWordMastery: async (...args) => ({ source: 'supabase', args }),
             incrementCacheUsedCount: async cacheId => ({ source: 'supabase', cacheId }),
             addWord: async input => ({ source: 'supabase', input }),
+            deleteWord: async (...args) => ({ source: 'supabase-delete', args }),
+            updateMultiDefinition: async (...args) => ({ source: 'supabase-multi', args }),
+            validateWords: async (...args) => ({ source: 'supabase-validate', args }),
             ...supabaseExports,
         },
     };
@@ -704,6 +707,26 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(result.total, 10);
     assert.equal(result.results[0].translation, quiz.questions[0].contextCN);
     assert.deepEqual(result.results[0].optionMeanings, quiz.questions[0].optionMeanings);
+});
+
+test('DATA_SOURCE=supabase routes word management CRUD to Supabase instead of Feishu fallback', async () => {
+    const dataSource = loadDataSource({
+        envValue: 'supabase',
+        supabaseExports: {
+            deleteWord: async (...args) => ({ source: 'supabase-delete', args }),
+            updateMultiDefinition: async (...args) => ({ source: 'supabase-multi', args }),
+            validateWords: async (...args) => ({ source: 'supabase-validate', args }),
+        },
+        feishuExports: {
+            deleteWord: async () => ({ source: 'feishu-delete' }),
+            updateMultiDefinition: async () => ({ source: 'feishu-multi' }),
+            validateWords: async () => ({ source: 'feishu-validate' }),
+        },
+    });
+
+    assert.equal((await dataSource.deleteWord('qiuqiu', 'apple', { recordId: 'rec-1' })).source, 'supabase-delete');
+    assert.equal((await dataSource.updateMultiDefinition('qiuqiu', ['apple'])).source, 'supabase-multi');
+    assert.equal((await dataSource.validateWords('qiuqiu', ['apple'])).source, 'supabase-validate');
 });
 
 test('generateQuiz closes an already-submitted active challenge before creating a fresh formal challenge', async () => {

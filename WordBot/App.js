@@ -1,7 +1,8 @@
 ﻿import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput, Alert } from 'react-native';
+import { mergeWordPage, updateWordInList, removeWordFromList, hasMoreWordPages, getRecordKey, buildWordUpdatePayload } from './word-editor-logic';
 
-const API = 'http://localhost:3000';
+const API = process.env.EXPO_PUBLIC_API_URL || 'https://wordbot-1-w9il.onrender.com';
 const DEFAULT_LEVEL = '\u4e2d\u5b66';
 const LEVEL_OPTIONS = [
   { value: '\u5c0f\u5b66', label: '\u5c0f\u5b66' },
@@ -35,6 +36,43 @@ export default function App() {
   const [learningSettings, setLearningSettings] = useState(null);
   const [cacheStatus, setCacheStatus] = useState(null);
   const [selectedLevel, setSelectedLevel] = useState(DEFAULT_LEVEL);
+  const [wordList, setWordList] = useState([]);
+  const [wordListPage, setWordListPage] = useState(0);
+  const [wordListTotalPages, setWordListTotalPages] = useState(1);
+  const [wordListTotal, setWordListTotal] = useState(0);
+  const [wordListLoading, setWordListLoading] = useState(false);
+  const [wordListError, setWordListError] = useState('');
+
+  const loadWordPage = async ({ reset = false } = {}) => {
+    if (!user || wordListLoading) return;
+    const nextPage = reset ? 1 : wordListPage + 1;
+    if (!reset && !hasMoreWordPages({ page: wordListPage, totalPages: wordListTotalPages })) return;
+    setWordListLoading(true);
+    setWordListError('');
+    try {
+      const res = await fetch(`${API}/api/admin/words?userId=${encodeURIComponent(user)}&page=${nextPage}&pageSize=20`);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || '词库加载失败');
+      setWordList(current => reset ? (data.words || []) : mergeWordPage(current, data.words || []));
+      setWordListPage(data.page || nextPage);
+      setWordListTotalPages(data.totalPages || 1);
+      setWordListTotal(data.total || 0);
+    } catch (e) {
+      setWordListError(e.message || '词库加载失败');
+    } finally {
+      setWordListLoading(false);
+    }
+  };
+
+  const openWordEditor = (word) => {
+    setEditWord(word);
+    setEditMeaning(word.meaning || '');
+    setEditCnMeaning(word.cnMeaning || '');
+    setEditContext(word.context || '');
+    setEditDistractors(word.distractors || '');
+    setEditStatus(word.status || 'Pending');
+    setScreen('editWord');
+  };
 
   const searchWordAction = async () => {
     const w = searchWord.trim().toLowerCase();
@@ -44,13 +82,7 @@ export default function App() {
       const res = await fetch(`${API}/api/word?userId=${user}&word=${encodeURIComponent(w)}`);
       const data = await res.json();
       if (data.word) {
-        setEditWord(data.word);
-        setEditMeaning(data.meaning || '');
-        setEditCnMeaning(data.cnMeaning || '');
-        setEditContext(data.context || '');
-        setEditDistractors(data.distractors || '');
-        setEditStatus(data.status || 'Pending');
-        setScreen('editWord');
+        openWordEditor(data);
       } else {
         setMessage('单词不存在，可以直接录入');
         setNewWord(w);
@@ -64,36 +96,55 @@ export default function App() {
     if (!editWord) return;
     setLoading(true);
     try {
-      await fetch(`${API}/api/word`, {
+      const res = await fetch(`${API}/api/word`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user,
-          word: editWord,
+        body: JSON.stringify(buildWordUpdatePayload(user, editWord, {
           meaning: editMeaning,
           cnMeaning: editCnMeaning,
           context: editContext,
           distractors: editDistractors,
-          status: editStatus
-        })
+          status: editStatus,
+        }))
       });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || '保存失败');
+      const updated = data.word ? data : { ...editWord, meaning: editMeaning, cnMeaning: editCnMeaning, context: editContext, distractors: editDistractors, status: editStatus };
+      setWordList(words => updateWordInList(words, updated));
       setMessage('保存成功');
       setEditWord(null);
-      setScreen('actions');
-    } catch (e) { setMessage('保存失败'); }
+      setScreen('wordEditor');
+    } catch (e) { setMessage(e.message || '保存失败'); }
     setLoading(false);
   };
 
-  const removeWord = async () => {
-    if (!editWord) return;
+  const removeWord = async (word = editWord) => {
+    if (!word) return;
+    const key = getRecordKey(word);
+    const recordId = word.record_id || word.word_id;
+    const query = recordId
+      ? `recordId=${encodeURIComponent(recordId)}`
+      : `userId=${encodeURIComponent(user)}&word=${encodeURIComponent(word.word || word)}`;
     setLoading(true);
     try {
-      await fetch(`${API}/api/word?userId=${user}&word=${encodeURIComponent(editWord)}`, { method: 'DELETE' });
-      setMessage(`已删除 ${editWord}`);
+      const res = await fetch(`${API}/api/word?${query}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || '删除失败');
+      setWordList(words => removeWordFromList(words, key));
+      setWordListTotal(total => Math.max(0, total - 1));
+      setMessage(`已删除 ${word.word || word}`);
       setEditWord(null);
-      setScreen('actions');
-    } catch (e) { setMessage('删除失败'); }
+      setScreen('wordEditor');
+    } catch (e) { setMessage(e.message || '删除失败'); }
     setLoading(false);
+  };
+
+  const confirmRemoveWord = (word = editWord) => {
+    const label = word?.word || word || '';
+    Alert.alert('确认删除', `确定删除单词「${label}」吗？`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: () => removeWord(word) },
+    ]);
   };
 
   const chooseUser = async (u) => {
@@ -385,8 +436,8 @@ export default function App() {
       <Text style={s.label}>干扰词（逗号分隔）</Text>
       <TextInput style={s.input} value={editDistractors} onChangeText={setEditDistractors} />
       <View style={s.btnRow}>
-        <TouchableOpacity style={s.redBtn} onPress={removeWord}><Text style={s.btnText}>删除</Text></TouchableOpacity>
-        <TouchableOpacity style={s.grayBtn} onPress={() => { setEditWord(null); setScreen('actions'); }}><Text style={s.btnText}>取消</Text></TouchableOpacity>
+        <TouchableOpacity style={s.redBtn} onPress={() => confirmRemoveWord()}><Text style={s.btnText}>删除</Text></TouchableOpacity>
+        <TouchableOpacity style={s.grayBtn} onPress={() => { setEditWord(null); setScreen('wordEditor'); }}><Text style={s.btnText}>取消</Text></TouchableOpacity>
         <TouchableOpacity style={s.greenBtn} onPress={saveWord}><Text style={s.btnText}>保存</Text></TouchableOpacity>
       </View>
     </ScrollView>
@@ -463,10 +514,50 @@ export default function App() {
       {message ? <Text style={s.message}>{message}</Text> : null}
       <TouchableOpacity style={s.greenBtn} onPress={startTest}><Text style={s.btnText}>开始测试</Text></TouchableOpacity>
       <TouchableOpacity style={s.orangeBtn} onPress={() => { setNewWord(''); setMessage(''); setScreen('addWord'); }}><Text style={s.btnText}>录入单词</Text></TouchableOpacity>
-      <TouchableOpacity style={s.blueBtn} onPress={() => setScreen('searchWord')}><Text style={s.btnText}>查询/编辑单词</Text></TouchableOpacity>
+      <TouchableOpacity style={s.blueBtn} onPress={() => { setMessage(''); setWordListError(''); setScreen('wordEditor'); loadWordPage({ reset: true }); }}><Text style={s.btnText}>单词编辑器</Text></TouchableOpacity>
       <TouchableOpacity style={s.blueBtn} onPress={loadLearningSettings}><Text style={s.btnText}>{'\u5b66\u4e60\u8bbe\u7f6e'}</Text></TouchableOpacity>
       <TouchableOpacity style={s.btn} onPress={showDashboard}><Text style={s.btnText}>看板</Text></TouchableOpacity>
       <TouchableOpacity style={s.grayBtn} onPress={() => { setUser(null); setScreen('select'); }}><Text style={s.btnText}>返回</Text></TouchableOpacity>
+    </ScrollView>
+  );
+
+  if (screen === 'wordEditor') return (
+    <ScrollView
+      style={s.container}
+      scrollEventThrottle={200}
+      onScroll={({ nativeEvent }) => {
+        const nearBottom = nativeEvent.layoutMeasurement.height + nativeEvent.contentOffset.y >= nativeEvent.contentSize.height - 160;
+        if (nearBottom) loadWordPage();
+      }}
+    >
+      <Text style={s.title}>单词编辑器</Text>
+      <Text style={s.subtitle}>{wordListTotal} 个单词/释义</Text>
+      {message ? <Text style={s.message}>{message}</Text> : null}
+      {wordListError ? (
+        <View style={s.card}>
+          <Text style={s.message}>{wordListError}</Text>
+          <TouchableOpacity style={s.greenBtn} onPress={() => loadWordPage({ reset: wordList.length === 0 })}>
+            <Text style={s.btnText}>重试</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {!wordListLoading && !wordListError && wordList.length === 0 ? <Text style={s.emptyState}>暂无单词</Text> : null}
+      {wordList.map((word, index) => (
+        <View key={getRecordKey(word) || `${word.word}-${index}`} style={s.wordRow}>
+          <View style={s.wordDetails}>
+            <Text style={s.wordTitle}>{word.word}</Text>
+            <Text style={s.wordMeaning}>{word.cnMeaning || word.meaning || '暂无释义'}</Text>
+            <Text style={s.wordMeta}>{word.status === 'optF5P0W3O' ? '已掌握' : '待复习'}{word.entered_at ? ` · ${new Date(word.entered_at).toLocaleDateString()}` : ''}</Text>
+          </View>
+          <View style={s.wordActions}>
+            <TouchableOpacity style={s.smallBlueBtn} onPress={() => openWordEditor(word)}><Text style={s.smallBtnText}>编辑</Text></TouchableOpacity>
+            <TouchableOpacity style={s.smallRedBtn} onPress={() => confirmRemoveWord(word)}><Text style={s.smallBtnText}>删除</Text></TouchableOpacity>
+          </View>
+        </View>
+      ))}
+      {wordListLoading ? <View style={s.listLoading}><ActivityIndicator color="#2196F3" /><Text style={s.hint}>正在加载更多...</Text></View> : null}
+      {!wordListLoading && !wordListError && wordList.length > 0 && !hasMoreWordPages({ page: wordListPage, totalPages: wordListTotalPages }) ? <Text style={s.endState}>已加载全部单词</Text> : null}
+      <TouchableOpacity style={s.grayBtn} onPress={() => setScreen('actions')}><Text style={s.btnText}>返回</Text></TouchableOpacity>
     </ScrollView>
   );
 
@@ -541,4 +632,16 @@ const s = StyleSheet.create({
   checkmark: { color: '#6200EE', fontSize: 18, fontWeight: 'bold' },
   checkEmpty: { color: '#ccc', fontSize: 18 },
   multiWord: { fontSize: 18, color: '#333' },
+  emptyState: { textAlign: 'center', color: '#777', fontSize: 16, paddingVertical: 30 },
+  endState: { textAlign: 'center', color: '#999', fontSize: 13, paddingVertical: 12 },
+  listLoading: { alignItems: 'center', paddingVertical: 14 },
+  wordRow: { backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center' },
+  wordDetails: { flex: 1, paddingRight: 10 },
+  wordTitle: { fontSize: 19, fontWeight: 'bold', color: '#333' },
+  wordMeaning: { fontSize: 15, color: '#555', marginTop: 4 },
+  wordMeta: { fontSize: 12, color: '#999', marginTop: 5 },
+  wordActions: { width: 72, alignItems: 'stretch' },
+  smallBlueBtn: { backgroundColor: '#2196F3', paddingVertical: 7, borderRadius: 6, marginBottom: 6 },
+  smallRedBtn: { backgroundColor: '#F44336', paddingVertical: 7, borderRadius: 6 },
+  smallBtnText: { color: '#fff', textAlign: 'center', fontSize: 13, fontWeight: '600' },
 });
