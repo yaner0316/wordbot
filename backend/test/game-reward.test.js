@@ -13,7 +13,7 @@ test('grants the high reward for a perfect real quiz score', () => {
         }),
         {
             eligible: true,
-            minutes: 12,
+            minutes: 10,
             tier: 'perfect',
             reason: 'perfect_score',
         }
@@ -33,6 +33,23 @@ test('grants the regular reward for nine correct answers', () => {
             minutes: 5,
             tier: 'excellent',
             reason: 'excellent_score',
+        }
+    );
+});
+
+test('deducts five minutes for five or more wrong answers in a real full quiz', () => {
+    assert.deepEqual(
+        calculateGameReward({
+            testId: 'real-quiz-3',
+            mode: 'real',
+            correct: 5,
+            total: 10,
+        }),
+        {
+            eligible: true,
+            minutes: -5,
+            tier: 'penalty',
+            reason: 'five_or_more_wrong',
         }
     );
 });

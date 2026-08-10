@@ -2,12 +2,7 @@ const { ASSESSMENT_MODE } = require('./assessment-mode');
 const { ASSESSMENT_KIND, getAssessmentKind } = require('./review-session');
 
 const DEFAULT_EXCELLENT_MINUTES = 5;
-const DEFAULT_PERFECT_MINUTES = 12;
-
-function readMinutes(name, fallback) {
-    const value = Number(process.env[name]);
-    return Number.isFinite(value) && value > 0 ? value : fallback;
-}
+const DEFAULT_PERFECT_MINUTES = 10;
 
 function calculateGameReward({ testId, mode, correct, total }) {
     const assessmentKind = getAssessmentKind(testId);
@@ -21,7 +16,13 @@ function calculateGameReward({ testId, mode, correct, total }) {
     if (normalizedMode !== ASSESSMENT_MODE.REAL) {
         return { eligible: false, minutes: 0, tier: 'none', reason: 'test_mode' };
     }
-    if (questionCount <= 0 || score < 9) {
+    if (score <= 5) {
+        if (questionCount === 10) {
+            return { eligible: true, minutes: -5, tier: 'penalty', reason: 'five_or_more_wrong' };
+        }
+        return { eligible: false, minutes: 0, tier: 'none', reason: 'score_below_threshold' };
+    }
+    if (score < 9) {
         return { eligible: false, minutes: 0, tier: 'none', reason: 'score_below_threshold' };
     }
     if (questionCount !== 10) {
@@ -30,14 +31,14 @@ function calculateGameReward({ testId, mode, correct, total }) {
     if (score >= questionCount) {
         return {
             eligible: true,
-            minutes: readMinutes('WORDBOT_GAME_REWARD_PERFECT_MINUTES', DEFAULT_PERFECT_MINUTES),
+            minutes: DEFAULT_PERFECT_MINUTES,
             tier: 'perfect',
             reason: 'perfect_score',
         };
     }
     return {
         eligible: true,
-        minutes: readMinutes('WORDBOT_GAME_REWARD_EXCELLENT_MINUTES', DEFAULT_EXCELLENT_MINUTES),
+        minutes: DEFAULT_EXCELLENT_MINUTES,
         tier: 'excellent',
         reason: 'excellent_score',
     };
