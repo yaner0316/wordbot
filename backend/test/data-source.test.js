@@ -742,6 +742,33 @@ test('generateQuiz closes an already-submitted active challenge before creating 
     assert.equal(quiz.questions.length, 10);
 });
 
+test('active formal session lookup closes an already-submitted challenge instead of returning it to the child', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1, word: `word-${index + 1}`, record_id: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`, source: 'question_cache',
+        context: `Sentence ${index + 1}.`, options: ['A', 'B', 'C', 'D'], answer: 'A', correctAnswer: 'A',
+    }));
+    const assessments = questions.map((question, index) => ({
+        id: `assessment-${index + 1}`, test_id: 'real-stale-session', word_snapshot: question.word,
+        source_word_record_id: question.record_id, submitted_answer: 'A', correct_answer: 'A',
+        is_correct: 'correct', assessed_at: new Date().toISOString(),
+    }));
+    const closedChallenges = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => ({ test_id: 'real-stale-session', questions }),
+            getAssessmentsForUser: async () => assessments,
+            completeFormalQuizChallenge: async (...args) => {
+                closedChallenges.push(args);
+                return { test_id: args[1], status: 'submitted' };
+            },
+        },
+    });
+
+    assert.equal(await dataSource.getActiveFormalQuizChallenge('qiuqiu'), null);
+    assert.deepEqual(closedChallenges, [['qiuqiu', 'real-stale-session']]);
+});
+
 test('formal submission replaces a void question from the same meaning cache pair before closing the challenge', async () => {
     const calls = [];
     const dataSource = loadDataSource({

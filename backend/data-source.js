@@ -300,21 +300,9 @@ function loadSupabaseDataSource() {
     }
     async function generateQuiz(user, level, mode) {
         const formalChallengeReaderAvailable = typeof supabaseData.getActiveFormalQuizChallenge === 'function';
-        let activeFormalChallenge = mode === 'real'
-            ? await getActiveFormalQuizChallengeBestEffort(supabaseData, user)
+        const activeFormalChallenge = mode === 'real'
+            ? await getActiveFormalQuizChallenge(user)
             : null;
-        if (mode === 'real' && Array.isArray(activeFormalChallenge?.questions)) {
-            const submittedAssessments = await getSupabaseQuizAssessments(user, activeFormalChallenge.test_id);
-            const submittedResult = getCompleteSupabaseQuizResult(
-                activeFormalChallenge.test_id,
-                submittedAssessments,
-                activeFormalChallenge.questions.length
-            );
-            if (submittedResult) {
-                await completeFormalChallengeIfSubmitted(user, activeFormalChallenge.test_id, submittedResult);
-                activeFormalChallenge = null;
-            }
-        }
         if (mode === 'real' && formalChallengeReaderAvailable && activeFormalChallenge?.unavailable) {
             return {
                 error: 'Formal challenge is not ready yet.', code: 'FORMAL_CHALLENGE_NOT_READY',
@@ -432,6 +420,16 @@ function loadSupabaseDataSource() {
         if (!isRealAssessment(testId) || !result || result.replacementRequired) return;
         if (typeof supabaseData.completeFormalQuizChallenge !== 'function') return;
         await supabaseData.completeFormalQuizChallenge(user, testId);
+    }
+
+    async function getActiveFormalQuizChallenge(user, options) {
+        const challenge = await getActiveFormalQuizChallengeBestEffort(supabaseData, user, options);
+        if (!Array.isArray(challenge?.questions) || !String(challenge.test_id || '').trim()) return challenge;
+        const assessments = await getSupabaseQuizAssessments(user, challenge.test_id);
+        const submittedResult = getCompleteSupabaseQuizResult(challenge.test_id, assessments, challenge.questions.length);
+        if (!submittedResult) return challenge;
+        await completeFormalChallengeIfSubmitted(user, challenge.test_id, submittedResult);
+        return null;
     }
 
     async function submitAnswersOnce(user, testId, answers) {
@@ -600,6 +598,7 @@ function loadSupabaseDataSource() {
     return {
         ...loadFeishuFallbackExports(),
         ...supabaseData,
+        getActiveFormalQuizChallenge,
         getQuizHistory: (username, mode) => supabaseData.getQuizHistory(username, mode),
         getActiveQuizSession,
         updateQuizSessionProgress: async (username, testId, progress) => {
