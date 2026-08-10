@@ -199,6 +199,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260806_word_edit_generation_version.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260807_formal_quiz_challenges.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260808_formal_bad_question_replacement.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260810_word_edit_cache_fk_hardening.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([

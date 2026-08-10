@@ -174,6 +174,43 @@ test('a no-job word edit fence prevents a later backfill claim and stale publica
     }
 });
 
+test('a fenced cache referenced by a formal challenge is retired instead of deleted', async () => {
+    const db = await createDatabase();
+    try {
+        const cache = await db.query(`
+            insert into public.question_cache (
+                user_id, word_id, level, question_type, round_type, quality_status,
+                question_text, options, answer, option_meanings, correct_meaning,
+                variant_slot, cache_state, question_fingerprint
+            ) values (
+                $1::uuid, $2::uuid, 'middle', '1', 'primary', 'ready',
+                'The child ate an ___.', '[]'::jsonb, 'A', '[]'::jsonb,
+                'a fruit', 1, 'active', 'fk-protected-cache'
+            ) returning id
+        `, [USER_ID, WORD_ID]);
+        const challenge = await db.query(`
+            insert into public.quiz_challenges (test_id, user_id, level, expires_at)
+            values ('fk-protection-test', $1::uuid, 'middle', now() + interval '1 hour')
+            returning id
+        `, [USER_ID]);
+        await db.query(`
+            insert into public.quiz_challenge_questions (
+                challenge_id, ordinal, meaning_id, cache_question_id, stem, question_snapshot, history_expires_at
+            ) values ($1::uuid, 1, $2::uuid, $3::uuid, 'The child ate an ___.', '{}'::jsonb, now() + interval '30 days')
+        `, [challenge.rows[0].id, WORD_ID, cache.rows[0].id]);
+
+        await fenceWord(db);
+
+        const preserved = await db.query(
+            'select cache_state from public.question_cache where id = $1::uuid',
+            [cache.rows[0].id]
+        );
+        assert.deepEqual(preserved.rows, [{ cache_state: 'retired' }]);
+    } finally {
+        await db.close();
+    }
+});
+
 test('publish rejects an obsolete job version even if stale lease fields remain', async () => {
     const db = await createDatabase();
     try {

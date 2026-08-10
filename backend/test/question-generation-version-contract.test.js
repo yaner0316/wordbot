@@ -53,6 +53,17 @@ test('fence locks the exact owned word before incrementing its version and upser
     assert.match(body, /lease_owner\s*=\s*null/i);
 });
 
+test('cache cleanup preserves rows referenced by formal challenge questions', () => {
+    const hardening = fs.readFileSync(path.join(
+        __dirname, '..', 'migrations', '20260810_word_edit_cache_fk_hardening.sql'
+    ), 'utf8');
+    assert.match(hardening, /retire_or_delete_word_question_cache/i);
+    assert.match(hardening, /cache_state\s*=\s*'retired'/i);
+    assert.match(hardening, /quiz_challenge_questions[\s\S]*cache_question_id\s*=\s*cache\.id/i);
+    assert.match(hardening, /delete from public\.question_cache[\s\S]*not exists/i);
+    assert.doesNotMatch(hardening, /delete from public\.quiz_challenge_questions/i);
+});
+
 test('enqueue, claim, lease transitions, and publish all require the current word version', () => {
     const enqueue = functionBody('enqueue_question_generation_job_if_needed');
     assert.match(enqueue, /for update/i);

@@ -52,6 +52,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260806_word_edit_generation_version.sql',
       '20260807_formal_quiz_challenges.sql',
       '20260808_formal_bad_question_replacement.sql',
+      '20260810_word_edit_cache_fk_hardening.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
