@@ -716,7 +716,7 @@ test('formal submission replaces a void question from the same meaning cache pai
                 word_record_id: row.source_word_record_id,
                 context_cn: row.context_zh,
                 ...(row.variant_slot === 2
-                    ? { cache_state: 'reserved_next_day', available_from: '2999-01-01T00:00:00.000Z' }
+                    ? { cache_state: 'reserved_next_day', available_from: '2020-01-01T00:00:00.000Z' }
                     : {}),
             })),
             submitAssessments: async inputs => {
@@ -756,6 +756,50 @@ test('formal submission replaces a void question from the same meaning cache pai
     assert.equal(calls.some(([name]) => name === 'invalidateFormalQuizQuestion'), true);
     assert.equal(calls.some(([name]) => name === 'replaceFormalQuizQuestion'), true);
     assert.equal(calls.some(([name, cacheId]) => name === 'incrementCacheUsedCount' && cacheId === bad.cacheRecordId), false);
+});
+
+test('formal submission does not use a reserved replacement before its availability time', async () => {
+    const calls = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getUserByUsername: async username => ({ username }),
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10).map(row => ({
+                ...row,
+                word_record_id: row.source_word_record_id,
+                context_cn: row.context_zh,
+                ...(row.variant_slot === 2
+                    ? { cache_state: 'reserved_next_day', available_from: '2999-01-01T00:00:00.000Z' }
+                    : {}),
+            })),
+            submitAssessments: async inputs => {
+                calls.push(['submitAssessments', inputs]);
+                return inputs.map(input => ({ id: `assessment-${input.sourceWordRecordId}`, ...input }));
+            },
+            updateWordMastery: async (...args) => calls.push(['updateWordMastery', args]),
+            incrementCacheUsedCount: async cacheId => calls.push(['incrementCacheUsedCount', cacheId]),
+            invalidateFormalQuizQuestion: async input => {
+                calls.push(['invalidateFormalQuizQuestion', input]);
+                return { invalidated: true, replacement_required: true };
+            },
+            replaceFormalQuizQuestion: async input => calls.push(['replaceFormalQuizQuestion', input]),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+    quiz.questions[0].id = 'challenge-question-1';
+    quiz.questions[0].answer = '';
+    quiz.questions[0].correctAnswer = '';
+    const result = await dataSource.submitAnswers(
+        'qiuqiu',
+        quiz.testId,
+        quiz.questions.map(() => ({ option: 0, confidence: 'sure' }))
+    );
+
+    assert.equal(result.code, 'FORMAL_REPLACEMENT_NOT_READY');
+    assert.equal(result.replacementQuestions.length, 0);
+    assert.equal(calls.some(([name]) => name === 'replaceFormalQuizQuestion'), false);
 });
 
 test('supabase quiz generation falls back to memory when quiz_sessions table is missing', async () => {

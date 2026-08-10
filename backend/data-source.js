@@ -43,7 +43,7 @@ function isReplacementCacheAvailable(row, now = Date.now()) {
     if (!['active', 'reserved_next_day'].includes(normalized.cacheState)) return false;
     if (normalized.cacheState === 'reserved_next_day') {
         const availableAt = Date.parse(String(normalized.availableFrom || ''));
-        if (!Number.isFinite(availableAt)) return false;
+        if (!Number.isFinite(availableAt) || availableAt > now) return false;
     }
     return true;
 }
