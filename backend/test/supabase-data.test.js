@@ -2758,6 +2758,34 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
     assert.equal(client.queries.includes('question_generation_jobs'), true);
 });
 
+test('Supabase word editor reads newly entered words from the authoritative words table', async () => {
+    const client = seededClient();
+    client.db.words.push({
+        id: 'word-new',
+        feishu_record_id: 'rec-word-new',
+        user_id: 'user-1',
+        word: 'cushion',
+        meaning_en: 'a soft support',
+        meaning_zh: '垫子',
+        context_en: 'The student used a cushion.',
+        context_zh: '学生用了一个垫子。',
+        distractors: ['pillow'],
+        mastery_status: 'pending',
+        entered_at: '2026-08-10T10:00:00.000Z',
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    const found = await adapter.getWord('qiuqiu', 'cushion');
+    assert.equal(found.word, 'cushion');
+    assert.equal(found.meaning, 'a soft support');
+    assert.equal(found.cnMeaning, '垫子');
+    assert.equal(found.record_id, 'rec-word-new');
+
+    const page = await adapter.listUserWords('qiuqiu', { page: 1, pageSize: 20 });
+    assert.equal(page.total, 2);
+    assert.equal(page.words.some(word => word.word === 'cushion'), true);
+});
+
 test('Supabase formal history keeps the exact submitted stem and options', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],

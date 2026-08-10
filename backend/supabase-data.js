@@ -353,6 +353,75 @@ async function getAssessmentsForUserWithClient(client, username) {
     return decorateAssessmentRows(rows, user);
 }
 
+function mapSupabaseWordRecord(row, user, partsOfSpeech = []) {
+    const mastered = String(row?.mastery_status || '').trim().toLowerCase() === 'mastered';
+    return {
+        word: String(row?.word || '').trim(),
+        meaning: String(row?.meaning_en || '').trim(),
+        cnMeaning: String(row?.meaning_zh || '').trim(),
+        context: String(row?.context_en || '').trim(),
+        contextCN: String(row?.context_zh || '').trim(),
+        distractors: Array.isArray(row?.distractors) ? row.distractors.join(',') : String(row?.distractors || '').trim(),
+        status: mastered ? 'optF5P0W3O' : 'Pending',
+        mastery_status: row?.mastery_status || 'pending',
+        qualityFlags: Array.isArray(row?.quality_flags) ? row.quality_flags.join(',') : String(row?.quality_flags || '').trim(),
+        qualityNote: String(row?.quality_note || '').trim(),
+        level: row?.level || '',
+        entered_at: row?.entered_at || null,
+        record_id: row?.feishu_record_id || row?.id || '',
+        word_id: row?.id || '',
+        user: user?.username || '',
+        POS: partsOfSpeech.join(', '),
+        parts_of_speech: partsOfSpeech,
+    };
+}
+
+async function getWordWithClient(client, username, word) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const target = String(word || '').trim().toLowerCase();
+    if (!target) return null;
+    const rows = await getWordsForUserWithClient(client, user.username, null);
+    const row = rows.find(item => String(item.word || '').trim().toLowerCase() === target);
+    return row ? mapSupabaseWordRecord(row, user, row.parts_of_speech || []) : null;
+}
+
+async function getWordByRecordIdWithClient(client, recordId, username = '') {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const target = String(recordId || '').trim();
+    if (!target) return null;
+    const rows = await getWordsForUserWithClient(client, user.username, null);
+    const row = rows.find(item => String(item.id || '').trim() === target
+        || String(item.feishu_record_id || '').trim() === target);
+    return row ? mapSupabaseWordRecord(row, user, row.parts_of_speech || []) : null;
+}
+
+async function listUserWordsWithClient(client, username, options = {}) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return { words: [], page: 1, pageSize: 20, total: 0, totalPages: 1 };
+    const pageSize = Math.max(1, Math.min(50, Number(options.pageSize) || 20));
+    const page = Math.max(1, Number(options.page) || 1);
+    const status = String(options.status || '').trim();
+    const rows = await getWordsForUserWithClient(client, user.username, null);
+    const filtered = rows
+        .filter(row => !status
+            || (status === 'optF5P0W3O' && row.mastery_status === 'mastered')
+            || (status === 'Pending' && row.mastery_status !== 'mastered'))
+        .sort((left, right) => String(left.word || '').localeCompare(String(right.word || '')));
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * pageSize;
+    return {
+        words: filtered.slice(start, start + pageSize).map(row => mapSupabaseWordRecord(row, user, row.parts_of_speech || [])),
+        page: safePage,
+        pageSize,
+        total,
+        totalPages,
+    };
+}
+
 function toHistoryAnswer(row) {
     const submitted = String(row?.submitted_answer || '').trim();
     const [option, confidence = ''] = submitted.split('|');
@@ -2639,6 +2708,9 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         updateUserLearningSettings: (username, requestedLevel) =>
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
+        getWord: (username, word) => getWordWithClient(client, username, word),
+        getWordByRecordId: (recordId, username) => getWordByRecordIdWithClient(client, recordId, username),
+        listUserWords: (username, options) => listUserWordsWithClient(client, username, options),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
         getQuizHistory: (username, mode) => getQuizHistoryWithClient(client, username, mode),
         getAssessmentsForTest: (username, testId) => getAssessmentsForTestWithClient(client, username, testId),
@@ -2707,6 +2779,9 @@ module.exports = {
     getUserLearningSettings: defaultAdapter.getUserLearningSettings,
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
+    getWord: defaultAdapter.getWord,
+    getWordByRecordId: defaultAdapter.getWordByRecordId,
+    listUserWords: defaultAdapter.listUserWords,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
     getQuizHistory: defaultAdapter.getQuizHistory,
     getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
