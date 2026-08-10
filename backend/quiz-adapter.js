@@ -580,6 +580,10 @@ async function submitQuizWithDataSource({
                 invalid: true,
                 replacementRequired: true,
                 confidence: submitted.confidence,
+                type: question.type || question.question_type,
+                question: String(question.context || question.questionText || '').trim(),
+                options: Array.isArray(question.options) ? question.options : [],
+                answer: correctAnswer,
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
                 optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
             });
@@ -599,6 +603,10 @@ async function submitQuizWithDataSource({
                 answer: correctAnswer,
                 correct: existingCorrect,
                 confidence: existing.answer_confidence || String(existing.submitted_answer || '').split('|')[1] || '',
+                type: question.type || question.question_type,
+                question: String(question.context || question.questionText || '').trim(),
+                options: Array.isArray(question.options) ? question.options : [],
+                answer: correctAnswer,
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
                 optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
             });
@@ -633,6 +641,10 @@ async function submitQuizWithDataSource({
             answer: correctAnswer,
             correct: isCorrect,
             confidence: submitted.confidence,
+            type: question.type || question.question_type,
+            question: String(question.context || question.questionText || '').trim(),
+            options: Array.isArray(question.options) ? question.options : [],
+            answer: correctAnswer,
             translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
             optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
         });
