@@ -1018,6 +1018,59 @@ test('repeated submit after the first request deletes the session returns the st
     assert.equal(assessments.length, 10);
 });
 
+test('formal submission closes the authoritative challenge, including an idempotent re-submit', async () => {
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        type: 1,
+        word: `word${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        record_id: `rec-word-${index + 1}`,
+        source: 'question_cache',
+        context: `Context ${index + 1}`,
+        options: ['A', 'B', 'C', 'D'],
+        answer: 'A',
+        correctAnswer: 'A',
+    }));
+    const assessments = [];
+    const closedChallenges = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getFormalQuizChallenge: async () => ({ questions }),
+            getAssessmentsForUser: async () => assessments,
+            submitAssessment: async input => {
+                const record = {
+                    id: `assessment-${assessments.length + 1}`,
+                    test_id: input.testId,
+                    word_snapshot: input.word,
+                    source_word_record_id: input.sourceWordRecordId,
+                    submitted_answer: input.yourAnswer,
+                    answer_confidence: input.confidence,
+                    correct_answer: input.correctAnswer,
+                    is_correct: input.correctness,
+                    assessed_at: new Date().toISOString(),
+                };
+                assessments.push(record);
+                return record;
+            },
+            completeFormalQuizChallenge: async (...args) => {
+                closedChallenges.push(args);
+                return { test_id: args[1], status: 'submitted' };
+            },
+            updateWordMastery: async () => [],
+            incrementCacheUsedCount: async () => ({}),
+        },
+    });
+    const answers = questions.map(() => ({ option: 0, confidence: 'sure' }));
+
+    await dataSource.submitAnswers('qiuqiu', 'real-close-challenge', answers);
+    await dataSource.submitAnswers('qiuqiu', 'real-close-challenge', answers);
+
+    assert.deepEqual(closedChallenges, [
+        ['qiuqiu', 'real-close-challenge'],
+        ['qiuqiu', 'real-close-challenge'],
+    ]);
+    assert.equal(assessments.length, 10);
+});
+
 test('partial persisted assessment resumes the same session without inserting the completed question twice', async () => {
     const questions = [
         { type: 1, word: 'word1', record_id: 'rec-word-1', context: 'Context 1', options: ['A', 'B', 'C', 'D'], answer: 'A', correctAnswer: 'A' },

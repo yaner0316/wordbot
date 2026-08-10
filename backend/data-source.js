@@ -416,6 +416,12 @@ function loadSupabaseDataSource() {
         return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
     }
 
+    async function completeFormalChallengeIfSubmitted(user, testId, result) {
+        if (!isRealAssessment(testId) || !result || result.replacementRequired) return;
+        if (typeof supabaseData.completeFormalQuizChallenge !== 'function') return;
+        await supabaseData.completeFormalQuizChallenge(user, testId);
+    }
+
     async function submitAnswersOnce(user, testId, answers) {
         const key = `${normalizeUserKey(user)}:${testId}`;
         let questions = quizQuestionsByTestId.get(key);
@@ -426,7 +432,10 @@ function loadSupabaseDataSource() {
                 if (!questions) {
                     const existingAssessments = await getSupabaseQuizAssessments(user, testId);
                     const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
-                    if (existingResult) return existingResult;
+                    if (existingResult) {
+                        await completeFormalChallengeIfSubmitted(user, testId, existingResult);
+                        return existingResult;
+                    }
                     if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
                     throw new Error('FORMAL_CHALLENGE_NOT_FOUND');
                 }
@@ -437,7 +446,10 @@ function loadSupabaseDataSource() {
             if (!questions) {
                 const existingAssessments = await getSupabaseQuizAssessments(user, testId);
                 const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
-                if (existingResult) return existingResult;
+                if (existingResult) {
+                    await completeFormalChallengeIfSubmitted(user, testId, existingResult);
+                    return existingResult;
+                }
                 if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
                 throw new Error('QUIZ_SESSION_NOT_FOUND');
             }
@@ -445,7 +457,10 @@ function loadSupabaseDataSource() {
         const existingAssessments = await getSupabaseQuizAssessments(user, testId);
         assertFormalQuizIsCompleteAndCacheOnly(testId, questions);
         const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, questions.length);
-        if (existingResult) return existingResult;
+        if (existingResult) {
+            await completeFormalChallengeIfSubmitted(user, testId, existingResult);
+            return existingResult;
+        }
         const result = await submitQuizWithDataSource({
             username: user,
             testId,
@@ -512,6 +527,7 @@ function loadSupabaseDataSource() {
                 },
             };
         }
+        await completeFormalChallengeIfSubmitted(user, testId, result);
         if (typeof supabaseData.applyQuizCacheLifecycle === 'function') {
             try {
                 await supabaseData.applyQuizCacheLifecycle({ userId: user, questions, results: result.results || [] });

@@ -2267,6 +2267,31 @@ async function updateFormalQuizChallengeProgressWithClient(client, username, tes
     return data ? { ...data, progress: normalizeFormalChallengeProgress(data.session_state) } : null;
 }
 
+async function completeFormalQuizChallengeWithClient(client, username, testId) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return null;
+    const normalizedTestId = requireTestId(testId);
+    const { data: completed, error: completeError } = await client
+        .from('quiz_challenges')
+        .update({ status: 'submitted', submitted_at: toIsoString(Date.now()) })
+        .eq('test_id', normalizedTestId)
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .select('*')
+        .maybeSingle();
+    ensureNoError(completeError, 'completeFormalQuizChallenge');
+    if (completed) return completed;
+
+    const { data: existing, error: existingError } = await client
+        .from('quiz_challenges')
+        .select('*')
+        .eq('test_id', normalizedTestId)
+        .eq('user_id', user.id)
+        .maybeSingle();
+    ensureNoError(existingError, 'completeFormalQuizChallenge');
+    return existing?.status === 'submitted' ? existing : null;
+}
+
 async function invalidateFormalQuizQuestionWithClient(client, options = {}) {
     const username = String(options.username || '').trim();
     const user = await getUserByUsernameWithClient(client, username);
@@ -2621,6 +2646,8 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             getFormalQuizChallengeWithClient(client, username, testId),
         updateFormalQuizChallengeProgress: (username, testId, progress) =>
             updateFormalQuizChallengeProgressWithClient(client, username, testId, progress),
+        completeFormalQuizChallenge: (username, testId) =>
+            completeFormalQuizChallengeWithClient(client, username, testId),
         invalidateFormalQuizQuestion: input => invalidateFormalQuizQuestionWithClient(client, input),
         replaceFormalQuizQuestion: input => replaceFormalQuizQuestionWithClient(client, input),
         createFormalQuizChallenge: input => createFormalQuizChallengeWithClient(client, input),
@@ -2685,6 +2712,7 @@ module.exports = {
     createFormalQuizChallenge: defaultAdapter.createFormalQuizChallenge,
     getFormalQuizChallenge: defaultAdapter.getFormalQuizChallenge,
     updateFormalQuizChallengeProgress: defaultAdapter.updateFormalQuizChallengeProgress,
+    completeFormalQuizChallenge: defaultAdapter.completeFormalQuizChallenge,
     invalidateFormalQuizQuestion: defaultAdapter.invalidateFormalQuizQuestion,
     replaceFormalQuizQuestion: defaultAdapter.replaceFormalQuizQuestion,
     getActiveFormalQuizChallenge: defaultAdapter.getActiveFormalQuizChallenge,
