@@ -362,9 +362,34 @@ function toHistoryAnswer(row) {
     };
 }
 
-function toHistoryQuestion(row) {
+function normalizeHistoryQuestionText(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+async function getHistoryQuestionFeedbackWithClient(client, rows) {
+    const userIds = [...new Set((rows || []).map(row => String(row?.user_id || '').trim()).filter(Boolean))];
+    if (!userIds.length) return new Map();
+    const cacheRows = await fetchAllRows(
+        () => client
+            .from('question_cache')
+            .select('id, user_id, word_id, source_word_record_id, question_text, context_zh, option_meanings')
+            .in('user_id', userIds),
+        'getQuizHistory.questionFeedback'
+    );
+    const byKey = new Map();
+    for (const cacheRow of cacheRows) {
+        const key = `${cacheRow.user_id}:${cacheRow.word_id}:${normalizeHistoryQuestionText(cacheRow.question_text)}`;
+        if (!byKey.has(key)) byKey.set(key, cacheRow);
+    }
+    return byKey;
+}
+
+function toHistoryQuestion(row, feedback = {}) {
     const question = String(row?.question_text || '').trim();
     const options = Array.isArray(row?.options) ? row.options.map(value => String(value || '').trim()).filter(Boolean) : [];
+    const optionMeanings = Array.isArray(row?.option_meanings)
+        ? row.option_meanings
+        : Array.isArray(feedback?.option_meanings) ? feedback.option_meanings : [];
     const missingFields = [
         ...(question ? [] : ['question_text']),
         ...(options.length ? [] : ['options']),
@@ -376,7 +401,9 @@ function toHistoryQuestion(row) {
         word: String(row?.word_snapshot || '').trim(),
         question: question || '这是一条早期考核记录，当时没有保存完整题目。答题结果仍然保留。',
         type: Number(row?.question_type) || 1,
+        contextCN: String(row?.context_zh || row?.contextCN || feedback?.context_zh || '').trim(),
         options,
+        optionMeanings: optionMeanings.map(value => String(value || '').trim()),
         yourAnswer: answer.option,
         confidence: answer.confidence,
         correctAnswer: String(row?.correct_answer || '').trim(),
@@ -389,6 +416,7 @@ function toHistoryQuestion(row) {
 async function getQuizHistoryWithClient(client, username, mode = 'real') {
     const normalizedMode = normalizeAssessmentMode(mode);
     const rows = await getAssessmentsForUserWithClient(client, username);
+    const feedbackByKey = await getHistoryQuestionFeedbackWithClient(client, rows);
     const groups = new Map();
     for (const row of rows) {
         if (getAssessmentMode(row.test_id) !== normalizedMode) continue;
@@ -401,7 +429,8 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
         const group = groups.get(testId);
         const timestamp = Date.parse(String(row.assessed_at || row.created_at || '')) || 0;
         if (!group.time || (timestamp && timestamp < group.time)) group.time = timestamp;
-        const question = toHistoryQuestion(row);
+        const feedbackKey = `${row.user_id}:${row.word_id}:${normalizeHistoryQuestionText(row.question_text)}`;
+        const question = toHistoryQuestion(row, feedbackByKey.get(feedbackKey));
         group.questions.push(question);
         group.total++;
         if (question.isCorrect) group.correct++;

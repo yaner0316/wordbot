@@ -2761,6 +2761,12 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
 test('Supabase formal history keeps the exact submitted stem and options', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        question_cache: [{
+            id: 'cache-citizen-1', user_id: 'user-1', word_id: 'meaning-citizen',
+            question_text: 'Every good _____ obeys the law.',
+            context_zh: '每一个好公民都应遵守法律。',
+            option_meanings: ['公民', '访客', '老师', '歌手'],
+        }],
         assessments: [
             {
                 id: 'assessment-1', user_id: 'user-1', word_id: 'meaning-citizen', test_id: 'real-history-1',
@@ -2795,8 +2801,10 @@ test('Supabase formal history keeps the exact submitted stem and options', async
             meaningId: 'meaning-citizen',
             word: 'citizen',
             question: 'Every good _____ obeys the law.',
+            contextCN: '每一个好公民都应遵守法律。',
             type: 1,
             options: ['A. citizen', 'B. visitor', 'C. teacher', 'D. singer'],
+            optionMeanings: ['公民', '访客', '老师', '歌手'],
             yourAnswer: 'B',
             confidence: 'sure',
             correctAnswer: 'A',

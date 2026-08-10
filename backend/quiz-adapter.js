@@ -581,6 +581,7 @@ async function submitQuizWithDataSource({
                 replacementRequired: true,
                 confidence: submitted.confidence,
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
+                optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
             });
             continue;
         }
@@ -599,6 +600,7 @@ async function submitQuizWithDataSource({
                 correct: existingCorrect,
                 confidence: existing.answer_confidence || String(existing.submitted_answer || '').split('|')[1] || '',
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
+                optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
             });
             continue;
         }
@@ -632,6 +634,7 @@ async function submitQuizWithDataSource({
             correct: isCorrect,
             confidence: submitted.confidence,
             translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
+            optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
         });
     }
 

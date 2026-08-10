@@ -702,6 +702,8 @@ test('supabase quiz generation stores questions for submitAnswers routing', asyn
     assert.equal(quiz.diagnostics.dataSource, 'supabase');
     assert.equal(result.correct, 10);
     assert.equal(result.total, 10);
+    assert.equal(result.results[0].translation, quiz.questions[0].contextCN);
+    assert.deepEqual(result.results[0].optionMeanings, quiz.questions[0].optionMeanings);
 });
 
 test('generateQuiz closes an already-submitted active challenge before creating a fresh formal challenge', async () => {
