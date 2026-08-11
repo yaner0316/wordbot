@@ -334,6 +334,35 @@ async function getWordsForUserWithClient(client, username, level) {
     });
 }
 
+// Formal challenge selection does not need the parts-of-speech join used by
+// the parent editor. Keep this path narrow so login/challenge generation does
+// not depend on a second table query.
+async function getQuizWordsForUserWithClient(client, username, level) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return [];
+    const effectiveLevel = normalizeOptionalLearningLevel(level);
+    const rows = await fetchAllRows(
+        () => {
+            let query = client
+                .from('words')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('entered_at', { ascending: true })
+                .order('id', { ascending: true });
+            if (effectiveLevel) query = query.eq('level', effectiveLevel);
+            return query;
+        },
+        'getQuizWordsForUser'
+    );
+    return rows.map(row => ({
+        ...row,
+        username: user.username,
+        username_key: user.username_key,
+        POS: row.POS || row.pos || '',
+        parts_of_speech: Array.isArray(row.parts_of_speech) ? row.parts_of_speech : [],
+    }));
+}
+
 async function getAssessmentsForUser(username) {
     return getAssessmentsForUserWithClient(supabase, username);
 }
@@ -349,6 +378,21 @@ async function getAssessmentsForUserWithClient(client, username) {
             .order('assessed_at', { ascending: true })
             .order('id', { ascending: true }),
         'getAssessmentsForUser'
+    );
+    return decorateAssessmentRows(rows, user);
+}
+
+async function getQuizAssessmentsForUserWithClient(client, username) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return [];
+    const rows = await fetchAllRows(
+        () => client
+            .from('assessments')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('assessed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getQuizAssessmentsForUser'
     );
     return decorateAssessmentRows(rows, user);
 }
@@ -2717,7 +2761,7 @@ async function getActiveQuizSessionWithClient(client, username, mode = 'real', o
     if (!user) return null;
     let query = client
         .from('quiz_sessions')
-        .select('*')
+        .select('test_id, user_id, questions, created_at, expires_at, session_state')
         .eq('user_id', user.id)
         .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()));
 
@@ -2858,6 +2902,14 @@ function summarizeSupabaseWordProgress(words, assessments) {
     };
 }
 
+async function getStatsWordsWithClient(client, user) {
+    return getQuizWordsForUserWithClient(client, user.username);
+}
+
+async function getStatsAssessmentsWithClient(client, user) {
+    return getQuizAssessmentsForUserWithClient(client, user.username);
+}
+
 async function getStatsWithClient(client, username) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) {
@@ -2880,8 +2932,8 @@ async function getStatsWithClient(client, username) {
     }
 
     const [words, assessments] = await Promise.all([
-        getWordsForUserWithClient(client, user.username),
-        getAssessmentsForUserWithClient(client, user.username),
+        getStatsWordsWithClient(client, user),
+        getStatsAssessmentsWithClient(client, user),
     ]);
     const submitted = assessments.filter(row => row.is_correct !== null && row.is_correct !== undefined);
     const realRecords = submitted.filter(row => isRealAssessment(row.test_id));
@@ -2921,10 +2973,12 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         updateUserLearningSettings: (username, requestedLevel) =>
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
+        getQuizWordsForUser: (username, level) => getQuizWordsForUserWithClient(client, username, level),
         getWord: (username, word) => getWordWithClient(client, username, word),
         getWordByRecordId: (recordId, username) => getWordByRecordIdWithClient(client, recordId, username),
         listUserWords: (username, options) => listUserWordsWithClient(client, username, options),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
+        getQuizAssessmentsForUser: username => getQuizAssessmentsForUserWithClient(client, username),
         getFormalDisplayEventsForUser: username => getFormalDisplayEventsForUserWithClient(client, username),
         getQuizHistory: (username, mode) => getQuizHistoryWithClient(client, username, mode),
         getAssessmentsForTest: (username, testId) => getAssessmentsForTestWithClient(client, username, testId),
@@ -2997,10 +3051,12 @@ module.exports = {
     getUserLearningSettings: defaultAdapter.getUserLearningSettings,
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
+    getQuizWordsForUser: defaultAdapter.getQuizWordsForUser,
     getWord: defaultAdapter.getWord,
     getWordByRecordId: defaultAdapter.getWordByRecordId,
     listUserWords: defaultAdapter.listUserWords,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
+    getQuizAssessmentsForUser: defaultAdapter.getQuizAssessmentsForUser,
     getQuizHistory: defaultAdapter.getQuizHistory,
     getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
     getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,

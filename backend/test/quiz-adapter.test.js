@@ -76,6 +76,27 @@ test('meaning fallback uses a concise Chinese sense when the stored meaning is t
     assert.equal(quiz.questions.every(question => question.context.length <= 50), true);
 });
 
+test('formal quiz prefers the narrow Supabase quiz readers when available', async () => {
+    const calls = [];
+    const words = Array.from({ length: 12 }, (_, index) => word(index + 1));
+    const dataSource = {
+        name: 'supabase',
+        getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+        getWordsForUser: async () => { calls.push('editor-words'); return words; },
+        getQuizWordsForUser: async () => { calls.push('quiz-words'); return words; },
+        getAssessmentsForUser: async () => { calls.push('editor-assessments'); return []; },
+        getQuizAssessmentsForUser: async () => { calls.push('quiz-assessments'); return []; },
+        getQuestionCache: async () => Array.from({ length: 12 }, (_, index) => cacheRow(index + 1)),
+    };
+
+    const quiz = await generateQuizWithDataSource({
+        username: 'qiuqiu', level: MIDDLE, mode: 'real', dataSource,
+        createId: () => 'narrow-readers',
+    });
+
+    assert.deepEqual(calls, ['quiz-words', 'quiz-assessments']);
+});
+
 test('real quiz blocks a formal challenge until seven or eight cached questions reach ten', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1));
     for (const readyCount of [7, 8]) {

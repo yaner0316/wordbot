@@ -318,8 +318,8 @@ async function generateQuizWithDataSource({
     const canonicalUsername = user?.username || username;
 
     const [wordRows, assessmentRows, cacheRows, displayRows] = await Promise.all([
-        dataSource.getWordsForUser(username),
-        dataSource.getAssessmentsForUser(username),
+        (dataSource.getQuizWordsForUser || dataSource.getWordsForUser)(username),
+        (dataSource.getQuizAssessmentsForUser || dataSource.getAssessmentsForUser)(username),
         dataSource.getQuestionCache(username, effectiveLevel, roundType),
         typeof dataSource.getFormalDisplayEventsForUser === 'function'
             ? dataSource.getFormalDisplayEventsForUser(username)

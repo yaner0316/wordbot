@@ -743,6 +743,22 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
     ]);
 });
 
+test('stats and formal quiz word reads do not join the parent-only parts-of-speech table', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-1', user_id: 'user-1', word: 'apple', mastery_status: 'pending' }],
+        assessments: [],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    await adapter.getStats('qiuqiu');
+    await adapter.getQuizWordsForUser('qiuqiu');
+
+    assert.equal(client.readOperations.some(row => row.table === 'word_parts_of_speech'), false);
+    assert.ok(client.readOperations.filter(row => row.table === 'words').length >= 2);
+    assert.ok(client.readOperations.filter(row => row.table === 'assessments').length >= 1);
+});
+
 test('addWords requires confirmation before inserting a spelling that already exists for the child', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);
