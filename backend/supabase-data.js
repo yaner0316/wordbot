@@ -794,24 +794,27 @@ async function saveGameStateWithClient(client, username, value) {
 async function getQuestionCacheStatusWithClient(client, username) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return { configured: true, total: 0, ready: 0, byLevel: {}, byRoundType: {} };
-    const rows = await fetchAllRows(
-        () => client
-            .from('question_cache')
-            .select('*')
-            .eq('user_id', user.id)
-            .order('generated_at', { ascending: true })
-            .order('id', { ascending: true }),
-        'getQuestionCacheStatus'
-    );
-    const statusRows = await toQuestionCacheStatusRecordsWithClient(client, user, rows);
-    const [wordRows, assessmentRows] = await Promise.all([
-        getWordsForUserWithClient(client, username),
-        getAssessmentsForUserWithClient(client, username),
+    const [rows, wordRows, assessmentRows] = await Promise.all([
+        fetchAllRows(
+            () => client
+                .from('question_cache')
+                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
+                .eq('user_id', user.id)
+                .order('generated_at', { ascending: true })
+                .order('id', { ascending: true }),
+            'getQuestionCacheStatus'
+        ),
+        getQuizWordsForUserWithClient(client, username),
+        getQuizAssessmentsForUserWithClient(client, username),
     ]);
+    const wordsById = new Map(wordRows.map(row => [String(row.id || ''), row]));
+    const statusRows = rows.map(row => toQuestionCacheStatusRecord(row, {
+        user,
+        word: wordsById.get(String(row.word_id || '')),
+    }));
     const sourceRecordIdByWordId = new Map(
         wordRows.map(row => [String(row.id || ''), String(row.feishu_record_id || row.id || '')])
     );
-    const wordsById = new Map(wordRows.map(row => [String(row.id || ''), row]));
     const wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username: user.username }));
     const assessmentRecords = assessmentRows.map(row => toFeishuAssessmentRecord(row, {
         username: user.username,
@@ -836,7 +839,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         minAgeMs: WORD_QUIZ_COOLDOWN_MS,
     });
     const jobRows = await fetchAllRows(
-        () => client.from('question_generation_jobs').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+        () => client.from('question_generation_jobs').select('id, word_id, status, reason, attempt_count, next_attempt_at, last_error_code, rejection_reasons, created_at, updated_at').eq('user_id', user.id).order('created_at', { ascending: true }),
         'getQuestionCacheStatus.jobs'
     );
     const generation = summarizeQuestionGenerationJobs(jobRows);
