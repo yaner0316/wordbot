@@ -238,6 +238,28 @@ test('parent addWords endpoint preserves payload contract', async () => {
     });
 });
 
+test('parent addWords endpoint does not return HTTP 200 when the data source reports failure', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu({
+        addWords: async () => ({
+            success: false,
+            code: 'ADD_WORDS_PARTIAL_FAILURE',
+            count: 0,
+            duplicateWords: [{ word: 'apple' }],
+        }),
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/addWords`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
+        });
+
+        assert.equal(response.status, 422);
+        assert.equal((await response.json()).success, false);
+    });
+});
+
 test('parent addWord endpoint forwards level and parts of speech payload', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

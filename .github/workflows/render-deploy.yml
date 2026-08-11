@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: d0f9988a9b27ee56797329809142ed2e7aa8292b
+          ref: e16e17201174f18f317ba22d68bd00920b7ac9f5
           path: web-contract
           persist-credentials: false
 

@@ -743,6 +743,37 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
     ]);
 });
 
+test('addWords requires confirmation before inserting a spelling that already exists for the child', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const before = client.db.words.length;
+
+    const result = await adapter.addWords('qiuqiu', [
+        { word: 'apple', cnMeaning: '另一个释义' },
+    ]);
+
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'DUPLICATE_WORD_CONFIRMATION_REQUIRED');
+    assert.equal(result.count, 0);
+    assert.equal(client.db.words.length, before);
+    assert.equal(result.duplicateWords[0].word, 'apple');
+});
+
+test('addWords reports a per-entry generation-job failure as a failed result', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    }, { failUpsertFor: 'question_generation_jobs' });
+    const adapter = createSupabaseDataAdapter(client);
+    const result = await adapter.addWords('qiuqiu', [
+        { word: 'new-word', meaning: 'a definition' },
+    ]);
+
+    assert.equal(result.success, false);
+    assert.equal(result.count, 0);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /questionGenerationJob/);
+});
+
 test('question cache status summarizes Supabase rows by level', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client, {

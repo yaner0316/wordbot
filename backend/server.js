@@ -610,7 +610,8 @@ app.post('/api/admin/addWords', async (req, res) => {
         });
         const needsConfirmation = result?.code === 'DUPLICATE_WORD_CONFIRMATION_REQUIRED' ||
             result?.code === 'NEW_MEANING_REQUIRES_MEANING';
-        res.status(needsConfirmation ? 409 : 200).json(result);
+        const statusCode = needsConfirmation ? 409 : (result?.success === false ? 422 : 200);
+        res.status(statusCode).json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }

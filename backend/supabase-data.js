@@ -2296,14 +2296,40 @@ async function addWordWithClient(client, input) {
 
 async function addWordsWithClient(client, targetUser, words, options = {}) {
     const entries = normalizeWordInputs(words);
+    const user = await requireUserByUsername(client, targetUser);
     const duplicateInputWords = new Set();
     const seen = new Set();
     for (const entry of entries) {
         if (seen.has(entry.word)) duplicateInputWords.add(entry.word);
         seen.add(entry.word);
     }
+    const existingRows = await getWordsForUserWithClient(client, user.username);
+    const duplicateWords = duplicateValidationEntries(existingRows, user.id, entries);
+    const duplicateWordSet = new Set(duplicateWords.map(item => item.word));
+    if (duplicateWordSet.size && !options.skipDuplicateWords && !options.confirmNewMeanings) {
+        return {
+            success: false,
+            code: 'DUPLICATE_WORD_CONFIRMATION_REQUIRED',
+            count: 0,
+            errors: [],
+            duplicateWords,
+        };
+    }
+    if (duplicateWordSet.size && options.confirmNewMeanings) {
+        const missingMeaning = entries.filter(entry => duplicateWordSet.has(entry.word) && !entry.meaningZh);
+        if (missingMeaning.length) {
+            return {
+                success: false,
+                code: 'NEW_MEANING_REQUIRES_MEANING',
+                count: 0,
+                errors: [],
+                duplicateWords,
+                missingWords: missingMeaning.map(entry => entry.word),
+            };
+        }
+    }
     const entriesToAdd = options.skipDuplicateWords
-        ? entries.filter(entry => !duplicateInputWords.has(entry.word))
+        ? entries.filter(entry => !duplicateWordSet.has(entry.word) && !duplicateInputWords.has(entry.word))
         : entries;
     const errors = [];
     let count = 0;
