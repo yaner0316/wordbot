@@ -598,6 +598,42 @@ test('eligible ready meaning count is separated by learning level', () => {
     assert.deepEqual(counts, { [LEVEL]: 1, [otherLevel]: 1 });
 });
 
+test('eligible ready meaning count requires an unused display-history variant', () => {
+    const rows = [cacheVariant(1, 1), cacheVariant(1, 2)];
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1)],
+        cacheRows: rows,
+        assessmentRecords: [],
+        displayEvents: rows.map((row, index) => ({
+            id: `display-${index + 1}`,
+            user: 'student',
+            meaningId: 'rec-1',
+            stem: row.fields.question_text,
+            displayedAt: NOW - DAY,
+            historyExpiresAt: NOW + DAY,
+            countsForCooldown: true,
+        })),
+        userId: 'student', levels: [LEVEL], now: NOW, minAgeMs: 0,
+    });
+
+    assert.equal(counts[LEVEL], 0);
+});
+
+test('eligible ready meaning count keeps a synonym meaning when one of two variants is unused', () => {
+    const rows = [cacheVariant(1, 1), cacheVariant(1, 2)];
+    const counts = countEligibleReadyMeaningsByLevel({
+        wordRecords: [word(1)], cacheRows: rows, assessmentRecords: [],
+        displayEvents: [{
+            id: 'display-1', user: 'student', meaningId: 'rec-1',
+            stem: rows[0].fields.question_text, displayedAt: NOW - DAY,
+            historyExpiresAt: NOW + DAY, countsForCooldown: true,
+        }],
+        userId: 'student', levels: [LEVEL], now: NOW, minAgeMs: 0,
+    });
+
+    assert.equal(counts[LEVEL], 1);
+});
+
 test('eligible ready meaning count enforces the formal cooldown', () => {
     const recentWord = word(1);
     recentWord.fields.record_time = NOW - (18 * 60 * 60 * 1000) + 1;

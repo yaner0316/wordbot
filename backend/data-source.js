@@ -357,31 +357,63 @@ function loadSupabaseDataSource() {
                 await deleteQuizSessionBestEffort(supabaseData, user, activeSession.test_id);
             }
         }
-        const quiz = await generateQuizWithDataSource({
-            username: user,
-            level,
-            mode,
-            roundType: 'primary',
-            limit: 10,
-            dataSource: supabaseData,
-        });
-        if (!quiz.error && quiz.testId && Array.isArray(quiz.questions)) {
+        const formalMode = (mode || 'real') === 'real';
+        const maxCreateAttempts = formalMode ? 3 : 1;
+        let quiz;
+        for (let attempt = 1; attempt <= maxCreateAttempts; attempt += 1) {
+            quiz = await generateQuizWithDataSource({
+                username: user,
+                level,
+                mode,
+                roundType: 'primary',
+                limit: 10,
+                dataSource: supabaseData,
+            });
+            if (quiz.error || !quiz.testId || !Array.isArray(quiz.questions)) break;
             if ((mode || 'real') === 'real' && formalChallengeReaderAvailable
                 && typeof supabaseData.createFormalQuizChallenge !== 'function') {
                 throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
             }
-            if ((mode || 'real') === 'real' && quiz.questions.length === QUIZ_QUESTION_COUNT
+            if (formalMode && quiz.questions.length === QUIZ_QUESTION_COUNT
                 && typeof supabaseData.createFormalQuizChallenge === 'function') {
-                const challenge = await supabaseData.createFormalQuizChallenge({
-                    username: user,
-                    testId: quiz.testId,
-                    level,
-                    questions: quiz.questions,
-                });
+                let challenge;
+                try {
+                    challenge = await supabaseData.createFormalQuizChallenge({
+                        username: user,
+                        testId: quiz.testId,
+                        level,
+                        questions: quiz.questions,
+                    });
+                } catch (error) {
+                    const stemCollision = String(error?.code || error?.message || error).includes('FORMAL_CHALLENGE_STEM_REUSED');
+                    if (stemCollision && attempt < maxCreateAttempts) continue;
+                    if (stemCollision) {
+                        return {
+                            error: 'Formal challenge is refreshing. Please try again.',
+                            code: 'FORMAL_CHALLENGE_NOT_READY',
+                            source: 'formal_quiz_challenge',
+                            level: level || null,
+                            readyCount: 0,
+                            requiredCount: QUIZ_QUESTION_COUNT,
+                            questions: [],
+                            diagnostics: {
+                                fallbackUsed: false,
+                                state: 'refreshing',
+                                readyCount: 0,
+                                requiredCount: QUIZ_QUESTION_COUNT,
+                                finalQuestionCount: 0,
+                            },
+                        };
+                    }
+                    throw error;
+                }
                 if (!challenge?.challenge_id && !challenge?.challengeId) throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
                 quiz.challengeId = challenge?.challenge_id || challenge?.challengeId || null;
                 quiz.challenge = challenge;
             }
+            break;
+        }
+        if (!quiz.error && quiz.testId && Array.isArray(quiz.questions)) {
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${quiz.testId}`, quiz.questions);
             await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);

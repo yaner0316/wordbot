@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 const {
     buildQuizWordQueue,
+    buildActiveDisplayStemsByMeaning,
     buildRecentQuestionTextsByWord,
     selectCachedQuestionsForWordQueue,
 } = require('./quiz-word-queue');
@@ -105,27 +106,28 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
     };
 }
 
-function toFormalDisplayRecord(row, { username, sourceRecordIdByWordId = new Map() }) {
-    const displayedAt = toMillis(row.displayed_at || row.assessed_at || row.created_at);
+function normalizeFormalDisplayEvent(row, { username, sourceRecordIdByWordId = new Map() }) {
+    const meaningId = String(row.meaning_id || row.meaningId || '').trim();
     return {
-        record_id: row.id || `display-${displayedAt}-${row.meaning_id || ''}`,
-        created_time: displayedAt,
-        fields: {
-            user: row.username || username,
-            test_id: row.test_id || '',
-            assessment_kind: 'formal_display',
-            is_real_assessment: true,
-            record_id: sourceRecordIdByWordId.get(String(row.meaning_id || '').trim())
-                || row.source_record_id
-                || row.meaning_id
-                || '',
-            context: row.stem || row.question_text || '',
-            question_text: row.stem || row.question_text || '',
-            test_time: displayedAt,
-            record_time: displayedAt,
-            is_correct: '',
-        },
+        id: row.id || '',
+        user: row.username || row.user || username,
+        meaningId: sourceRecordIdByWordId.get(meaningId) || row.source_record_id || meaningId,
+        stem: row.stem || row.question_text || '',
+        displayedAt: row.displayed_at || row.displayedAt || row.created_at || '',
+        historyExpiresAt: row.history_expires_at || row.historyExpiresAt || '',
+        countsForCooldown: row.counts_for_cooldown !== false && row.countsForCooldown !== false,
     };
+}
+
+function mergeQuestionTextHistory(...histories) {
+    const merged = new Map();
+    for (const history of histories) {
+        for (const [meaningId, stems] of history || []) {
+            if (!merged.has(meaningId)) merged.set(meaningId, new Set());
+            for (const stem of stems || []) merged.get(meaningId).add(stem);
+        }
+    }
+    return merged;
 }
 
 function toFeishuCacheRow(row, { username }) {
@@ -332,7 +334,7 @@ async function generateQuizWithDataSource({
     const assessmentRecords = assessmentRows.map((row) =>
         toFeishuAssessmentRecord(row, { username: canonicalUsername, sourceRecordIdByWordId })
     );
-    const displayRecords = displayRows.map(row => toFormalDisplayRecord(row, {
+    const displayEvents = displayRows.map(row => normalizeFormalDisplayEvent(row, {
         username: canonicalUsername,
         sourceRecordIdByWordId,
     }));
@@ -342,6 +344,7 @@ async function generateQuizWithDataSource({
         wordRecords,
         cacheRows: questionCacheRows,
         assessmentRecords,
+        displayEvents,
         userId: canonicalUsername,
         level: effectiveLevel,
         limit: wordRecords.length || limit,
@@ -357,9 +360,9 @@ async function generateQuizWithDataSource({
         roundType,
         requireReadyPair: true,
         limit,
-        recentQuestionTextsByWord: buildRecentQuestionTextsByWord(
-            [...assessmentRecords, ...displayRecords],
-            { userId: canonicalUsername }
+        recentQuestionTextsByWord: mergeQuestionTextHistory(
+            buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
+            buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
         ),
         now,
     }).map((question) => ({
@@ -721,7 +724,7 @@ module.exports = {
     submitQuizWithDataSource,
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
-    toFormalDisplayRecord,
+    normalizeFormalDisplayEvent,
     toFeishuCacheRow,
 };
 

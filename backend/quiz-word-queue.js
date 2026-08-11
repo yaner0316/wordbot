@@ -173,9 +173,36 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
     return masteryByRecordId;
 }
 
-function buildFormalDisplaySummary(displayEvents, { userId }) {
+function buildDisplayEventSummary(displayEvents, { userId }) {
     const summary = new Map();
     for (const record of displayEvents || []) {
+        if (userId && userKey(record?.user) !== userKey(userId)) continue;
+        if (record?.countsForCooldown === false) continue;
+        const recordId = fieldValue(record?.meaningId).trim();
+        const displayedAt = timestamp(record?.displayedAt);
+        if (!recordId || !displayedAt) continue;
+        summary.set(recordId, Math.max(summary.get(recordId) || 0, displayedAt));
+    }
+    return summary;
+}
+
+function buildActiveDisplayStemsByMeaning(displayEvents, { userId, now = Date.now() } = {}) {
+    const result = new Map();
+    for (const record of displayEvents || []) {
+        if (userId && userKey(record?.user) !== userKey(userId)) continue;
+        const recordId = fieldValue(record?.meaningId).trim();
+        const questionText = normalizeQuestionText(record?.stem);
+        const historyExpiresAt = timestamp(record?.historyExpiresAt);
+        if (!recordId || !questionText || !historyExpiresAt || historyExpiresAt <= Number(now)) continue;
+        if (!result.has(recordId)) result.set(recordId, new Set());
+        result.get(recordId).add(questionText);
+    }
+    return result;
+}
+
+function buildFormalAssessmentDisplaySummary(assessmentRecords, { userId }) {
+    const summary = new Map();
+    for (const record of assessmentRecords || []) {
         const fields = record?.fields || {};
         if (userId && userKey(fields.user) !== userKey(userId)) continue;
         if (!isFormalAssessment(record)) continue;
@@ -187,10 +214,20 @@ function buildFormalDisplaySummary(displayEvents, { userId }) {
     return summary;
 }
 
-function buildRecentQuestionTextsByWord(displayEvents, { userId, now = Date.now(), historyWindowMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+function mergeLatestTimestamps(...summaries) {
+    const merged = new Map();
+    for (const summary of summaries) {
+        for (const [recordId, value] of summary || []) {
+            merged.set(recordId, Math.max(merged.get(recordId) || 0, value));
+        }
+    }
+    return merged;
+}
+
+function buildRecentQuestionTextsByWord(assessmentRecords, { userId, now = Date.now(), historyWindowMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
     const result = new Map();
     const earliest = Number(now) - historyWindowMs;
-    for (const record of displayEvents || []) {
+    for (const record of assessmentRecords || []) {
         const fields = record.fields || {};
         if (userId && userKey(fields.user) !== userKey(userId)) continue;
         if (!isFormalAssessment(record)) continue;
@@ -203,9 +240,12 @@ function buildRecentQuestionTextsByWord(displayEvents, { userId, now = Date.now(
     }
     return result;
 }
-function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [], userId, level = '', limit = 10, now = Date.now(), minAgeMs = 0 }) {
+function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [], displayEvents = [], userId, level = '', limit = 10, now = Date.now(), minAgeMs = 0 }) {
     const assessmentSummary = buildAssessmentSummary(assessmentRecords, { userId });
-    const formalDisplayByRecordId = buildFormalDisplaySummary(assessmentRecords, { userId });
+    const formalDisplayByRecordId = mergeLatestTimestamps(
+        buildFormalAssessmentDisplaySummary(assessmentRecords, { userId }),
+        buildDisplayEventSummary(displayEvents, { userId })
+    );
     const masteryByRecordId = buildMasteryByRecordId(wordRecords, assessmentRecords);
     const readyCacheRecordIds = level ? buildReadyCacheRecordIds(cacheRows, { userId, level, roundType: 'primary', now }) : new Set();
     const targetUser = userKey(userId);
@@ -226,6 +266,7 @@ function countEligibleReadyMeaningsByLevel({
     cacheRows = [],
     wordRecords = [],
     assessmentRecords = [],
+    displayEvents = [],
     userId,
     levels = [],
     now = Date.now(),
@@ -238,6 +279,7 @@ function countEligibleReadyMeaningsByLevel({
             cacheRows,
             wordRecords,
             assessmentRecords,
+            displayEvents,
             userId,
             level,
             limit: wordRecords.length,
@@ -248,7 +290,11 @@ function countEligibleReadyMeaningsByLevel({
         const validPairRows = filterRowsInValidReadyPrimaryPairs(
             normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now, requireAvailable: false })
         );
+        const recentQuestionTextsByWord = buildActiveDisplayStemsByMeaning(displayEvents, { userId, now });
         counts[level] = new Set(validPairRows
+            .filter(row => isCacheRowAvailable(row, now))
+            .filter(row => !new Set(recentQuestionTextsByWord.get(row.wordRecordId) || [])
+                .has(normalizeQuestionText(row.question.context)))
             .map(row => row.wordRecordId)
             .filter(recordId => queuedRecordIds.has(recordId))).size;
     }
@@ -312,4 +358,5 @@ module.exports = {
     countEligibleReadyMeaningsByLevel,
     selectCachedQuestionsForWordQueue,
     buildRecentQuestionTextsByWord,
+    buildActiveDisplayStemsByMeaning,
 };

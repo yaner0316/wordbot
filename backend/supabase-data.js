@@ -31,6 +31,7 @@ const {
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
     toFeishuCacheRow,
+    normalizeFormalDisplayEvent,
 } = require('./quiz-adapter');
 const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
 const {
@@ -409,17 +410,7 @@ async function getFormalDisplayEventsForUserWithClient(client, username) {
             .order('id', { ascending: true }),
         'getFormalDisplayEventsForUser'
     );
-    return rows.map(row => ({
-        ...row,
-        username: user.username,
-        test_id: row.test_id || '',
-        assessment_kind: 'formal_display',
-        is_real_assessment: true,
-        source_record_id: row.meaning_id || '',
-        question_text: row.stem || '',
-        assessed_at: row.displayed_at || row.created_at,
-        record_time: row.displayed_at || row.created_at,
-    }));
+    return rows.map(row => ({ ...row, username: user.username }));
 }
 
 function mapSupabaseWordRecord(row, user, partsOfSpeech = []) {
@@ -794,7 +785,7 @@ async function saveGameStateWithClient(client, username, value) {
 async function getQuestionCacheStatusWithClient(client, username) {
     const user = await getUserByUsernameWithClient(client, username);
     if (!user) return { configured: true, total: 0, ready: 0, byLevel: {}, byRoundType: {} };
-    const [rows, wordRows, assessmentRows] = await Promise.all([
+    const [rows, wordRows, assessmentRows, displayRows] = await Promise.all([
         fetchAllRows(
             () => client
                 .from('question_cache')
@@ -806,6 +797,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         ),
         getQuizWordsForUserWithClient(client, username),
         getQuizAssessmentsForUserWithClient(client, username),
+        getFormalDisplayEventsForUserWithClient(client, username),
     ]);
     const wordsById = new Map(wordRows.map(row => [String(row.id || ''), row]));
     const statusRows = rows.map(row => toQuestionCacheStatusRecord(row, {
@@ -817,6 +809,10 @@ async function getQuestionCacheStatusWithClient(client, username) {
     );
     const wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username: user.username }));
     const assessmentRecords = assessmentRows.map(row => toFeishuAssessmentRecord(row, {
+        username: user.username,
+        sourceRecordIdByWordId,
+    }));
+    const displayEvents = displayRows.map(row => normalizeFormalDisplayEvent(row, {
         username: user.username,
         sourceRecordIdByWordId,
     }));
@@ -833,6 +829,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         cacheRows: cacheRecords,
         wordRecords,
         assessmentRecords,
+        displayEvents,
         userId: user.username,
         levels: LEVELS,
         now,
@@ -3060,6 +3057,7 @@ module.exports = {
     listUserWords: defaultAdapter.listUserWords,
     getAssessmentsForUser: defaultAdapter.getAssessmentsForUser,
     getQuizAssessmentsForUser: defaultAdapter.getQuizAssessmentsForUser,
+    getFormalDisplayEventsForUser: defaultAdapter.getFormalDisplayEventsForUser,
     getQuizHistory: defaultAdapter.getQuizHistory,
     getAssessmentsForTest: defaultAdapter.getAssessmentsForTest,
     getMasteryAssessmentsForWords: defaultAdapter.getMasteryAssessmentsForWords,

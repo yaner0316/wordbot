@@ -290,13 +290,14 @@ test('elementary fallback uses approved template contexts when stored context is
 });
 
 test('real display history excludes an already displayed cache stem before formal challenge creation', async () => {
+    const now = Date.parse('2026-08-12T00:00:00.000Z');
     const words = Array.from({ length: 10 }, (_, index) => word(index + 1));
     const cacheRows = Array.from({ length: 10 }, (_, index) => [
         cacheRow(index + 1, 1),
         cacheRow(index + 1, 2),
     ]).flat();
     const quiz = await generateQuizWithDataSource({
-        username: 'qiuqiu', level: MIDDLE, mode: 'test', createId: () => 'display-history-filter',
+        username: 'qiuqiu', level: MIDDLE, mode: 'test', now, createId: () => 'display-history-filter',
         dataSource: {
             name: 'supabase',
             getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
@@ -304,10 +305,12 @@ test('real display history excludes an already displayed cache stem before forma
             getAssessmentsForUser: async () => [],
             getFormalDisplayEventsForUser: async () => [{
                 id: 'display-1',
+                user_id: 'user-1',
                 meaning_id: 'word-1',
-                test_id: 'real-previous',
-                stem: 'Variant 1 uses _____ naturally in context.',
-                displayed_at: Date.now() - 24 * 60 * 60 * 1000,
+                stem: '  VARIANT   1 uses _____ naturally in CONTEXT. ',
+                displayed_at: now - 24 * 60 * 60 * 1000,
+                history_expires_at: now + 29 * 24 * 60 * 60 * 1000,
+                counts_for_cooldown: true,
             }],
             getQuestionCache: async () => cacheRows,
         },
@@ -316,4 +319,29 @@ test('real display history excludes an already displayed cache stem before forma
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.questions.some(question => question.cacheRecordId === 'cache-1-1'), false);
     assert.equal(quiz.questions.some(question => question.cacheRecordId === 'cache-1-2'), true);
+});
+
+test('formal display history expires at the exact RPC boundary', async () => {
+    const now = Date.parse('2026-08-12T00:00:00.000Z');
+    const quiz = await generateQuizWithDataSource({
+        username: 'qiuqiu', level: MIDDLE, mode: 'test', now, createId: () => 'display-history-boundary',
+        dataSource: {
+            name: 'supabase',
+            getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+            getWordsForUser: async () => Array.from({ length: 10 }, (_, index) => word(index + 1)),
+            getAssessmentsForUser: async () => [],
+            getFormalDisplayEventsForUser: async () => [{
+                id: 'display-expired', user_id: 'user-1', meaning_id: 'word-1',
+                stem: '  VARIANT   1 uses _____ naturally in context. ',
+                displayed_at: now - 30 * 24 * 60 * 60 * 1000,
+                history_expires_at: now,
+                counts_for_cooldown: true,
+            }],
+            getQuestionCache: async () => Array.from({ length: 10 }, (_, index) => [
+                cacheRow(index + 1, 1), cacheRow(index + 1, 2),
+            ]).flat(),
+        },
+    });
+
+    assert.equal(quiz.questions.some(question => question.cacheRecordId === 'cache-1-1'), true);
 });

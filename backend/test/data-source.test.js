@@ -275,6 +275,71 @@ test('formal challenge creation failure blocks the quiz and legacy session persi
     assert.equal(saved, 0);
 });
 
+test('formal challenge retries a concurrent reused stem with fresh display history', async () => {
+    const now = Date.now();
+    let createCalls = 0;
+    let displayReads = 0;
+    const createdQuestions = [];
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => null,
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            getFormalDisplayEventsForUser: async () => {
+                displayReads += 1;
+                return displayReads === 1 ? [] : [{
+                    id: 'concurrent-display', user_id: 'user-1', meaning_id: 'word-1',
+                    stem: 'Variant 1 uses word1 naturally today.', displayed_at: now,
+                    history_expires_at: now + 30 * 24 * 60 * 60 * 1000,
+                    counts_for_cooldown: false,
+                }];
+            },
+            createFormalQuizChallenge: async input => {
+                createCalls += 1;
+                createdQuestions.push(input.questions);
+                if (createCalls === 1) throw new Error('createFormalQuizChallenge: FORMAL_CHALLENGE_STEM_REUSED');
+                return { challenge_id: 'challenge-retried', test_id: input.testId, question_count: 10 };
+            },
+            saveQuizSession: async () => ({}),
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(createCalls, 2);
+    assert.equal(displayReads, 2);
+    assert.notEqual(createdQuestions[0][0].cacheRecordId, createdQuestions[1][0].cacheRecordId);
+    assert.equal(quiz.challengeId, 'challenge-retried');
+});
+
+test('formal challenge hides a reused-stem database error after bounded retry exhaustion', async () => {
+    let createCalls = 0;
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getActiveFormalQuizChallenge: async () => null,
+            getActiveQuizSession: async () => null,
+            getWordsForUser: async () => formalWordRows(10),
+            getAssessmentsForUser: async () => [],
+            getFormalDisplayEventsForUser: async () => [],
+            getQuestionCache: async () => formalCacheRows(10),
+            createFormalQuizChallenge: async () => {
+                createCalls += 1;
+                throw new Error('createFormalQuizChallenge: FORMAL_CHALLENGE_STEM_REUSED');
+            },
+            saveQuizSession: async () => { throw new Error('must not persist'); },
+        },
+    });
+
+    const quiz = await dataSource.generateQuiz('qiuqiu', 'middle', 'real');
+
+    assert.equal(createCalls, 3);
+    assert.equal(quiz.code, 'FORMAL_CHALLENGE_NOT_READY');
+    assert.equal(quiz.error.includes('FORMAL_CHALLENGE_STEM_REUSED'), false);
+    assert.deepEqual(quiz.questions, []);
+});
+
 
 test('generateQuiz discards a seven-question formal session and refuses its submission', async () => {
     const questions = Array.from({ length: 7 }, (_, index) => ({

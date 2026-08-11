@@ -792,6 +792,7 @@ test('addWords reports a per-entry generation-job failure as a failed result', a
 
 test('question cache status summarizes Supabase rows by level', async () => {
     const client = seededClient();
+    client.db.quiz_display_events = [];
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '中文释义'])),
     });
@@ -901,6 +902,22 @@ test('question cache status reports formal eligible meanings by level', async ()
             cacheRow('cache-41', 'word-4', MIDDLE),
             cacheRow('cache-42', 'word-4', MIDDLE),
         ],
+        quiz_display_events: [
+            {
+                id: 'display-11', user_id: 'user-1', meaning_id: 'word-1',
+                stem: 'We used the word bank naturally in example cache-11.',
+                displayed_at: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+                history_expires_at: new Date(now + 29 * 24 * 60 * 60 * 1000).toISOString(),
+                counts_for_cooldown: true,
+            },
+            {
+                id: 'display-12', user_id: 'user-1', meaning_id: 'word-1',
+                stem: 'We used the word bank naturally in example cache-12.',
+                displayed_at: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+                history_expires_at: new Date(now + 29 * 24 * 60 * 60 * 1000).toISOString(),
+                counts_for_cooldown: true,
+            },
+        ],
     });
     const adapter = createSupabaseDataAdapter(client);
 
@@ -908,11 +925,29 @@ test('question cache status reports formal eligible meanings by level', async ()
 
     assert.deepEqual(status.eligibleReadyMeaningsByLevel, {
         [String.fromCharCode(0x5c0f, 0x5b66)]: 0,
-        [MIDDLE]: 1,
+        [MIDDLE]: 0,
         [String.fromCharCode(0x9ad8, 0x4e2d)]: 0,
         [OTHER]: 1,
     });
-    assert.equal(status.eligibleReadyMeanings, 1);
+    assert.equal(status.eligibleReadyMeanings, 0);
+});
+
+test('formal display event reader preserves the real table shape without fabricating test_id', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        quiz_display_events: [{
+            id: 'display-real-shape', user_id: 'user-1', meaning_id: 'meaning-1',
+            stem: 'A real display _____ stem.',
+            displayed_at: '2026-08-11T00:00:00.000Z',
+            history_expires_at: '2026-09-10T00:00:00.000Z',
+            counts_for_cooldown: true,
+        }],
+    });
+
+    const [event] = await createSupabaseDataAdapter(client).getFormalDisplayEventsForUser('qiuqiu');
+    assert.equal(Object.hasOwn(event, 'test_id'), false);
+    assert.equal(event.meaning_id, 'meaning-1');
+    assert.equal(event.history_expires_at, '2026-09-10T00:00:00.000Z');
 });
 
 test('getQuestionCache normalizes known elementary mojibake before enum filtering', async () => {
