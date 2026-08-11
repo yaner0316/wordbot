@@ -49,6 +49,8 @@ function cache(index, overrides = {}) {
             option_meanings: JSON.stringify(['释义', '错误', '错误的', '没有']),
             used_count: 0,
             ...fieldOverrides,
+            question_fingerprint: fieldOverrides.question_fingerprint || `fp-${index}`,
+            option_meanings: fieldOverrides.option_meanings || JSON.stringify(['\u91ca\u4e49', '\u9519\u8bef', '\u4e0d\u5bf9', '\u6ca1\u6709']),
         },
         ...rowOverrides,
     };

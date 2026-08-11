@@ -596,7 +596,7 @@ test('WORDBOT_CACHE_SOURCE=feishu reads the Feishu cache while keeping Supabase 
     assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
 });
 
-test('WORDBOT_CACHE_SOURCE=compare returns Feishu cache rows and records a bounded comparison', async () => {
+test('WORDBOT_CACHE_SOURCE=compare compares against Feishu but returns Supabase cache rows', async () => {
     const warnings = [];
     const originalWarn = console.warn;
     console.warn = message => warnings.push(String(message));
@@ -606,7 +606,7 @@ test('WORDBOT_CACHE_SOURCE=compare returns Feishu cache rows and records a bound
             supabaseExports: { getQuestionCache: async () => [{ id: 'db-1' }] },
             feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
         });
-        assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+        assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ id: 'db-1' }]);
         assert.match(warnings.join(' '), /question_cache compare/);
         assert.doesNotMatch(warnings.join(' '), /feishu-1|db-1/);
     } finally {
@@ -614,13 +614,13 @@ test('WORDBOT_CACHE_SOURCE=compare returns Feishu cache rows and records a bound
     }
 });
 
-test('WORDBOT_CACHE_SOURCE=compare keeps Feishu cache when the DB comparison fails', async () => {
+test('WORDBOT_CACHE_SOURCE=compare fails closed when the Supabase comparison read fails', async () => {
     const dataSource = loadDataSource({
         cacheSource: 'compare',
         supabaseExports: { getQuestionCache: async () => { throw new Error('db unavailable'); } },
         feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
     });
-    assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+    await assert.rejects(dataSource.getQuestionCache('qiuqiu'), /db unavailable/);
 });
 test('supabase data source reads stats from Supabase instead of Feishu fallback', async () => {
     const dataSource = loadDataSource({

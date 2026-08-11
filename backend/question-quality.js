@@ -345,6 +345,8 @@ const PROBLEM_SOLVING_METHOD_WORDS = new Set([
     'approach', 'technique', 'method', 'strategy', 'solution', 'plan',
 ]);
 const UNDERGROUND_SPACE_WORDS = new Set(['basement', 'bunker', 'tunnel']);
+const HIDDEN_LOCATION_WORDS = new Set(['cave', 'tunnel', 'attic', 'basement', 'bunker']);
+const MARCHING_ROLE_WORDS = new Set(['soldier', 'warrior', 'serviceman', 'civilian']);
 
 function getAmbiguousFillInAnswerLetters(question) {
     if (Number(question?.type) !== 1) return [];
@@ -364,6 +366,12 @@ function hasAmbiguousFillInContext(question) {
     const context = String(question.context || '').toLowerCase().replace(/_{3,}/g, '_____');
     const optionWords = (question.options || []).map(getOptionWord).filter(Boolean);
     if (getAmbiguousFillInAnswerLetters(question).length > 1) return true;
+    const hasHiddenLocationCue = /\bhidden\s+in\s+the\s+_____\b/.test(context)
+        && optionWords.filter(word => HIDDEN_LOCATION_WORDS.has(word)).length > 1;
+    if (hasHiddenLocationCue) return true;
+    const hasMarchingRoleCue = /\b(?:brave|determined)\s+_____\s+marched\b/.test(context)
+        && optionWords.filter(word => MARCHING_ROLE_WORDS.has(word)).length > 1;
+    if (hasMarchingRoleCue) return true;
     const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
     const hasAmbiguousFoodContext = [
         /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/,

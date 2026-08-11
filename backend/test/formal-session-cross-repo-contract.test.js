@@ -28,9 +28,13 @@ test('the real active-session HTTP DTO passes the production frontend formal gat
     const questions = Array.from({ length: 10 }, (_, index) => ({
         type: 1,
         word: index < 2 ? 'bank' : `word-${index}`,
+        meaningId: `meaning-${index}`,
         wordRecordId: `meaning-${index}`,
         cacheRecordId: `cache-${index}`,
         source: 'question_cache',
+        context: `A clear sentence uses ${index < 2 ? 'bank' : `word-${index}`} today.`,
+        options: [`A. ${index < 2 ? 'bank' : `word-${index}`}`, 'B. river', 'C. road', 'D. desk'],
+        answer: 'A',
     }));
     const app = createApp({
         submitAnswers: async () => ({}),

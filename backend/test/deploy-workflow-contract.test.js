@@ -57,3 +57,9 @@ test('backend test command disables flaky Node test-file isolation', () => {
         'GitHub Actions must avoid Node test-runner child-process serialization failures'
     );
 });
+
+test('deploy workflow does not use the retired frontend contract commit', () => {
+    const workflow = fs.readFileSync(workflowPath, 'utf8');
+    assert.doesNotMatch(workflow, /6a0e92415492f196953559cb1a15a9f74bed5a64/);
+    assert.match(workflow, /d0f9988a9b27ee56797329809142ed2e7aa8292b/);
+});

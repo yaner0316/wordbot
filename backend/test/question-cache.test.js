@@ -29,6 +29,7 @@ function question(overrides) {
         level: '中学',
         round_type: 'primary',
         quality_status: QUESTION_CACHE_STATUS.READY,
+        question_fingerprint: 'fp-cache-1',
         used_count: 0,
         generated_at: 100,
         question_type: 1,
@@ -535,6 +536,35 @@ test('rejects cached elementary fill-in rows with sense-mismatched contexts', ()
         answer: 'B',
         correct_meaning: CN_CHEST,
     })), false);
+});
+
+test('rejects cached questions whose option meanings are duplicated', () => {
+    const row = question({
+        option_meanings: JSON.stringify(['同一个释义', '同一个释义', '桌子', '椅子']),
+    });
+    const issues = getCacheQuestionReadinessIssues(row);
+    assert.ok(issues.includes('duplicate_option_meanings'));
+    assert.equal(isCacheQuestionReady(row), false);
+});
+
+test('rejects cached questions without a question fingerprint', () => {
+    const row = question({ question_fingerprint: '' });
+    const issues = getCacheQuestionReadinessIssues(row);
+    assert.ok(issues.includes('missing_question_fingerprint'));
+    assert.equal(isCacheQuestionReady(row), false);
+});
+
+test('rejects ambiguous chest fill-in contexts instead of publishing multiple valid answers', () => {
+    const issues = getCacheQuestionReadinessIssues(question({
+        word: 'attic',
+        word_record_id: 'rec-attic',
+        question_text: 'The old chest hidden in the _____ was finally discovered after years of searching.',
+        options: JSON.stringify(['A. cave', 'B. tunnel', 'C. attic', 'D. basement']),
+        option_meanings: JSON.stringify(['洞穴', '隧道', '阁楼', '地下室']),
+        correct_meaning: '阁楼',
+        answer: 'C',
+    }));
+    assert.ok(issues.includes('ambiguous_fill_in_context'));
 });
 
 

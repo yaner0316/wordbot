@@ -5,14 +5,25 @@ const crypto = require('node:crypto');
 const {
     createSupabaseDataAdapter: createRawSupabaseDataAdapter,
     generateReplacementContextWithAI,
+    hydrateFormalChallengeSnapshot,
 } = require('../supabase-data');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
 
 function createSupabaseDataAdapter(client, options = {}) {
+    const requestedTranslateWords = options.translateWords || (async words =>
+        Object.fromEntries(words.map(word => [word, `中文释义-${word}`])));
+    const translateWords = async words => {
+        const translated = await requestedTranslateWords(words);
+        return Object.fromEntries(words.map(word => {
+            const base = String(translated?.[word] || '').trim();
+            return [word, `${base || '中文释义'}-${word}`];
+        }));
+    };
     return createRawSupabaseDataAdapter(client, {
         translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
         ...options,
+        translateWords,
     });
 }
 
@@ -58,6 +69,17 @@ test('Supabase stats derive progress and quiz metrics from words and assessments
     });
 
     assert.deepEqual(await adapter.getAllStats(), [await adapter.getStats('qiuqiu')]);
+});
+
+test('formal challenge hydration restores the canonical word when an old snapshot omitted it', () => {
+    const question = hydrateFormalChallengeSnapshot(
+        { context: 'I ate an _____.', options: ['A. apple', 'B. pear', 'C. desk', 'D. book'], answer: 'A' },
+        { id: 'challenge-question-1', ordinal: 1, meaning_id: 'word-1', cache_question_id: 'cache-1', stem: 'I ate an _____.' },
+        { question_text: 'I ate an _____.', options: ['A. apple', 'B. pear', 'C. desk', 'D. book'], answer: 'A', question_type: 1 },
+        { id: 'word-1', feishu_record_id: 'rec-word-1', word: 'apple' },
+    );
+    assert.equal(question.word, 'apple');
+    assert.equal(question.wordRecordId, 'rec-word-1');
 });
 
 test('Supabase game state persists shared minutes and garden state', async () => {
@@ -732,6 +754,7 @@ test('question cache status summarizes Supabase rows by level', async () => {
         round_type: 'primary',
         quality_status: 'ready',
         question_type: 1,
+        question_fingerprint: 'fp-status-1',
         question_text: 'I ate an _____ after lunch.',
         options: ['A. apple', 'B. pear', 'C. chair', 'D. desk'],
         answer: 'A',
@@ -739,6 +762,7 @@ test('question cache status summarizes Supabase rows by level', async () => {
         correct_meaning: String.fromCharCode(0x6c34, 0x679c),
         generated_at: '2026-07-19T12:00:00.000Z',
     };
+    client.db.question_cache[0].option_meanings = ['水果', '梨子', '座位', '家具'];
 
     const status = await adapter.getQuestionCacheStatus('qiuqiu');
 
@@ -941,7 +965,6 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
     });
 
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-
     assert.equal(result.configured, true);
     assert.equal(result.level, ELEMENTARY);
     assert.equal(result.count, 20);
@@ -2000,7 +2023,7 @@ test('rebuildQuestionCacheForUser preserves complete pairs beyond ten while repa
             context_zh: slot === invalidTranslationSlot ? word.meaning_zh : DEFAULT_TEST_CONTEXT_TRANSLATION,
             options: [`A. ${word.word}`, ...distractors.map((value, index) => `${String.fromCharCode(66 + index)}. ${value}`)],
             answer: 'A',
-            option_meanings: [word.meaning_zh, '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49', '\u4e2d\u6587\u91ca\u4e49'],
+            option_meanings: [word.meaning_zh, ...distractors.map(value => `\u91ca\u4e49-${value}`)],
             correct_meaning: word.meaning_zh,
         };
     });
@@ -3120,6 +3143,8 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
         source: 'question_cache',
         options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
         answer: 'A',
+        contextCN: '\u8fd9\u662f\u4e00\u4e2a\u5b8c\u6574\u7684\u4e2d\u6587\u53e5\u5b50\u3002',
+        optionMeanings: ['\u91ca\u4e49', '\u6cb3\u6d41', '\u9053\u8def', '\u684c\u5b50'],
     }));
 
     const result = await adapter.createFormalQuizChallenge({
@@ -3167,6 +3192,8 @@ test('formal challenge adapter refuses to persist a cache question without four 
         source: 'question_cache',
         options: ['A. answer', 'B. option', 'C. choice', 'D. other'],
         answer: 'A',
+        contextCN: '\u8fd9\u662f\u4e00\u4e2a\u5b8c\u6574\u7684\u4e2d\u6587\u53e5\u5b50\u3002',
+        optionMeanings: ['\u91ca\u4e49', '\u9009\u9879', '\u9009\u62e9', '\u5176\u4ed6'],
     }));
     delete questions[4].options;
 
@@ -3175,6 +3202,38 @@ test('formal challenge adapter refuses to persist a cache question without four 
             username: 'qiuqiu', testId: 'real-challenge-invalid-options', level: MIDDLE, questions,
         }),
         /FORMAL_QUIZ_RENDERABLE_REQUIRED/
+    );
+    assert.equal(calls.length, 0);
+});
+
+test('formal challenge second gate rejects duplicate option meanings', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const adapter = createSupabaseDataAdapter({
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { challenge_id: 'challenge-1', question_count: 10 }, error: null };
+        },
+    });
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        meaningId: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        context: `Sentence ${index + 1} with _____.`,
+        contextCN: '\u8fd9\u662f\u4e00\u4e2a\u5b8c\u6574\u7684\u4e2d\u6587\u53e5\u5b50\u3002',
+        questionFingerprint: `fingerprint-${index + 1}`,
+        type: 1,
+        word: 'bank',
+        source: 'question_cache',
+        options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
+        optionMeanings: ['\u91ca\u4e49', '\u91ca\u4e49', '\u9053\u8def', '\u684c\u5b50'],
+        answer: 'A',
+    }));
+    await assert.rejects(
+        adapter.createFormalQuizChallenge({ username: 'qiuqiu', testId: 'real-duplicate-options', level: MIDDLE, questions }),
+        /FORMAL_QUIZ_QUALITY_REQUIRED/
     );
     assert.equal(calls.length, 0);
 });

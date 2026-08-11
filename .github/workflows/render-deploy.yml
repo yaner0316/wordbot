@@ -18,12 +18,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reviewed Web contract; keep pinned to this immutable commit.
+      # Reviewed Web contract; this is the current wordbot-web main commit.
       - name: Check out production frontend contract
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: 6a0e92415492f196953559cb1a15a9f74bed5a64
+          ref: d0f9988a9b27ee56797329809142ed2e7aa8292b
           path: web-contract
           persist-credentials: false
 

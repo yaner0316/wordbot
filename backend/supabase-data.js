@@ -627,6 +627,7 @@ function toQuestionCacheStatusRecord(row, { user, word }) {
             quality_status: row.quality_status || 'pending',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),
+            question_fingerprint: row.question_fingerprint || '',
             available_from: row.available_from || null,
             question_type: row.question_type || '',
             question_text: row.question_text || '',
@@ -2371,6 +2372,42 @@ function assertFormalChallengeQuestionsRenderable(questions) {
     })) {
         throw new Error('FORMAL_QUIZ_RENDERABLE_REQUIRED');
     }
+    if (questions.some(question => {
+        const meanings = Array.isArray(question?.optionMeanings) ? question.optionMeanings : [];
+        const normalizedMeanings = meanings.map(value => String(value || '').trim().toLowerCase());
+        return !String(question?.questionFingerprint || question?.question_fingerprint || '').trim()
+            || meanings.length !== 4
+            || normalizedMeanings.some(value => !value)
+            || new Set(normalizedMeanings).size !== normalizedMeanings.length;
+    })) {
+        throw new Error('FORMAL_QUIZ_QUALITY_REQUIRED');
+    }
+    for (const question of questions) {
+        const readinessIssues = getCacheQuestionReadinessIssues({
+            record_id: question.cacheRecordId || question.cache_question_id,
+            fields: {
+                word_record_id: question.wordRecordId || question.sourceRecordId || question.meaningId,
+                word: question.word,
+                level: question.level || '',
+                quality_status: 'ready',
+                cache_state: 'active',
+                question_fingerprint: question.questionFingerprint || question.question_fingerprint,
+                question_type: question.type,
+                question_text: question.context || question.stem,
+                context_cn: question.contextCN,
+                options: question.options,
+                answer: question.answer || question.correctAnswer,
+                option_meanings: question.optionMeanings,
+                correct_meaning: question.correctMeaning || question.correct_meaning,
+            },
+        });
+        const formalQualityIssues = readinessIssues.filter(issue => [
+            'duplicate_option_meanings',
+            'missing_question_fingerprint',
+            'ambiguous_fill_in_context',
+        ].includes(issue));
+        if (formalQualityIssues.length) throw new Error('FORMAL_QUIZ_QUALITY_REQUIRED: ' + formalQualityIssues.join(','));
+    }
 }
 
 async function createFormalQuizChallengeWithClient(client, options = {}) {
@@ -2408,7 +2445,7 @@ function hasFourFormalOptions(options) {
         && options.every(option => /^[A-D]\.\s+\S/.test(String(option || '').trim()));
 }
 
-function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow) {
+function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow, wordRow) {
     const cachedOptions = Array.isArray(cacheRow?.options) ? cacheRow.options : [];
     const question = {
         ...(snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {}),
@@ -2424,6 +2461,10 @@ function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow) {
     if (!question.context && cacheRow?.question_text) question.context = cacheRow.question_text;
     if (!question.answer && cacheRow?.answer) question.answer = cacheRow.answer;
     if (!question.type && cacheRow?.question_type) question.type = Number(cacheRow.question_type);
+    if (!String(question.word || '').trim() && wordRow?.word) question.word = wordRow.word;
+    if (!String(question.wordRecordId || '').trim() && wordRow?.feishu_record_id) {
+        question.wordRecordId = wordRow.feishu_record_id;
+    }
     question.source = 'question_cache';
     return question;
 }
@@ -2447,6 +2488,7 @@ async function getFormalQuizChallengeWithClient(client, username, testId) {
         .order('ordinal', { ascending: true });
     ensureNoError(questionError, 'getFormalQuizChallenge.questions');
     const cacheIds = [...new Set((questionRows || []).map(row => row.cache_question_id).filter(Boolean))];
+    const wordById = await getWordsByIdWithClient(client, (questionRows || []).map(row => row.meaning_id));
     let cacheById = new Map();
     if (cacheIds.length) {
         const { data: cacheRows, error: cacheError } = await client
@@ -2463,7 +2505,8 @@ async function getFormalQuizChallengeWithClient(client, username, testId) {
         questions: (questionRows || []).map(row => hydrateFormalChallengeSnapshot(
             row.question_snapshot,
             row,
-            cacheById.get(row.cache_question_id)
+            cacheById.get(row.cache_question_id),
+            wordById.get(row.meaning_id)
         )),
     };
 }
@@ -2893,6 +2936,7 @@ module.exports = {
     name: 'supabase',
     canonicalUsernameKey,
     createSupabaseDataAdapter,
+    hydrateFormalChallengeSnapshot,
     buildCacheQuestionRowsForWord,
     generateReplacementContextWithAI,
     getUserByUsername: defaultAdapter.getUserByUsername,

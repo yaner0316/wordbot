@@ -258,10 +258,11 @@ function loadSupabaseDataSource() {
         try {
             const dbRows = await dbRead();
             console.warn('[question_cache compare] ' + JSON.stringify(summarizeCacheComparison(dbRows, feishuRows)));
+            return dbRows;
         } catch (error) {
             console.warn('[question_cache compare] ' + JSON.stringify({ dbError: error.message, feishuCount: feishuRows.length }));
+            throw error;
         }
-        return feishuRows;
     }
     async function getRecords(table) {
         if (isTable(table, 'words')) {

@@ -101,6 +101,7 @@ function normalizeCacheRow(row) {
         qualityStatus: fields.quality_status || QUESTION_CACHE_STATUS.PENDING,
         cacheState: fields.cache_state || 'active',
         variantSlot: Number(fields.variant_slot || 1),
+        questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
         availableFrom: fields.available_from || null,
         usedCount: Number(fields.used_count || 0),
         generatedAt: Number(fields.generated_at || 0),
@@ -117,6 +118,7 @@ function normalizeCacheRow(row) {
             answer: fields.answer || '',
             optionMeanings: parseJsonList(fields.option_meanings),
             correctMeaning: fields.correct_meaning || '',
+            questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
         },
     };
 }
@@ -134,6 +136,7 @@ function getCacheQuestionReadinessIssues(row) {
     if (normalized.qualityStatus !== QUESTION_CACHE_STATUS.READY) issues.push('not_ready_status');
     if ([2, 3].includes(Number(question.type))) issues.push('disabled_question_type');
     if (!question.record_id) issues.push('missing_record_id');
+    if (!String(question.questionFingerprint || '').trim()) issues.push('missing_question_fingerprint');
     if (!question.word) issues.push('missing_word');
     if (!String(question.context || '').trim()) issues.push('missing_context');
     if (!['A', 'B', 'C', 'D'].includes(question.answer)) issues.push('bad_answer');
@@ -155,6 +158,12 @@ function getCacheQuestionReadinessIssues(row) {
         return hasMeaningfulChineseMeaning(value) && !isFailedOptionMeaning(value);
     })) {
         issues.push('bad_option_meanings');
+    } else {
+        const normalizedMeanings = question.optionMeanings
+            .map(meaning => String(meaning || '').trim().toLowerCase());
+        if (new Set(normalizedMeanings).size !== normalizedMeanings.length) {
+            issues.push('duplicate_option_meanings');
+        }
     }
     return [...new Set(issues)];
 }

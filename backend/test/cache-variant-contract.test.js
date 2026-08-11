@@ -20,15 +20,20 @@ const translateContext = async context => context.includes('packed')
     ? '\u8fd9\u4e2a\u5b69\u5b50\u4e3a\u957f\u9014\u65c5\u884c\u88c5\u4e86\u4e00\u4e2a\u82f9\u679c\u3002'
     : '\u8fd9\u4e2a\u5b69\u5b50\u653e\u5b66\u540e\u5403\u4e86\u4e00\u4e2a\u82f9\u679c\u3002';
 
+const uniqueTranslateWords = async values => Object.fromEntries(values.map(value => [
+    value,
+    value === 'apple' ? '\u82f9\u679c' : `\u5e72\u6270-${value}`,
+]));
+
 test('cache builder publishes zero rows when it cannot build a second stem', async () => {
     const withoutGenerator = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
     });
     assert.deepEqual(withoutGenerator, []);
 
     const duplicateOnly = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => word.context_en,
     });
@@ -38,7 +43,7 @@ test('cache builder publishes zero rows when it cannot build a second stem', asy
 test('cache builder publishes exactly two rows only after both stems pass', async () => {
     let distractorCall = 0;
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The child packed an apple for the long trip.',
         generateDistractors: async () => distractorCall++ === 0
@@ -57,7 +62,7 @@ test('cache builder generates and uses distractors for each real stem independen
         ['snack', 'sandwich', 'biscuit'],
     ];
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The child packed an apple for the long trip.',
         generateDistractors: async input => {
@@ -83,7 +88,7 @@ test('cache builder generates and uses distractors for each real stem independen
 test('cache builder refuses to publish two stems with the same distractor set', async () => {
     let calls = 0;
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The child packed an apple for the long trip.',
         generateDistractors: async () => {
@@ -105,7 +110,7 @@ test('cache builder rejects variants sharing two distractors', async () => {
     ];
     let call = 0;
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The child packed an apple for the long trip.',
         generateDistractors: async () => generatedSets[call++],
@@ -121,7 +126,7 @@ test('cache builder permits variants sharing only one contextually valid distrac
     ];
     let call = 0;
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The child packed an apple for the long trip.',
         generateDistractors: async () => generatedSets[call++],
@@ -138,7 +143,7 @@ test('cache builder permits variants sharing only one contextually valid distrac
 test('cache builder rejects stems that differ only by whitespace', async () => {
     let call = 0;
     const rows = await buildCacheQuestionRowsForWord({
-        user, word, level: LEVEL, roundType: 'primary', translateWords,
+        user, word, level: LEVEL, roundType: 'primary', translateWords: uniqueTranslateWords,
         translateContext,
         generateContext: async () => 'The  child ate an apple after school.',
         generateDistractors: async () => call++ === 0
