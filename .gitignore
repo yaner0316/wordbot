@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+docs/migration/supabase-legacy-backup-*.json
 package-lock.json
 !backend/package-lock.json
 

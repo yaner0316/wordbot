@@ -27,6 +27,9 @@ function getRuntimeHealth({
         tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),
     };
     questionCache.configured = questionCache.appTokenConfigured && questionCache.tableIdConfigured;
+    const session = {
+        sharedSecretConfigured: Boolean(env.WORDBOT_SESSION_SECRET || env.WORDBOT_ADMIN_TOKEN),
+    };
     return {
         ok: missing.length === 0,
         service: 'wordbot-backend',
@@ -35,6 +38,7 @@ function getRuntimeHealth({
         dataSource: env.DATA_SOURCE || 'supabase',
         env: envStatus,
         questionCache,
+        session,
         missing,
     };
 }

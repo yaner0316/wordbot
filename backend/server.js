@@ -15,6 +15,7 @@ const {
     normalizeAssessmentMode,
 } = require('./assessment-mode');
 const { parseStoredAnswer } = require('./mastery-evidence');
+const supabase = require('./supabase-client');
 
 function createDefaultQuestionGenerationRuntime(options) {
     return require('./question-generation-bootstrap').createDefaultQuestionGenerationRuntime(options);
@@ -143,13 +144,28 @@ function assessmentDiagnosticField(row, key) {
 // 保留此处的 tokensMatch 函数用于兼容性
 const questionGenerationServerStates = new WeakMap();
 
-function getServerRuntimeHealth(state) {
+async function getServerRuntimeHealth(state) {
     const health = getRuntimeHealth();
     const workerError = state?.workerLastError || '';
     const runtime = state?.runtime || null;
+    let database = { ok: true };
+    if (health.dataSource === 'supabase' && process.env.SUPABASE_URL) {
+        try {
+            const probes = await Promise.all([
+                supabase.from('users').select('id').limit(1),
+                supabase.from('question_generation_jobs').select('id').limit(1),
+            ]);
+            const failed = probes.find(result => result?.error);
+            if (failed?.error) database = { ok: false, error: failed.error.message };
+            else database = { ok: true };
+        } catch (error) {
+            database = { ok: false, error: error.message };
+        }
+    }
     return {
         ...health,
-        ok: health.ok && !workerError,
+        ok: health.ok && !workerError && database.ok,
+        database,
         questionGenerationWorker: {
             configured: state
                 ? state.workerConfigured
@@ -753,8 +769,8 @@ const PORT = process.env.DEPLOY_RUN_PORT || process.env.PORT || 5000;
 
 function createServerApp(state) {
     const serverApp = express();
-    serverApp.get('/api/health', (req, res) => {
-        const health = getServerRuntimeHealth(state);
+    serverApp.get('/api/health', async (req, res) => {
+        const health = await getServerRuntimeHealth(state);
         res.status(health.ok ? 200 : 503).json(health);
     });
     serverApp.use(app);

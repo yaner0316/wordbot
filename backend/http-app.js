@@ -267,9 +267,9 @@ function createApp({
         });
     }
 
-    app.get('/api/health', (req, res) => {
+    app.get('/api/health', async (req, res) => {
         const health = typeof getRuntimeHealth === 'function'
-            ? getRuntimeHealth()
+            ? await getRuntimeHealth()
             : { ok: true, service: 'wordbot-backend' };
         res.status(health.ok ? 200 : 503).json(health);
     });
