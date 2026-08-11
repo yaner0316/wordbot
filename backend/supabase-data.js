@@ -353,6 +353,31 @@ async function getAssessmentsForUserWithClient(client, username) {
     return decorateAssessmentRows(rows, user);
 }
 
+async function getFormalDisplayEventsForUserWithClient(client, username) {
+    const user = await getUserByUsernameWithClient(client, username);
+    if (!user) return [];
+    const rows = await fetchAllRows(
+        () => client
+            .from('quiz_display_events')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('displayed_at', { ascending: true })
+            .order('id', { ascending: true }),
+        'getFormalDisplayEventsForUser'
+    );
+    return rows.map(row => ({
+        ...row,
+        username: user.username,
+        test_id: row.test_id || '',
+        assessment_kind: 'formal_display',
+        is_real_assessment: true,
+        source_record_id: row.meaning_id || '',
+        question_text: row.stem || '',
+        assessed_at: row.displayed_at || row.created_at,
+        record_time: row.displayed_at || row.created_at,
+    }));
+}
+
 function mapSupabaseWordRecord(row, user, partsOfSpeech = []) {
     const mastered = String(row?.mastery_status || '').trim().toLowerCase() === 'mastered';
     return {
@@ -2900,6 +2925,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getWordByRecordId: (recordId, username) => getWordByRecordIdWithClient(client, recordId, username),
         listUserWords: (username, options) => listUserWordsWithClient(client, username, options),
         getAssessmentsForUser: username => getAssessmentsForUserWithClient(client, username),
+        getFormalDisplayEventsForUser: username => getFormalDisplayEventsForUserWithClient(client, username),
         getQuizHistory: (username, mode) => getQuizHistoryWithClient(client, username, mode),
         getAssessmentsForTest: (username, testId) => getAssessmentsForTestWithClient(client, username, testId),
         getMasteryAssessmentsForWords: (username, sourceWordRecordIds) =>

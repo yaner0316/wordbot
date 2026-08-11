@@ -105,6 +105,29 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
     };
 }
 
+function toFormalDisplayRecord(row, { username, sourceRecordIdByWordId = new Map() }) {
+    const displayedAt = toMillis(row.displayed_at || row.assessed_at || row.created_at);
+    return {
+        record_id: row.id || `display-${displayedAt}-${row.meaning_id || ''}`,
+        created_time: displayedAt,
+        fields: {
+            user: row.username || username,
+            test_id: row.test_id || '',
+            assessment_kind: 'formal_display',
+            is_real_assessment: true,
+            record_id: sourceRecordIdByWordId.get(String(row.meaning_id || '').trim())
+                || row.source_record_id
+                || row.meaning_id
+                || '',
+            context: row.stem || row.question_text || '',
+            question_text: row.stem || row.question_text || '',
+            test_time: displayedAt,
+            record_time: displayedAt,
+            is_correct: '',
+        },
+    };
+}
+
 function toFeishuCacheRow(row, { username }) {
     if (isFeishuRecord(row)) return row;
     const generatedAt = toMillis(row.generated_at || row.created_at);
@@ -294,10 +317,13 @@ async function generateQuizWithDataSource({
         : null;
     const canonicalUsername = user?.username || username;
 
-    const [wordRows, assessmentRows, cacheRows] = await Promise.all([
+    const [wordRows, assessmentRows, cacheRows, displayRows] = await Promise.all([
         dataSource.getWordsForUser(username),
         dataSource.getAssessmentsForUser(username),
         dataSource.getQuestionCache(username, effectiveLevel, roundType),
+        typeof dataSource.getFormalDisplayEventsForUser === 'function'
+            ? dataSource.getFormalDisplayEventsForUser(username)
+            : Promise.resolve([]),
     ]);
 
     const selectableWordRows = filterSelectableWordRows(wordRows);
@@ -306,6 +332,10 @@ async function generateQuizWithDataSource({
     const assessmentRecords = assessmentRows.map((row) =>
         toFeishuAssessmentRecord(row, { username: canonicalUsername, sourceRecordIdByWordId })
     );
+    const displayRecords = displayRows.map(row => toFormalDisplayRecord(row, {
+        username: canonicalUsername,
+        sourceRecordIdByWordId,
+    }));
     const questionCacheRows = cacheRows.map((row) => toFeishuCacheRow(row, { username: canonicalUsername }));
 
     const queue = buildQuizWordQueue({
@@ -327,7 +357,10 @@ async function generateQuizWithDataSource({
         roundType,
         requireReadyPair: true,
         limit,
-        recentQuestionTextsByWord: buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername }),
+        recentQuestionTextsByWord: buildRecentQuestionTextsByWord(
+            [...assessmentRecords, ...displayRecords],
+            { userId: canonicalUsername }
+        ),
         now,
     }).map((question) => ({
         ...question,
@@ -688,6 +721,7 @@ module.exports = {
     submitQuizWithDataSource,
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
+    toFormalDisplayRecord,
     toFeishuCacheRow,
 };
 

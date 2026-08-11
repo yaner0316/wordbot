@@ -267,3 +267,32 @@ test('elementary fallback uses approved template contexts when stored context is
     assert.equal(quiz.questions.every(question => question.type === 1), true);
     assert.equal(quiz.questions.some(question => question.context.includes('_____')), true);
 });
+
+test('real display history excludes an already displayed cache stem before formal challenge creation', async () => {
+    const words = Array.from({ length: 10 }, (_, index) => word(index + 1));
+    const cacheRows = Array.from({ length: 10 }, (_, index) => [
+        cacheRow(index + 1, 1),
+        cacheRow(index + 1, 2),
+    ]).flat();
+    const quiz = await generateQuizWithDataSource({
+        username: 'qiuqiu', level: MIDDLE, mode: 'test', createId: () => 'display-history-filter',
+        dataSource: {
+            name: 'supabase',
+            getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }),
+            getWordsForUser: async () => words,
+            getAssessmentsForUser: async () => [],
+            getFormalDisplayEventsForUser: async () => [{
+                id: 'display-1',
+                meaning_id: 'word-1',
+                test_id: 'real-previous',
+                stem: 'Variant 1 uses _____ naturally in context.',
+                displayed_at: Date.now() - 24 * 60 * 60 * 1000,
+            }],
+            getQuestionCache: async () => cacheRows,
+        },
+    });
+
+    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.questions.some(question => question.cacheRecordId === 'cache-1-1'), false);
+    assert.equal(quiz.questions.some(question => question.cacheRecordId === 'cache-1-2'), true);
+});
