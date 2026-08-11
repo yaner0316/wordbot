@@ -62,5 +62,5 @@ test('deploy workflow does not use the retired frontend contract commit', () => 
     const workflow = fs.readFileSync(workflowPath, 'utf8');
     assert.doesNotMatch(workflow, /6a0e92415492f196953559cb1a15a9f74bed5a64/);
     assert.doesNotMatch(workflow, /d0f9988a9b27ee56797329809142ed2e7aa8292b/);
-    assert.match(workflow, /e16e17201174f18f317ba22d68bd00920b7ac9f5/);
+    assert.match(workflow, /771d2a1245505504e3bb9c315f2861bb855248c1/);
 });
