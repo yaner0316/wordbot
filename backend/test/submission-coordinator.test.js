@@ -69,8 +69,8 @@ test('rebuildSubmittedResult returns the original score without writes', () => {
             alreadySubmitted: true,
             mode: 'real',
             results: [
-                { q: 1, word: 'apple', recordId: '', your: 'A', answer: 'A', correct: true, confidence: 'sure' },
-                { q: 2, word: 'banana', recordId: '', your: 'B', answer: 'C', correct: false, confidence: 'sure' },
+                { q: 1, meaningId: '', word: 'apple', recordId: '', type: 1, question: '', options: [], your: 'A', answer: 'A', translation: '', optionMeanings: [], correct: true, confidence: 'sure' },
+                { q: 2, meaningId: '', word: 'banana', recordId: '', type: 1, question: '', options: [], your: 'B', answer: 'C', translation: '', optionMeanings: [], correct: false, confidence: 'sure' },
             ],
             correct: 1,
             total: 2,
@@ -84,6 +84,45 @@ test('rebuildSubmittedResult returns the original score without writes', () => {
             },
         }
     );
+});
+
+test('rebuildSubmittedResult preserves the stored answer-analysis snapshot for idempotent replay', () => {
+    const records = [{ fields: {
+        test_id: 'real-replay-1', word: 'bank', record_id: 'meaning-bank-finance',
+        question_type: '1', context: 'She deposited money in the _____.',
+        options: '["A. bank","B. river","C. desk","D. road"]',
+        correct_answer: 'A', your_answer: 'B|sure', is_correct: 'wrong-option',
+        context_cn: '她把钱存进了银行。',
+        option_meanings: '["银行","河流","桌子","道路"]',
+    }}];
+
+    const [result] = rebuildSubmittedResult(records, value => value === 'correct-option').results;
+
+    assert.deepEqual(result, {
+        q: 1, meaningId: 'meaning-bank-finance', word: 'bank', recordId: 'meaning-bank-finance',
+        type: 1, question: 'She deposited money in the _____.',
+        options: ['A. bank', 'B. river', 'C. desk', 'D. road'], answer: 'A',
+        translation: '她把钱存进了银行。', optionMeanings: ['银行', '河流', '桌子', '道路'],
+        your: 'B', correct: false, confidence: 'sure',
+    });
+});
+
+test('rebuildSubmittedResult accepts native arrays and safely degrades malformed snapshot JSON', () => {
+    const native = rebuildSubmittedResult([{ fields: {
+        test_id: 'real-native', word: 'calm', record_id: 'meaning-calm', question_type: 1,
+        context: 'The lake was _____.', options: ['A. calm', 'B. noisy', 'C. busy', 'D. rough'],
+        option_meanings: ['平静', '吵闹', '忙碌', '粗糙'], correct_answer: 'A', your_answer: 'A', is_correct: 'correct-option',
+    }}], value => value === 'correct-option').results[0];
+    const malformed = rebuildSubmittedResult([{ fields: {
+        test_id: 'real-bad-json', word: 'calm', record_id: 'meaning-calm',
+        options: '[broken', option_meanings: '{broken', correct_answer: 'A', your_answer: 'A', is_correct: 'correct-option',
+    }}], value => value === 'correct-option').results[0];
+
+    assert.equal(native.options.length, 4);
+    assert.equal(native.optionMeanings.length, 4);
+    assert.deepEqual(malformed.options, []);
+    assert.deepEqual(malformed.optionMeanings, []);
+    assert.equal(malformed.correct, true);
 });
 
 test('coordinator serializes concurrent submissions for the same quiz', async () => {

@@ -91,12 +91,15 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
             test_id: row.test_id || '',
             assessment_kind: row.assessment_kind || '',
             is_real_assessment: row.is_real_assessment !== false,
+            meaning_id: row.word_id || '',
             record_id: wordRecordId,
             word: row.word_snapshot || '',
             question_type: row.question_type || '',
             context: row.question_text || '',
             correct_answer: row.correct_answer || '',
             options: JSON.stringify(row.options || []),
+            context_cn: row.context_zh || row.context_cn || '',
+            option_meanings: JSON.stringify(row.option_meanings || []),
             test_time: assessedAt,
             level: normalizeOptionalLevel(row.level),
             source: row.source || '',
@@ -666,6 +669,8 @@ async function submitQuizWithDataSource({
             questionText: question.context || question.questionText || '',
             options: question.options || [],
             correctAnswer,
+            contextZh: question.contextCN || question.context_cn || question.contextTranslation || '',
+            optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
         };
         pendingSubmissions.push({ question, sourceWordRecordId, isCorrect, input });
         results.push({

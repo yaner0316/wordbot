@@ -177,7 +177,7 @@ test('cached question selection keeps same-spelling meanings independent by word
         recentQuestionTextsByWord: buildRecentQuestionTextsByWord([
             { fields: { user: 'student', test_id: 'real-finance', record_id: 'rec-bank-finance', word: 'bank', context: financeRecent, test_time: NOW - DAY, is_correct: 'wrong' } },
             { fields: { user: 'student', test_id: 'real-river', record_id: 'rec-bank-river', word: 'bank', context: riverRecent, test_time: NOW, is_correct: 'wrong' } },
-        ], { userId: 'student' }),
+        ], { userId: 'student', now: NOW }),
         limit: 2,
     });
     assert.deepEqual(selected.map(question => question.cacheRecordId), [

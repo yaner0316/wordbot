@@ -44,16 +44,37 @@ function normalizeAnswers(answers, questionCount) {
 function validateAnswers(answers, questionCount) {
     normalizeAnswers(answers, questionCount);
 }
+
+function parseStoredArray(value) {
+    if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean);
+    const text = fieldValue(value).trim();
+    if (!text) return [];
+    try {
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed.map(item => String(item ?? '').trim()).filter(Boolean) : [];
+    } catch (_) {
+        return [];
+    }
+}
+
 function rebuildSubmittedResult(records, isCorrectValue) {
     const results = records.map((record, index) => {
         const fields = record.fields || {};
         const storedAnswer = parseStoredAnswer(fieldValue(fields.your_answer));
+        const recordId = fieldValue(fields.record_id).trim();
+        const meaningId = fieldValue(fields.meaning_id).trim() || recordId;
         return {
             q: index + 1,
+            meaningId,
             word: fieldValue(fields.word).toLowerCase(),
-            recordId: fieldValue(fields.record_id),
+            recordId,
+            type: Number(fieldValue(fields.question_type)) || 1,
+            question: fieldValue(fields.context || fields.question_text).trim(),
+            options: parseStoredArray(fields.options),
             your: storedAnswer.option || null,
             answer: fieldValue(fields.correct_answer),
+            translation: fieldValue(fields.context_cn || fields.translation).trim(),
+            optionMeanings: parseStoredArray(fields.option_meanings),
             correct: isCorrectValue(fields.is_correct),
             confidence: storedAnswer.confidence,
         };
