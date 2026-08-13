@@ -3046,6 +3046,77 @@ test('Supabase formal history keeps the exact submitted stem and options', async
     }]);
 });
 
+test('non-mastered stage changes preserve cache and do not fence generation', async () => {
+    const client = seededClient();
+    client.db.question_cache.push({ id: 'cache-stage', user_id: 'user-1', word_id: 'word-1' });
+    client.db.question_generation_jobs.push({ id: 'job-stage', user_id: 'user-1', word_id: 'word-1', status: 'ready' });
+    const adapter = createSupabaseDataAdapter(client);
+
+    await adapter.updateWordMastery('qiuqiu', 'Apple', 'recognized');
+
+    assert.equal(client.db.words[0].mastery_status, 'recognized');
+    assert.ok(client.db.question_cache.some(row => row.id === 'cache-stage'));
+    assert.equal(client.db.question_generation_jobs.find(row => row.id === 'job-stage').status, 'ready');
+    assert.equal(client.operations.filter(operation => operation.table === 'rpc').length, 0);
+});
+
+test('Supabase history excludes ungraded placeholder rows instead of showing them as wrong', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        assessments: [
+            {
+                id: 'assessment-graded', user_id: 'user-1', word_id: 'word-1', test_id: 'real-history-filter',
+                assessed_at: '2026-08-09T08:00:00.000Z', word_snapshot: 'citizen',
+                question_type: '1', question_text: 'A _____ obeys the law.', options: ['A. citizen'],
+                correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
+            },
+            {
+                id: 'assessment-ungraded', user_id: 'user-1', word_id: 'word-2', test_id: 'real-history-filter',
+                assessed_at: '2026-08-09T08:01:00.000Z', word_snapshot: 'draft',
+                question_type: '1', question_text: 'An unfinished _____ row.', options: ['A. draft'],
+                correct_answer: 'A', submitted_answer: null, is_correct: null,
+            },
+            {
+                id: 'review-ungraded', user_id: 'user-1', word_id: 'word-3', test_id: 'real-review-filter',
+                assessment_kind: 'review', assessed_at: '2026-08-09T08:02:00.000Z', word_snapshot: 'review',
+                question_type: '1', question_text: 'An unfinished review row.', options: ['A. review'],
+                correct_answer: 'A', submitted_answer: 'A', is_correct: null,
+            },
+        ],
+    });
+
+    const history = await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu', 'real');
+
+    assert.deepEqual(history.map(group => group.testId), ['real-history-filter']);
+    assert.equal(history[0].total, 1);
+    assert.deepEqual(history[0].questions.map(row => row.assessmentId), ['assessment-graded']);
+});
+
+test('Supabase stats do not attach an unmatched null word_id assessment to a current meaning', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{
+            id: 'word-current', user_id: 'user-1', feishu_record_id: 'rec-current',
+            word: 'bank', mastery_status: 'pending',
+        }],
+        assessments: [
+            {
+                id: 'legacy-1', user_id: 'user-1', word_id: null, source_word_record_id: 'rec-deleted',
+                word_snapshot: 'bank', test_id: 'real-legacy-1', is_correct: 'correct', submitted_answer: 'A|sure',
+            },
+            {
+                id: 'legacy-2', user_id: 'user-1', word_id: null, source_word_record_id: 'rec-deleted',
+                word_snapshot: 'bank', test_id: 'real-legacy-2', is_correct: 'correct', submitted_answer: 'A|sure',
+            },
+        ],
+    });
+
+    const stats = await createSupabaseDataAdapter(client).getStats('qiuqiu');
+
+    assert.equal(stats.masteredWords, 0);
+    assert.equal(stats.unseenWords, 1);
+});
+
 test('Supabase history retains completed real review results instead of hiding them', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -3062,6 +3133,26 @@ test('Supabase history retains completed real review results instead of hiding t
     assert.equal(history.length, 1);
     assert.equal(history[0].questions[0].word, 'citizen');
     assert.equal(history[0].questions[0].question, 'A _____ has legal rights.');
+});
+
+test('Supabase history preserves a legally scored legacy row even when its submitted answer is missing', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        assessments: [{
+            id: 'legacy-scored-no-answer', user_id: 'user-1', word_id: null,
+            source_word_record_id: 'deleted-source', test_id: 'real-legacy-no-answer',
+            assessed_at: '2026-08-09T11:00:00.000Z', word_snapshot: 'legacy', question_type: '1',
+            question_text: 'Legacy _____ remains scored.', options: [],
+            correct_answer: 'A', submitted_answer: null, is_correct: 'wrong',
+        }],
+    });
+
+    const history = await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu', 'real');
+
+    assert.equal(history.length, 1);
+    assert.equal(history[0].testId, 'real-legacy-no-answer');
+    assert.equal(history[0].correct, 0);
+    assert.equal(history[0].total, 1);
 });
 
 test('rebuildQuestionCacheForUser requeues a manual-review job before continuing repair', async () => {

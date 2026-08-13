@@ -1,3 +1,5 @@
+begin;
+
 -- Stage 1 formal-question write gate.
 -- Existing historical rows are not rewritten by this migration; only new or
 -- updated formal challenge questions are rejected when their cache identity is
@@ -6,6 +8,8 @@
 create or replace function public.validate_formal_challenge_question_quality()
 returns trigger
 language plpgsql
+security invoker
+set search_path = pg_catalog
 as $$
 declare
   option_meaning_count integer;
@@ -32,9 +36,14 @@ begin
 end;
 $$;
 
+revoke all on function public.validate_formal_challenge_question_quality()
+  from public, anon, authenticated, service_role;
+
 drop trigger if exists validate_formal_challenge_question_quality
   on public.quiz_challenge_questions;
 
 create trigger validate_formal_challenge_question_quality
 before insert or update on public.quiz_challenge_questions
 for each row execute function public.validate_formal_challenge_question_quality();
+
+commit;

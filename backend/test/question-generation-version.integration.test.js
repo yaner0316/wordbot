@@ -34,6 +34,7 @@ create table public.words (
     context_en text,
     level public.wordbot_level,
     mastery_status public.mastery_status not null default 'pending',
+    remembered_at timestamptz,
     entered_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
     unique (id, user_id)
@@ -120,6 +121,185 @@ test('migration verification SQL executes against the real versioned PGlite sche
     try {
         const result = await db.query(VERIFICATION_SQL);
         assert.equal(result.rows[0].job_lease_token_column, true);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_signature, true);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_security_definer, true);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_safe_search_path, true);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_public_execute, false);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_anon_execute, false);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_authenticated_execute, false);
+        assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_service_role_execute, true);
+    } finally {
+        await db.close();
+    }
+});
+
+test('atomic mastery reconciliation rejects stale state without touching generation lifecycle', async () => {
+    const db = await createDatabase();
+    try {
+        await db.query(`
+            insert into public.question_cache (
+                user_id, word_id, level, question_type, round_type, quality_status,
+                question_text, options, answer, option_meanings, correct_meaning,
+                variant_slot, cache_state, question_fingerprint
+            ) values (
+                $1::uuid, $2::uuid, 'middle', '1', 'primary', 'ready',
+                'The child ate an ___.', '["A. apple","B. pear","C. plum","D. peach"]'::jsonb,
+                'A', '["apple","pear","plum","peach"]'::jsonb,
+                'a fruit', 1, 'active', 'reconcile-stale-state'
+            )
+        `, [USER_ID, WORD_ID]);
+        await db.query(
+            "select public.enqueue_question_generation_job_if_needed($1::uuid, $2::uuid, 'cache_backfill')",
+            [USER_ID, WORD_ID]
+        );
+        const before = await db.query(`
+            select word.mastery_status, word.remembered_at, word.question_generation_version,
+                   (select count(*)::integer from public.question_cache where word_id = word.id) as cache_count,
+                   (select count(*)::integer from public.question_generation_jobs where word_id = word.id) as job_count
+            from public.words as word where word.id = $1::uuid
+        `, [WORD_ID]);
+
+        const result = await db.query(
+            "select public.reconcile_word_mastery_status($1::uuid, $2::uuid, 'recognized', null, 'mastered', now()) as applied",
+            [USER_ID, WORD_ID]
+        );
+        const after = await db.query(`
+            select word.mastery_status, word.remembered_at, word.question_generation_version,
+                   (select count(*)::integer from public.question_cache where word_id = word.id) as cache_count,
+                   (select count(*)::integer from public.question_generation_jobs where word_id = word.id) as job_count
+            from public.words as word where word.id = $1::uuid
+        `, [WORD_ID]);
+
+        assert.deepEqual(result.rows, [{ applied: false }]);
+        assert.deepEqual(after.rows, before.rows);
+    } finally {
+        await db.close();
+    }
+});
+
+test('atomic mastery reconciliation preserves generation outside mastered transitions', async () => {
+    const db = await createDatabase();
+    try {
+        await db.query(`
+            insert into public.question_cache (
+                user_id, word_id, level, question_type, round_type, quality_status,
+                question_text, options, answer, option_meanings, correct_meaning,
+                variant_slot, cache_state, question_fingerprint
+            ) values (
+                $1::uuid, $2::uuid, 'middle', '1', 'primary', 'ready',
+                'The child ate an ___.', '["A. apple","B. pear","C. plum","D. peach"]'::jsonb,
+                'A', '["apple","pear","plum","peach"]'::jsonb,
+                'a fruit', 1, 'active', 'reconcile-nonmastered'
+            )
+        `, [USER_ID, WORD_ID]);
+        await db.query(
+            "select public.enqueue_question_generation_job_if_needed($1::uuid, $2::uuid, 'cache_backfill')",
+            [USER_ID, WORD_ID]
+        );
+        const before = await db.query(
+            'select question_generation_version from public.words where id = $1::uuid',
+            [WORD_ID]
+        );
+
+        const result = await db.query(
+            "select public.reconcile_word_mastery_status($1::uuid, $2::uuid, 'pending', null, 'recognized', null) as applied",
+            [USER_ID, WORD_ID]
+        );
+        const after = await db.query(`
+            select word.mastery_status, word.question_generation_version,
+                   (select count(*)::integer from public.question_cache where word_id = word.id) as cache_count,
+                   (select count(*)::integer from public.question_generation_jobs where word_id = word.id) as job_count
+            from public.words as word where word.id = $1::uuid
+        `, [WORD_ID]);
+
+        assert.deepEqual(result.rows, [{ applied: true }]);
+        assert.equal(after.rows[0].mastery_status, 'recognized');
+        assert.equal(after.rows[0].question_generation_version, before.rows[0].question_generation_version);
+        assert.equal(after.rows[0].cache_count, 1);
+        assert.equal(after.rows[0].job_count, 1);
+    } finally {
+        await db.close();
+    }
+});
+
+test('atomic mastery reconciliation invalidates generation only when entering mastered', async () => {
+    const db = await createDatabase();
+    try {
+        await db.query(`
+            insert into public.question_cache (
+                user_id, word_id, level, question_type, round_type, quality_status,
+                question_text, options, answer, option_meanings, correct_meaning,
+                variant_slot, cache_state, question_fingerprint
+            ) values (
+                $1::uuid, $2::uuid, 'middle', '1', 'primary', 'ready',
+                'The child ate an ___.', '["A. apple","B. pear","C. plum","D. peach"]'::jsonb,
+                'A', '["apple","pear","plum","peach"]'::jsonb,
+                'a fruit', 1, 'active', 'reconcile-mastered'
+            )
+        `, [USER_ID, WORD_ID]);
+        await db.query(
+            "select public.enqueue_question_generation_job_if_needed($1::uuid, $2::uuid, 'cache_backfill')",
+            [USER_ID, WORD_ID]
+        );
+        const before = await db.query(
+            'select question_generation_version from public.words where id = $1::uuid',
+            [WORD_ID]
+        );
+
+        const result = await db.query(
+            "select public.reconcile_word_mastery_status($1::uuid, $2::uuid, 'pending', null, 'mastered', '2026-08-02T00:00:00Z') as applied",
+            [USER_ID, WORD_ID]
+        );
+        const after = await db.query(`
+            select word.mastery_status, word.remembered_at, word.question_generation_version,
+                   (select count(*)::integer from public.question_cache where word_id = word.id) as cache_count,
+                   (select count(*)::integer from public.question_generation_jobs where word_id = word.id) as job_count
+            from public.words as word where word.id = $1::uuid
+        `, [WORD_ID]);
+
+        assert.deepEqual(result.rows, [{ applied: true }]);
+        assert.equal(after.rows[0].mastery_status, 'mastered');
+        assert.equal(after.rows[0].question_generation_version, before.rows[0].question_generation_version + 1);
+        assert.equal(after.rows[0].cache_count, 0);
+        assert.equal(after.rows[0].job_count, 0);
+    } finally {
+        await db.close();
+    }
+});
+
+test('atomic mastery reconciliation requeues generation when leaving mastered', async () => {
+    const db = await createDatabase();
+    try {
+        await db.query(`
+            update public.words
+            set mastery_status = 'mastered', remembered_at = '2026-08-02T00:00:00Z'
+            where id = $1::uuid
+        `, [WORD_ID]);
+        const before = await db.query(
+            'select question_generation_version from public.words where id = $1::uuid',
+            [WORD_ID]
+        );
+
+        const result = await db.query(
+            "select public.reconcile_word_mastery_status($1::uuid, $2::uuid, 'mastered', '2026-08-02T00:00:00Z', 'recognized', null) as applied",
+            [USER_ID, WORD_ID]
+        );
+        const after = await db.query(`
+            select word.mastery_status, word.remembered_at, word.question_generation_version,
+                   job.status as job_status, job.reason as job_reason,
+                   job.word_version as job_word_version
+            from public.words as word
+            left join public.question_generation_jobs as job on job.word_id = word.id
+            where word.id = $1::uuid
+        `, [WORD_ID]);
+
+        assert.deepEqual(result.rows, [{ applied: true }]);
+        assert.equal(after.rows[0].mastery_status, 'recognized');
+        assert.equal(after.rows[0].remembered_at, null);
+        assert.equal(after.rows[0].question_generation_version, before.rows[0].question_generation_version + 1);
+        assert.equal(after.rows[0].job_status, 'pending');
+        assert.equal(after.rows[0].job_reason, 'word_edit');
+        assert.equal(after.rows[0].job_word_version, after.rows[0].question_generation_version);
     } finally {
         await db.close();
     }
@@ -195,8 +375,14 @@ test('a fenced cache referenced by a formal challenge is retired instead of dele
         `, [USER_ID]);
         await db.query(`
             insert into public.quiz_challenge_questions (
-                challenge_id, ordinal, meaning_id, cache_question_id, stem, question_snapshot, history_expires_at
-            ) values ($1::uuid, 1, $2::uuid, $3::uuid, 'The child ate an ___.', '{}'::jsonb, now() + interval '30 days')
+                challenge_id, ordinal, meaning_id, cache_question_id, stem,
+                question_fingerprint, question_snapshot, history_expires_at
+            ) values (
+                $1::uuid, 1, $2::uuid, $3::uuid, 'The child ate an ___.',
+                'fk-protected-cache',
+                '{"optionMeanings":["apple","bread","rice","soup"]}'::jsonb,
+                now() + interval '30 days'
+            )
         `, [challenge.rows[0].id, WORD_ID, cache.rows[0].id]);
 
         await fenceWord(db);

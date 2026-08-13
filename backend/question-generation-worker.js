@@ -71,6 +71,7 @@ function createQuestionGenerationWorker({
     runImmediately = true,
     onError = () => {},
     onSuccess = () => {},
+    now = () => new Date().toISOString(),
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
 } = {}) {
@@ -83,13 +84,29 @@ function createQuestionGenerationWorker({
     const intervalMs = Math.max(1, Number(pollIntervalMs) || 5_000);
     const reportError = requireFunction(onError, 'QUESTION_GENERATION_WORKER_ERROR_HANDLER_REQUIRED');
     const reportSuccess = requireFunction(onSuccess, 'QUESTION_GENERATION_WORKER_SUCCESS_HANDLER_REQUIRED');
+    const clock = requireFunction(now, 'QUESTION_GENERATION_WORKER_CLOCK_REQUIRED');
     const schedule = requireFunction(setIntervalFn, 'QUESTION_GENERATION_WORKER_TIMER_REQUIRED');
     const cancel = requireFunction(clearIntervalFn, 'QUESTION_GENERATION_WORKER_TIMER_CANCEL_REQUIRED');
     let timer = null;
     let inFlight = null;
+    const observability = {
+        startedAt: null,
+        lastAttemptAt: null,
+        lastClaimAt: null,
+        lastSuccessAt: null,
+        lastCompletionAt: null,
+    };
+
+    function timestamp() {
+        const value = clock();
+        if (value instanceof Date) return value.toISOString();
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? String(value || '') : parsed.toISOString();
+    }
 
     function trigger() {
         if (inFlight) return inFlight;
+        observability.lastAttemptAt = timestamp();
         inFlight = Promise.resolve()
             .then(() => runQuestionGenerationBatch({
                 jobStore,
@@ -98,6 +115,10 @@ function createQuestionGenerationWorker({
                 limit,
             }))
             .then(result => {
+                const completedAt = timestamp();
+                observability.lastSuccessAt = completedAt;
+                if (Number(result?.claimed) > 0) observability.lastClaimAt = completedAt;
+                if (Number(result?.completed) > 0) observability.lastCompletionAt = completedAt;
                 try {
                     reportSuccess(result);
                 } catch (_) {
@@ -122,6 +143,7 @@ function createQuestionGenerationWorker({
     return {
         start() {
             if (timer !== null) return false;
+            observability.startedAt = observability.startedAt || timestamp();
             timer = schedule(() => { trigger(); }, intervalMs);
             if (runImmediately) trigger();
             return true;
@@ -139,6 +161,10 @@ function createQuestionGenerationWorker({
 
         isRunning() {
             return timer !== null;
+        },
+
+        getObservability() {
+            return { ...observability };
         },
     };
 }

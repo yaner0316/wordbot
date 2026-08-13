@@ -496,6 +496,11 @@ function normalizeHistoryQuestionText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function isSubmittedHistoryAssessment(row) {
+    const correctness = String(row?.is_correct || '').trim().toLowerCase();
+    return correctness === 'correct' || correctness === 'wrong';
+}
+
 async function getHistoryQuestionFeedbackWithClient(client, rows) {
     const userIds = [...new Set((rows || []).map(row => String(row?.user_id || '').trim()).filter(Boolean))];
     if (!userIds.length) return new Map();
@@ -545,7 +550,8 @@ function toHistoryQuestion(row, feedback = {}) {
 
 async function getQuizHistoryWithClient(client, username, mode = 'real') {
     const normalizedMode = normalizeAssessmentMode(mode);
-    const rows = await getAssessmentsForUserWithClient(client, username);
+    const rows = (await getAssessmentsForUserWithClient(client, username))
+        .filter(isSubmittedHistoryAssessment);
     const feedbackByKey = await getHistoryQuestionFeedbackWithClient(client, rows);
     const groups = new Map();
     for (const row of rows) {
@@ -2086,7 +2092,8 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     const rows = await resolveWordRows(client, user.id, word, options);
     const updated = [];
     for (const row of rows) {
-        await fenceWordQuestionGeneration(client, user.id, row.id);
+        const crossesMasteryBoundary = (row.mastery_status === 'mastered') !== (masteryStatus === 'mastered');
+        if (crossesMasteryBoundary) await fenceWordQuestionGeneration(client, user.id, row.id);
         const payload = {
             mastery_status: masteryStatus,
             updated_at: new Date().toISOString(),
@@ -2101,7 +2108,9 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
             .select('*')
             .single();
         ensureNoError(error, 'updateWordMastery');
-        await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
+        if (crossesMasteryBoundary || masteryStatus === 'mastered') {
+            await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
+        }
         updated.push(data);
     }
     return updated;

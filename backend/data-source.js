@@ -425,11 +425,17 @@ function loadSupabaseDataSource() {
         return String(row?.test_id || row?.fields?.test_id || '').trim();
     }
 
+    function isCompleteSupabaseAssessment(row) {
+        const correctness = String(row?.is_correct || '').trim().toLowerCase();
+        const submittedAnswer = String(row?.submitted_answer || '').split('|')[0].trim();
+        return (correctness === 'correct' || correctness === 'wrong') && Boolean(submittedAnswer);
+    }
+
     function rebuildSupabaseQuizResult(testId, assessments, expectedCount) {
         const records = assessments
             .filter(row => assessmentTestId(row) === testId)
             .slice(0, expectedCount);
-        if (records.length < expectedCount) return null;
+        if (records.length < expectedCount || records.some(row => !isCompleteSupabaseAssessment(row))) return null;
         return rebuildSubmittedResult(
             records.map(row => toFeishuAssessmentRecord(row, { username: '' })),
             value => String(value || '').trim().toLowerCase() === 'correct'
