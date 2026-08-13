@@ -13,7 +13,9 @@ test('backend replay DTO normalizes into the frontend canonical answer-analysis 
         context_cn: '使用银行。', option_meanings: '["银行","河流","桌子","道路"]',
         your_answer: 'B|sure', is_correct: 'wrong',
     }}], value => value === 'correct').results[0];
-    const webLogic = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'qiuqiu-parent-repair-web-20260811', 'src', 'quiz-logic.js'), 'utf8');
+    const webLogicPath = process.env.WORDBOT_WEB_CONTRACT_PATH
+        || path.resolve(__dirname, '..', '..', '..', 'qiuqiu-parent-repair-web-20260811', 'src', 'quiz-logic.js');
+    const webLogic = fs.readFileSync(webLogicPath, 'utf8');
     const context = {};
     vm.createContext(context);
     vm.runInContext(webLogic, context);
