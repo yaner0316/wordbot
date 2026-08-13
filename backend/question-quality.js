@@ -532,6 +532,30 @@ function hasBadOptionInflection(question) {
         .some(word => /(?:eded|ieded)$/.test(word));
 }
 
+function normalizeMeaningTokens(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text) return [];
+    const separators = /[\uFF0C,\u3001\uFF1B;\/|\uFF08\uFF09()]+/;
+    const particles = /[\s\u7684\u5730\u5F97]+/g;
+    return [...new Set(text
+        .split(separators)
+        .map(token => token.replace(particles, '').trim())
+        .filter(token => token.length >= 2))];
+}
+
+function hasOverlappingOptionMeanings(question) {
+    const groups = (question.optionMeanings || []).map(normalizeMeaningTokens);
+    if (groups.length !== 4) return false;
+    for (let left = 0; left < groups.length; left++) {
+        for (let right = left + 1; right < groups.length; right++) {
+            if (groups[left].some(a => groups[right].some(b => a === b || a.includes(b) || b.includes(a)))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function getQuestionQualityIssues(question) {
     const issues = [];
     if (!question) return ['missing_question'];
@@ -577,6 +601,9 @@ function getQuestionQualityIssues(question) {
     }
     if ([1, 2, 3].includes(type) && hasBadOptionInflection(question)) {
         issues.push('bad_option_inflection');
+    }
+    if ([1, 2, 3].includes(type) && hasOverlappingOptionMeanings(question)) {
+        issues.push('overlapping_option_meanings');
     }
     if (isElementaryLevel(question.level)) {
         if (type === 1) {

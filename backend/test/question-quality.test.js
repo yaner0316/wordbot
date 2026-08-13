@@ -835,3 +835,33 @@ test('fill-in rejects crowded verb-context when target meaning is crowded adject
     assert.equal(isQuestionQualityAcceptable(question), false);
     assert.ok(issues.includes('sense_mismatch_crowded'), 'issues=' + issues.join(','));
 });
+
+test('fill-in rejects deterministic multiple-answer synonym risks from contextual option meanings', () => {
+    const cases = [
+        {
+            word: 'cushion', context: 'The student used a soft _____ to support his back while studying late at night.',
+            options: ['A. cushion', 'B. pillow', 'C. bolster', 'D. pad'], answer: 'A',
+            optionMeanings: ['垫子,软垫', '枕头', '长枕', '垫子'],
+        },
+        {
+            word: 'conference', context: 'Experts met at the _____ to discuss the new research.',
+            options: ['A. seminar', 'B. conference', 'C. forum', 'D. symposium'], answer: 'B',
+            optionMeanings: ['研讨会', '会议,研讨会', '论坛', '专题讨论会'],
+        },
+        {
+            word: 'tempt', context: 'The smell of fresh bread may _____ hungry shoppers.',
+            options: ['A. tempt', 'B. seduce', 'C. lure', 'D. refuse'], answer: 'A',
+            optionMeanings: ['诱惑,引诱', '诱惑', '引诱', '拒绝'],
+        },
+        {
+            word: 'fare', context: 'Passengers must pay the bus _____ before sitting down.',
+            options: ['A. fare', 'B. charge', 'C. fee', 'D. route'], answer: 'A',
+            optionMeanings: ['费用,票价', '费用', '费用', '路线'],
+        },
+    ];
+
+    for (const question of cases) {
+        const issues = getQuestionQualityIssues({ type: 1, level: JUNIOR_HIGH, correctMeaning: question.optionMeanings['ABCD'.indexOf(question.answer)], ...question });
+        assert.ok(issues.includes('overlapping_option_meanings'), `${question.word}: ${issues.join(',')}`);
+    }
+});

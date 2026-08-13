@@ -1929,7 +1929,7 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
 
 test('rebuildQuestionCacheForUser follows assessment evidence when stored mastery status is stale', async () => {
     const client = createFakeSupabase({ users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }], words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE, context_en: 'The child ate an apple after school.', distractors: ['pear', 'desk', 'chair'], old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-30T00:00:00.000Z' }], assessments: [], question_cache: [] });
-    const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map(word => [word, '\u82f9\u679c'])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous, generateDistractors: contextualDistractorsForTest });
+    const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['梨子', '桌子', '椅子', '其他'][index]])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous, generateDistractors: contextualDistractorsForTest });
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
     assert.equal(result.count, 2);
 });
@@ -2254,7 +2254,7 @@ test('rebuildQuestionCacheForUser always backfills missing middle-school context
         const adapter = createSupabaseDataAdapter(client, {
             generateContext: async (word, meaning, level, previous) => previous ? `The student checked the ${word} before leaving.` : `The teacher asks the student to use ${word} in a sentence.`,
             generateDistractors: contextualDistractorsForTest,
-            translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+            translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['修理', '笔直', '阁楼', '其他'][index]])),
         });
 
         const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
@@ -2294,7 +2294,7 @@ test('rebuildQuestionCacheForUser never seeds mastered words when pending words 
         question_cache: [{ id: 'existing-cache' }],
     });
     const adapter = createSupabaseDataAdapter(client, {
-        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['修理', '笔直', '阁楼', '其他'][index]])),
         generateContext: async word => `A second sentence contains ${word}.`,
         generateDistractors: contextualDistractorsForTest,
     });
@@ -2577,12 +2577,42 @@ function rebuildCoverageInvalidPair(word) {
 
 function createRebuildCoverageAdapter(client, options = {}) {
     return createSupabaseDataAdapter(client, {
-        translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
+        translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['甲项', '乙项', '丙项', '丁项'][index]])),
         generateContext: async word => `The second ${word} sentence is ready.`,
         generateDistractors: contextualDistractorsForTest,
         ...options,
     });
 }
+
+test('new cache generation fails closed when semantic audit is unavailable', async () => {
+    const word = rebuildCoverageWord('semantic-audit', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word], assessments: [], question_cache: rebuildCoverageInvalidPair(word),
+    });
+    const result = await createRebuildCoverageAdapter(client, {
+        semanticAudit: async () => ({ approved: false, status: 'unavailable' }),
+    }).rebuildQuestionCacheForUser('qiuqiu');
+
+    assert.equal(result.count, 0);
+    assert.equal(client.db.question_cache.some(row => row.source_version === 'supabase-contextual-variant-v3'), false);
+});
+
+test('new cache generation records approved semantic audit before ready publication', async () => {
+    const word = rebuildCoverageWord('semantic-approved', 'lucky');
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word], assessments: [], question_cache: rebuildCoverageInvalidPair(word),
+    });
+    const result = await createRebuildCoverageAdapter(client, {
+        semanticAudit: async () => ({ approved: true, status: 'approved', validLetters: ['A'] }),
+    }).rebuildQuestionCacheForUser('qiuqiu');
+    const published = client.db.question_cache.filter(row => row.source_version === 'supabase-contextual-variant-v3');
+
+    assert.equal(result.count, 2);
+    assert.equal(published.length, 2);
+    assert.equal(published.every(row => row.ai_audit_status === 'approved' && row.quality_status === 'ready'), true);
+});
 
 test('rebuildQuestionCacheForUser covers every unmastered meaning beyond the formal quiz seed size', async () => {
     const names = ['amber', 'basic', 'cider', 'daisy', 'ember', 'fable', 'glade', 'honey', 'ivory', 'jolly', 'karma', 'lilac'];
