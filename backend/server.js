@@ -7,7 +7,7 @@ const { createSessionStore, normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
-const { getRuntimeHealth } = require('./runtime-health');
+const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -143,10 +143,94 @@ function assessmentDiagnosticField(row, key) {
 // 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
 // 保留此处的 tokensMatch 函数用于兼容性
 const questionGenerationServerStates = new WeakMap();
+const QUESTION_GENERATION_HEALTH_PAGE_SIZE = 1000;
+const CLAIMABLE_JOB_STATUSES = new Set(['pending', 'retry_wait']);
+const LEASED_JOB_STATUSES = new Set(['generating', 'validating', 'repairing']);
+const VALID_GENERATION_WORD = /^[a-z]+([ '-][a-z]+)*$/i;
+
+function throwHealthQueryError(error) {
+    if (error) throw new Error('QUESTION_GENERATION_HEALTH_QUERY_FAILED');
+}
+
+async function loadHealthRowsById(queryFactory) {
+    const rows = [];
+    let cursor = '';
+    while (true) {
+        let query = queryFactory();
+        if (cursor) query = query.gt('id', cursor);
+        const { data, error } = await query.order('id', { ascending: true }).limit(QUESTION_GENERATION_HEALTH_PAGE_SIZE);
+        throwHealthQueryError(error);
+        const page = Array.isArray(data) ? data : [];
+        rows.push(...page);
+        if (page.length < QUESTION_GENERATION_HEALTH_PAGE_SIZE) break;
+        const nextCursor = String(page[page.length - 1]?.id || '');
+        if (!nextCursor || nextCursor === cursor) throw new Error('QUESTION_GENERATION_HEALTH_PAGINATION_FAILED');
+        cursor = nextCursor;
+    }
+    return rows;
+}
+
+function isDueUnderClaimRules(job, nowMs) {
+    const status = String(job?.status || '');
+    if (CLAIMABLE_JOB_STATUSES.has(status)) {
+        const nextAttemptMs = Date.parse(String(job?.next_attempt_at || ''));
+        return Number.isFinite(nextAttemptMs) && nextAttemptMs <= nowMs;
+    }
+    if (!LEASED_JOB_STATUSES.has(status)) return false;
+    if (job?.lease_expires_at === null || job?.lease_expires_at === undefined || job?.lease_expires_at === '') return true;
+    const leaseExpiresMs = Date.parse(String(job.lease_expires_at));
+    return Number.isFinite(leaseExpiresMs) && leaseExpiresMs <= nowMs;
+}
+
+function isWordEligibleForJob(word, job) {
+    if (!word || String(word.id) !== String(job?.word_id)) return false;
+    if (String(word.user_id) !== String(job?.user_id)) return false;
+    if (String(word.question_generation_version) !== String(job?.word_version)) return false;
+    if (word.mastery_status === null || word.mastery_status === undefined || word.mastery_status === 'mastered') return false;
+    const spelling = String(word.word || '').replace(/^ +| +$/g, '');
+    const spellingMatch = spelling.match(VALID_GENERATION_WORD);
+    return spelling.toLowerCase() !== 'genaine' && spellingMatch?.[0] === spelling;
+}
+
+function createQuestionGenerationEligibleDueCounter({ client = supabase, now = () => new Date().toISOString() } = {}) {
+    return async function countQuestionGenerationEligibleDueJobs() {
+        const nowValue = now();
+        const nowMs = Date.parse(String(nowValue || ''));
+        if (!Number.isFinite(nowMs)) throw new Error('QUESTION_GENERATION_HEALTH_CLOCK_INVALID');
+        const nowIso = new Date(nowMs).toISOString();
+        const dueFilter = [
+            `and(status.in.(pending,retry_wait),next_attempt_at.lte.${nowIso})`,
+            `and(status.in.(generating,validating,repairing),or(lease_expires_at.is.null,lease_expires_at.lte.${nowIso}))`,
+        ].join(',');
+        const candidateJobs = await loadHealthRowsById(() => client
+            .from('question_generation_jobs')
+            .select('id,user_id,word_id,word_version,status,next_attempt_at,lease_expires_at')
+            .or(dueFilter));
+        const dueJobs = candidateJobs.filter(job => isDueUnderClaimRules(job, nowMs));
+        if (dueJobs.length === 0) return 0;
+
+        const wordIds = [...new Set(dueJobs.map(job => String(job.word_id || '')).filter(Boolean))];
+        const words = [];
+        for (let offset = 0; offset < wordIds.length; offset += QUESTION_GENERATION_HEALTH_PAGE_SIZE) {
+            const ids = wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_PAGE_SIZE);
+            const { data, error } = await client
+                .from('words')
+                .select('id,user_id,question_generation_version,mastery_status,word')
+                .in('id', ids)
+                .order('id', { ascending: true })
+                .limit(QUESTION_GENERATION_HEALTH_PAGE_SIZE);
+            throwHealthQueryError(error);
+            words.push(...(Array.isArray(data) ? data : []));
+        }
+        const wordsById = new Map(words.map(word => [String(word.id), word]));
+        return dueJobs.reduce((count, job) => (
+            count + (isWordEligibleForJob(wordsById.get(String(job.word_id)), job) ? 1 : 0)
+        ), 0);
+    };
+}
 
 async function getServerRuntimeHealth(state) {
     const health = getRuntimeHealth();
-    const workerError = state?.workerLastError || '';
     const runtime = state?.runtime || null;
     let database = { ok: true };
     if (health.dataSource === 'supabase' && process.env.SUPABASE_URL) {
@@ -162,18 +246,37 @@ async function getServerRuntimeHealth(state) {
             database = { ok: false, error: error.message };
         }
     }
+    let eligibleDueCount = 'unknown';
+    if (state?.workerConfigured && typeof state.getQuestionGenerationEligibleDueCount === 'function') {
+        try {
+            eligibleDueCount = await state.getQuestionGenerationEligibleDueCount();
+        } catch (_) {
+            eligibleDueCount = 'unknown';
+        }
+    }
+    const observed = typeof runtime?.worker?.getObservability === 'function'
+        ? runtime.worker.getObservability()
+        : {};
+    const workerHealth = getQuestionGenerationWorkerHealth({
+        configured: state
+            ? state.workerConfigured
+            : String(process.env.DATA_SOURCE || 'supabase').toLowerCase() !== 'feishu',
+        running: Boolean(runtime?.worker?.isRunning()),
+        lastError: state?.workerLastError || '',
+        startedAt: observed.startedAt || state?.workerStartedAt,
+        lastAttemptAt: observed.lastAttemptAt || state?.workerLastAttemptAt,
+        lastClaimAt: observed.lastClaimAt || state?.workerLastClaimAt,
+        lastSuccessAt: observed.lastSuccessAt || state?.workerLastSuccessAt,
+        lastCompletionAt: observed.lastCompletionAt || state?.workerLastCompletionAt,
+        eligibleDueCount,
+        now: state?.workerHealthNow?.() || new Date().toISOString(),
+        stallAfterMs: state?.workerStallAfterMs,
+    });
     return {
         ...health,
-        ok: health.ok && !workerError && database.ok,
+        ok: health.ok && database.ok && workerHealth.ok,
         database,
-        questionGenerationWorker: {
-            configured: state
-                ? state.workerConfigured
-                : String(process.env.DATA_SOURCE || 'supabase').toLowerCase() !== 'feishu',
-            running: Boolean(runtime?.worker?.isRunning()),
-            lastError: workerError || null,
-            lastSuccessAt: state?.workerLastSuccessAt || null,
-        },
+        questionGenerationWorker: workerHealth,
     };
 }
 
@@ -786,10 +889,22 @@ function startServer(port = PORT, options = {}) {
         workerConfigured: enableQuestionGenerationWorker,
         runtime: null,
         workerLastError: '',
+        workerStartedAt: null,
+        workerLastAttemptAt: null,
+        workerLastClaimAt: null,
         workerLastSuccessAt: null,
+        workerLastCompletionAt: null,
+        workerHealthNow: options.workerHealthNow || (() => new Date().toISOString()),
+        workerStallAfterMs: options.workerStallAfterMs,
+        getQuestionGenerationEligibleDueCount: null,
         stopPromise: null,
         originalClose: null,
     };
+    state.getQuestionGenerationEligibleDueCount = options.getQuestionGenerationEligibleDueCount
+        || createQuestionGenerationEligibleDueCounter({
+            client: options.questionGenerationHealthClient || supabase,
+            now: state.workerHealthNow,
+        });
     const server = createServerApp(state).listen(port, '0.0.0.0', () => {
         console.log(`后端服务运行在 http://0.0.0.0:${port}`);
     });
@@ -799,18 +914,23 @@ function startServer(port = PORT, options = {}) {
         try {
             const runtime = runtimeFactory({
                 onError: error => {
-                    state.workerLastError = String(error?.message || error || 'worker_failed');
+                    state.workerLastAttemptAt = state.workerHealthNow();
+                    state.workerLastError = 'question_generation_worker_failed';
                     console.error('[question_generation_worker]', state.workerLastError);
                 },
-                onSuccess: () => {
+                onSuccess: summary => {
+                    const completedAt = state.workerHealthNow();
                     state.workerLastError = '';
-                    state.workerLastSuccessAt = new Date().toISOString();
+                    state.workerLastAttemptAt = completedAt;
+                    state.workerLastSuccessAt = completedAt;
+                    if (Number(summary?.claimed) > 0) state.workerLastClaimAt = completedAt;
+                    if (Number(summary?.completed) > 0) state.workerLastCompletionAt = completedAt;
                 },
             });
             state.runtime = runtime;
-            runtime.worker.start();
+            if (runtime.worker.start()) state.workerStartedAt = state.workerHealthNow();
         } catch (error) {
-            state.workerLastError = String(error?.message || error || 'worker_start_failed');
+            state.workerLastError = 'question_generation_worker_start_failed';
             console.error('[question_generation_worker]', state.workerLastError);
         }
     }

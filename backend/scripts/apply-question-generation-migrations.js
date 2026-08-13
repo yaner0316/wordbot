@@ -10,6 +10,26 @@ with claim_proc as (
   select to_regprocedure('public.claim_question_generation_jobs(text,integer,bigint)')::oid as oid
 ), old_claim_proc as (
   select to_regprocedure('public.claim_question_generation_jobs(text,integer,timestamptz,timestamptz,timestamptz,text,text[],text[],boolean)')::oid as oid
+), formal_quality_proc as (
+  select to_regprocedure('public.validate_formal_challenge_question_quality()')::oid as oid
+), formal_quality_state as (
+  select
+    quality.oid is not null as function_exists,
+    coalesce(not proc.prosecdef, false) as security_invoker,
+    coalesce(proc.proconfig @> array['search_path=pg_catalog'], false) as safe_search_path,
+    coalesce(bool_or(acl.grantee = 0 and acl.privilege_type = 'EXECUTE'), false) as public_execute,
+    coalesce(bool_or(role.rolname = 'anon' and acl.privilege_type = 'EXECUTE'), false) as anon_execute,
+    coalesce(bool_or(role.rolname = 'authenticated' and acl.privilege_type = 'EXECUTE'), false) as authenticated_execute,
+    coalesce(bool_or(role.rolname = 'service_role' and acl.privilege_type = 'EXECUTE'), false) as service_role_execute
+  from formal_quality_proc as quality
+  left join pg_catalog.pg_proc as proc on proc.oid = quality.oid
+  left join lateral aclexplode(
+    case when proc.oid is null then null::aclitem[]
+         else coalesce(proc.proacl, acldefault('f', proc.proowner))
+    end
+  ) as acl on true
+  left join pg_catalog.pg_roles as role on role.oid = acl.grantee
+  group by quality.oid, proc.prosecdef, proc.proconfig
 ), rpc_specs(name, signature) as (
   values
     ('claim_question_generation_jobs', 'public.claim_question_generation_jobs(text,integer,bigint)'),
@@ -20,6 +40,7 @@ with claim_proc as (
     ('enqueue_question_generation_job_if_needed', 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)'),
     ('fence_word_question_generation', 'public.fence_word_question_generation(uuid,uuid)'),
     ('finalize_word_question_generation_edit', 'public.finalize_word_question_generation_edit(uuid,uuid)'),
+    ('reconcile_word_mastery_status', 'public.reconcile_word_mastery_status(uuid,uuid,text,timestamptz,text,timestamptz)'),
     ('create_formal_quiz_challenge', 'public.create_formal_quiz_challenge(uuid,text,text,jsonb,timestamptz)')
     ,('invalidate_formal_quiz_question', 'public.invalidate_formal_quiz_question(uuid,text,uuid,text,timestamptz)')
     ,('replace_formal_quiz_question', 'public.replace_formal_quiz_question(uuid,text,uuid,uuid,text,text,jsonb,timestamptz)')
@@ -31,6 +52,7 @@ with claim_proc as (
     rpc.name,
     rpc.oid is not null as signature,
     coalesce(proc.prosecdef, false) as security_definer,
+    coalesce(proc.proconfig @> array['search_path=pg_catalog'], false) as safe_search_path,
     coalesce(bool_or(acl.grantee = 0 and acl.privilege_type = 'EXECUTE'), false) as public_execute,
     coalesce(bool_or(role.rolname = 'anon' and acl.privilege_type = 'EXECUTE'), false) as anon_execute,
     coalesce(bool_or(role.rolname = 'authenticated' and acl.privilege_type = 'EXECUTE'), false) as authenticated_execute,
@@ -43,13 +65,14 @@ with claim_proc as (
     end
   ) as acl on true
   left join pg_catalog.pg_roles as role on role.oid = acl.grantee
-  group by rpc.name, rpc.oid, proc.prosecdef
+  group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
   to_regclass('public.question_generation_jobs') is not null as jobs_table,
   to_regclass('public.quiz_challenges') is not null as formal_challenges_table,
   to_regclass('public.quiz_challenge_questions') is not null as formal_challenge_questions_table,
   to_regclass('public.quiz_display_events') is not null as formal_display_events_table,
+  to_regclass('public.assessments') is not null as assessments_table,
   coalesce((
     select cls.relrowsecurity
     from pg_catalog.pg_class as cls
@@ -59,6 +82,46 @@ select
   coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_challenges'), false) as formal_challenges_rls_enabled,
   coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_challenge_questions'), false) as formal_challenge_questions_rls_enabled,
   coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'quiz_display_events'), false) as formal_display_events_rls_enabled,
+  coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'assessments'), false) as assessments_rls_enabled,
+  exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.assessments')
+      and attribute.attname = 'parent_review_id'
+      and attribute.atttypid = 'text'::regtype
+      and not attribute.attnotnull
+      and not attribute.attisdropped
+  ) as assessment_parent_review_id_column,
+  exists (
+    select 1
+    from pg_catalog.pg_class as index_class
+    join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace
+    join pg_catalog.pg_index as index_meta on index_meta.indexrelid = index_class.oid
+    where namespace.nspname = 'public'
+      and index_class.relname = 'assessments_parent_review_idx'
+      and index_meta.indrelid = to_regclass('public.assessments')
+      and not index_meta.indisunique
+      and index_meta.indpred is not null
+      and pg_get_indexdef(index_meta.indexrelid) like '%(user_id, parent_review_id, review_status)%'
+      and lower(pg_get_expr(index_meta.indpred, index_meta.indrelid)) like '%parent_review_id%is not null%'
+  ) as assessment_parent_review_index,
+  (select function_exists from formal_quality_state) as formal_quality_function,
+  (select security_invoker from formal_quality_state) as formal_quality_function_security_invoker,
+  (select safe_search_path from formal_quality_state) as formal_quality_function_safe_search_path,
+  (select public_execute from formal_quality_state) as formal_quality_function_public_execute,
+  (select anon_execute from formal_quality_state) as formal_quality_function_anon_execute,
+  (select authenticated_execute from formal_quality_state) as formal_quality_function_authenticated_execute,
+  (select service_role_execute from formal_quality_state) as formal_quality_function_service_role_execute,
+  exists (
+    select 1
+    from pg_catalog.pg_trigger as trigger
+    where trigger.tgrelid = to_regclass('public.quiz_challenge_questions')
+      and trigger.tgname = 'validate_formal_challenge_question_quality'
+      and trigger.tgfoid = (select oid from formal_quality_proc)
+      and trigger.tgtype = 23
+      and not trigger.tgisinternal
+      and trigger.tgenabled <> 'D'
+  ) as formal_quality_trigger,
   exists (
     select 1
     from pg_catalog.pg_trigger as trigger
@@ -186,6 +249,13 @@ select
   (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_public_execute,
   (select anon_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_anon_execute,
   (select authenticated_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_authenticated_execute,
+  (select signature from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_signature,
+  (select security_definer from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_security_definer,
+  (select public_execute from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_public_execute,
+  (select anon_execute from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_service_role_execute,
+  (select safe_search_path from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_safe_search_path,
   (select oid is null from old_claim_proc) as rpc_old_claim_signature_absent,
   to_regprocedure('public.renew_question_generation_job(uuid,text,bigint)') is null as rpc_old_renew_signature_absent,
   to_regprocedure('public.publish_question_generation_variants(uuid,text,jsonb)') is null as rpc_old_publish_signature_absent,
@@ -200,6 +270,9 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260807_formal_quiz_challenges.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260808_formal_bad_question_replacement.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260810_word_edit_cache_fk_hardening.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260811_formal_question_quality_gate.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260814_assessment_parent_review_id.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260814_reconcile_word_mastery_status.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -211,6 +284,7 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
   'enqueue_question_generation_job_if_needed',
   'fence_word_question_generation',
   'finalize_word_question_generation_edit',
+  'reconcile_word_mastery_status',
   'create_formal_quiz_challenge',
   'invalidate_formal_quiz_question',
   'replace_formal_quiz_question',
@@ -245,6 +319,19 @@ const EXPECTED_STATE = Object.freeze({
   job_word_version_column: true,
   backfill_hardening_revision: true,
   job_lease_token_column: true,
+  formal_quality_function: true,
+  formal_quality_function_security_invoker: true,
+  formal_quality_function_safe_search_path: true,
+  formal_quality_function_public_execute: false,
+  formal_quality_function_anon_execute: false,
+  formal_quality_function_authenticated_execute: false,
+  formal_quality_function_service_role_execute: false,
+  formal_quality_trigger: true,
+  assessments_table: true,
+  assessments_rls_enabled: true,
+  assessment_parent_review_id_column: true,
+  assessment_parent_review_index: true,
+  rpc_reconcile_word_mastery_status_safe_search_path: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),

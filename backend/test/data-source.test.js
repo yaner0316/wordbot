@@ -1298,6 +1298,104 @@ test('missing session with partial persisted assessment returns an explicit inco
     );
 });
 
+test('missing session with a full set of ungraded assessments stays incomplete', async () => {
+    const assessments = Array.from({ length: 10 }, (_, index) => ({
+        id: `assessment-${index + 1}`,
+        test_id: 'real-ungraded-history',
+        source_word_record_id: `rec-word-${index + 1}`,
+        word_snapshot: `word${index + 1}`,
+        submitted_answer: null,
+        correct_answer: 'A',
+        is_correct: null,
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForTest: async () => assessments,
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-ungraded-history', []),
+        error => error.message === 'QUIZ_SUBMISSION_INCOMPLETE'
+    );
+});
+
+test('missing session with one answerless row among ten assessments stays incomplete', async () => {
+    const assessments = Array.from({ length: 10 }, (_, index) => ({
+        id: `assessment-${index + 1}`,
+        test_id: 'real-partly-graded-history',
+        source_word_record_id: `rec-word-${index + 1}`,
+        word_snapshot: `word${index + 1}`,
+        submitted_answer: index === 9 ? '|sure' : 'A|sure',
+        correct_answer: 'A',
+        is_correct: 'correct',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForTest: async () => assessments,
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-partly-graded-history', []),
+        error => error.message === 'QUIZ_SUBMISSION_INCOMPLETE'
+    );
+});
+
+test('missing session with one incomplete row among ten assessments stays incomplete', async () => {
+    const assessments = Array.from({ length: 10 }, (_, index) => ({
+        id: `assessment-${index + 1}`,
+        test_id: 'real-partly-graded-history',
+        source_word_record_id: `rec-word-${index + 1}`,
+        word_snapshot: `word${index + 1}`,
+        submitted_answer: index === 9 ? null : 'A|sure',
+        correct_answer: 'A',
+        is_correct: index === 9 ? null : 'correct',
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForTest: async () => assessments,
+        },
+    });
+
+    await assert.rejects(
+        dataSource.submitAnswers('qiuqiu', 'real-partly-graded-history', []),
+        error => error.message === 'QUIZ_SUBMISSION_INCOMPLETE'
+    );
+});
+
+test('idempotent replay preserves stored scores for malformed legacy options', async () => {
+    const assessments = Array.from({ length: 10 }, (_, index) => ({
+        id: `assessment-${index + 1}`,
+        test_id: 'real-malformed-options',
+        source_word_record_id: `rec-word-${index + 1}`,
+        word_snapshot: `word${index + 1}`,
+        submitted_answer: 'A|sure',
+        correct_answer: 'B',
+        is_correct: index < 7 ? 'correct' : 'wrong',
+        migration_flags: ['malformed_options'],
+        options: [],
+    }));
+    const dataSource = loadDataSource({
+        supabaseExports: {
+            getQuizSession: async () => null,
+            getAssessmentsForTest: async () => assessments,
+        },
+    });
+
+    const result = await dataSource.submitAnswers('qiuqiu', 'real-malformed-options', []);
+
+    assert.equal(result.alreadySubmitted, true);
+    assert.equal(result.correct, 7);
+    assert.equal(result.total, 10);
+    assert.deepEqual(result.results.map(row => row.correct), [
+        true, true, true, true, true, true, true, false, false, false,
+    ]);
+});
+
 test('missing session with no persisted assessments still returns QUIZ_SESSION_NOT_FOUND', async () => {
     const dataSource = loadDataSource({
         supabaseExports: {

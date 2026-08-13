@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { PGlite } = require('@electric-sql/pglite');
 
 const {
   MIGRATION_PATHS,
@@ -20,6 +21,7 @@ const RPC_SIGNATURES = Object.freeze({
   enqueue_question_generation_job_if_needed: 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)',
   fence_word_question_generation: 'public.fence_word_question_generation(uuid,uuid)',
   finalize_word_question_generation_edit: 'public.finalize_word_question_generation_edit(uuid,uuid)',
+  reconcile_word_mastery_status: 'public.reconcile_word_mastery_status(uuid,uuid,text,timestamptz,text,timestamptz)',
   invalidate_formal_quiz_question: 'public.invalidate_formal_quiz_question(uuid,text,uuid,text,timestamptz)',
   replace_formal_quiz_question: 'public.replace_formal_quiz_question(uuid,text,uuid,uuid,text,text,jsonb,timestamptz)',
 });
@@ -53,6 +55,9 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260807_formal_quiz_challenges.sql',
       '20260808_formal_bad_question_replacement.sql',
       '20260810_word_edit_cache_fk_hardening.sql',
+      '20260811_formal_question_quality_gate.sql',
+      '20260814_assessment_parent_review_id.sql',
+      '20260814_reconcile_word_mastery_status.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -108,6 +113,19 @@ const COMPLETE_STATE = Object.freeze({
   rpc_invalidate_formal_quiz_question_security_definer: false,
   rpc_replace_formal_quiz_question_security_definer: false,
   job_lease_token_column: true,
+  formal_quality_function: true,
+  formal_quality_function_security_invoker: true,
+  formal_quality_function_safe_search_path: true,
+  formal_quality_function_public_execute: false,
+  formal_quality_function_anon_execute: false,
+  formal_quality_function_authenticated_execute: false,
+  formal_quality_function_service_role_execute: false,
+  formal_quality_trigger: true,
+  assessments_table: true,
+  assessments_rls_enabled: true,
+  assessment_parent_review_id_column: true,
+  assessment_parent_review_index: true,
+  rpc_reconcile_word_mastery_status_safe_search_path: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
   rpc_old_renew_signature_absent: true,
@@ -132,6 +150,28 @@ const INCOMPLETE_STATE = Object.freeze({
   rpc_finalize_word_question_generation_edit_signature: false,
   rpc_finalize_word_question_generation_edit_security_definer: false,
   rpc_finalize_word_question_generation_edit_service_role_execute: false,
+  formal_quality_function: false,
+  formal_quality_function_security_invoker: false,
+  formal_quality_function_safe_search_path: false,
+  formal_quality_function_public_execute: true,
+  formal_quality_trigger: false,
+  assessment_parent_review_id_column: false,
+  assessment_parent_review_index: false,
+});
+
+const QUALITY_GATE_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  formal_quality_function: false,
+  formal_quality_function_security_invoker: false,
+  formal_quality_function_safe_search_path: false,
+  formal_quality_function_public_execute: true,
+  formal_quality_trigger: false,
+});
+
+const ASSESSMENT_PARENT_REVIEW_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  assessment_parent_review_id_column: false,
+  assessment_parent_review_index: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -226,6 +266,44 @@ test('an incomplete database is inspected, migrated in fixed order, and verified
   assert.equal(harness.instances[0].ended, true);
 });
 
+test('a database missing only the formal quality gate replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({ states: [QUALITY_GATE_MISSING_STATE, COMPLETE_STATE] });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
+test('a database missing only assessment parent review support replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_PARENT_REVIEW_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -254,6 +332,39 @@ test('post-migration verification failure rejects instead of reporting success',
   );
   assert.equal(harness.instances[0].ended, true);
 });
+
+test('post-migration verification fails closed when the formal quality gate remains incomplete', async () => {
+  const harness = createDatabaseHarness({
+    states: [QUALITY_GATE_MISSING_STATE, QUALITY_GATE_MISSING_STATE],
+  });
+
+  await assert.rejects(
+    applyQuestionGenerationMigrations({
+      env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+      Client: harness.Client,
+      readFile: async filePath => `-- ${path.basename(filePath)}`,
+    }),
+    /verification failed.*formal_quality_function.*formal_quality_function_security_invoker.*formal_quality_trigger/i
+  );
+  assert.equal(harness.instances[0].ended, true);
+});
+
+test('post-migration verification fails closed when assessment parent review support remains incomplete', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_PARENT_REVIEW_MISSING_STATE, ASSESSMENT_PARENT_REVIEW_MISSING_STATE],
+  });
+
+  await assert.rejects(
+    applyQuestionGenerationMigrations({
+      env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+      Client: harness.Client,
+      readFile: async filePath => `-- ${path.basename(filePath)}`,
+    }),
+    /verification failed.*assessment_parent_review_id_column.*assessment_parent_review_index/i
+  );
+  assert.equal(harness.instances[0].ended, true);
+});
+
 test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
   assert.match(VERIFICATION_SQL, /formal_challenges_table/);
@@ -275,12 +386,24 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   }
   assert.match(VERIFICATION_SQL, /prosecdef/);
   assert.match(VERIFICATION_SQL, /rpc_old_claim_signature_absent/);
+  assert.match(VERIFICATION_SQL, /validate_formal_challenge_question_quality\(\)/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_security_invoker/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_safe_search_path/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_public_execute/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_anon_execute/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_authenticated_execute/);
+  assert.match(VERIFICATION_SQL, /formal_quality_function_service_role_execute/);
+  assert.match(VERIFICATION_SQL, /formal_quality_trigger/);
+  assert.match(VERIFICATION_SQL, /assessment_parent_review_id_column/);
+  assert.match(VERIFICATION_SQL, /assessment_parent_review_index/);
+  assert.match(VERIFICATION_SQL, /assessments_rls_enabled/);
+  assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, masteryReconciliationSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, masteryReconciliationSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -300,7 +423,19 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(versionSql, /create or replace function public\.fence_word_question_generation/i);
   assert.match(versionSql, /create or replace function public\.finalize_word_question_generation_edit/i);
   assert.match(versionSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
-  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}`;
+  assert.match(qualitySql, /create or replace function public\.validate_formal_challenge_question_quality\(\)/i);
+  assert.match(qualitySql, /drop trigger if exists validate_formal_challenge_question_quality/i);
+  assert.match(assessmentParentSql, /add column if not exists parent_review_id text/i);
+  assert.match(assessmentParentSql, /create index if not exists assessments_parent_review_idx/i);
+  assert.match(assessmentParentSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
+  assert.doesNotMatch(assessmentParentSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
+  assert.doesNotMatch(assessmentParentSql, /\b(?:grant|revoke)\b/i);
+  assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
+  assert.match(masteryReconciliationSql, /security definer/i);
+  assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
+  assert.match(masteryReconciliationSql, /for update/i);
+  assert.match(masteryReconciliationSql, /is distinct from/i);
+  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');
@@ -320,6 +455,109 @@ test('root prestart runs only the fixed migration runner before the original ser
 
   assert.equal(rootPackage.scripts.prestart, 'node backend/scripts/apply-question-generation-migrations.js');
   assert.equal(rootPackage.scripts.start, 'node backend/server.js');
+});
+
+test('assessment parent review migration preserves RLS and ACL while adding the nullable text column and partial index', async () => {
+  const migrationPath = path.join(__dirname, '..', 'migrations', '20260814_assessment_parent_review_id.sql');
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+  const db = new PGlite();
+
+  try {
+    await db.exec(`
+      create role anon;
+      create role authenticated;
+      create role service_role;
+      create table public.assessments (
+        id uuid primary key,
+        user_id uuid not null,
+        review_status text
+      );
+      alter table public.assessments enable row level security;
+      grant select on table public.assessments to anon;
+      grant insert, update on table public.assessments to service_role;
+    `);
+    const before = await db.query(`
+      select relrowsecurity, coalesce(relacl::text, '') as relacl
+      from pg_catalog.pg_class
+      where oid = 'public.assessments'::regclass
+    `);
+
+    await db.exec(migrationSql);
+    await db.exec(migrationSql);
+
+    const column = await db.query(`
+      select format_type(atttypid, atttypmod) as type, attnotnull
+      from pg_catalog.pg_attribute
+      where attrelid = 'public.assessments'::regclass
+        and attname = 'parent_review_id'
+        and not attisdropped
+    `);
+    assert.deepEqual(column.rows, [{ type: 'text', attnotnull: false }]);
+
+    const indexes = await db.query(`
+      select pg_get_indexdef(index_meta.indexrelid) as definition,
+             pg_get_expr(index_meta.indpred, index_meta.indrelid) as predicate
+      from pg_catalog.pg_index index_meta
+      join pg_catalog.pg_class index_class on index_class.oid = index_meta.indexrelid
+      where index_class.relname = 'assessments_parent_review_idx'
+    `);
+    assert.equal(indexes.rows.length, 1);
+    assert.match(indexes.rows[0].definition, /\(user_id, parent_review_id, review_status\)/i);
+    assert.match(indexes.rows[0].predicate, /parent_review_id IS NOT NULL/i);
+
+    const after = await db.query(`
+      select relrowsecurity, coalesce(relacl::text, '') as relacl
+      from pg_catalog.pg_class
+      where oid = 'public.assessments'::regclass
+    `);
+    assert.deepEqual(after.rows, before.rows);
+
+    const verification = await db.query(VERIFICATION_SQL);
+    assert.deepEqual({
+      assessments_table: verification.rows[0].assessments_table,
+      assessments_rls_enabled: verification.rows[0].assessments_rls_enabled,
+      assessment_parent_review_id_column: verification.rows[0].assessment_parent_review_id_column,
+      assessment_parent_review_index: verification.rows[0].assessment_parent_review_index,
+    }, {
+      assessments_table: true,
+      assessments_rls_enabled: true,
+      assessment_parent_review_id_column: true,
+      assessment_parent_review_index: true,
+    });
+  } finally {
+    await db.close();
+  }
+});
+
+test('assessment parent review migration accepts an existing compatible column and index', async () => {
+  const migrationPath = path.join(__dirname, '..', 'migrations', '20260814_assessment_parent_review_id.sql');
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+  const db = new PGlite();
+
+  try {
+    await db.exec(`
+      create table public.assessments (
+        id uuid primary key,
+        user_id uuid not null,
+        parent_review_id text,
+        review_status text
+      );
+      create index assessments_parent_review_idx
+        on public.assessments (user_id, parent_review_id, review_status)
+        where parent_review_id is not null;
+    `);
+    await db.exec(migrationSql);
+    await db.exec(migrationSql);
+
+    const result = await db.query(`
+      select count(*)::integer as count
+      from pg_catalog.pg_class
+      where relname = 'assessments_parent_review_idx'
+    `);
+    assert.deepEqual(result.rows, [{ count: 1 }]);
+  } finally {
+    await db.close();
+  }
 });
 
 test('the real runner exits nonzero without DATABASE_URL and does not start the server', () => {

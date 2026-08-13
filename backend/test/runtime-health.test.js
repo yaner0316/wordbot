@@ -1,7 +1,26 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { REQUIRED_ENV, getRuntimeHealth } = require('../runtime-health');
+const {
+    DEFAULT_WORKER_STALL_AFTER_MS,
+    REQUIRED_ENV,
+    getRuntimeHealth,
+    getQuestionGenerationWorkerHealth,
+} = require('../runtime-health');
+
+test('worker default stall window allows a bounded AI generation batch', () => {
+    assert.equal(DEFAULT_WORKER_STALL_AFTER_MS, 15 * 60_000);
+    const health = getQuestionGenerationWorkerHealth({
+        configured: true,
+        running: true,
+        startedAt: '2026-08-14T00:00:00.000Z',
+        lastAttemptAt: '2026-08-14T00:00:00.000Z',
+        now: '2026-08-14T00:02:00.000Z',
+    });
+
+    assert.equal(health.ok, true);
+    assert.equal(health.status, 'never_succeeded');
+});
 
 test('runtime health marks missing required environment variables', () => {
     const health = getRuntimeHealth({
@@ -66,4 +85,72 @@ test('runtime health does not require Feishu variables for Supabase data source'
     const health = getRuntimeHealth({ env: { DATA_SOURCE: 'supabase' } });
     assert.equal(health.ok, true);
     assert.deepEqual(health.missing, []);
+});
+
+test('worker health exposes unknown backlog and never-succeeded startup without failing during grace', () => {
+    const health = getQuestionGenerationWorkerHealth({
+        configured: true,
+        running: true,
+        startedAt: '2026-08-14T00:00:00.000Z',
+        now: '2026-08-14T00:00:20.000Z',
+        stallAfterMs: 60_000,
+    });
+
+    assert.equal(health.ok, true);
+    assert.equal(health.status, 'never_succeeded');
+    assert.equal(health.neverSucceeded, true);
+    assert.equal(health.stalled, false);
+    assert.equal(health.eligibleDueCount, 'unknown');
+});
+
+test('worker health fails when a configured running worker never attempts after its grace period', () => {
+    const health = getQuestionGenerationWorkerHealth({
+        configured: true,
+        running: true,
+        startedAt: '2026-08-14T00:00:00.000Z',
+        now: '2026-08-14T00:02:00.000Z',
+        stallAfterMs: 60_000,
+    });
+
+    assert.equal(health.ok, false);
+    assert.equal(health.status, 'stalled');
+    assert.equal(health.stalled, true);
+    assert.equal(health.neverSucceeded, true);
+});
+
+test('worker health treats recent successful empty polling with no due jobs as idle', () => {
+    const health = getQuestionGenerationWorkerHealth({
+        configured: true,
+        running: true,
+        startedAt: '2026-08-14T00:00:00.000Z',
+        lastAttemptAt: '2026-08-14T00:09:55.000Z',
+        lastSuccessAt: '2026-08-14T00:09:55.000Z',
+        eligibleDueCount: 0,
+        now: '2026-08-14T00:10:00.000Z',
+        stallAfterMs: 60_000,
+    });
+
+    assert.equal(health.ok, true);
+    assert.equal(health.status, 'idle');
+    assert.equal(health.stalled, false);
+    assert.equal(health.neverSucceeded, false);
+    assert.equal(health.eligibleDueCount, 0);
+});
+
+test('worker health detects due backlog with recent polling but no claim progress', () => {
+    const health = getQuestionGenerationWorkerHealth({
+        configured: true,
+        running: true,
+        startedAt: '2026-08-14T00:00:00.000Z',
+        lastAttemptAt: '2026-08-14T00:09:55.000Z',
+        lastSuccessAt: '2026-08-14T00:09:55.000Z',
+        eligibleDueCount: 3,
+        now: '2026-08-14T00:10:00.000Z',
+        stallAfterMs: 60_000,
+    });
+
+    assert.equal(health.ok, false);
+    assert.equal(health.status, 'stalled');
+    assert.equal(health.stalled, true);
+    assert.equal(health.eligibleDueCount, 3);
 });
