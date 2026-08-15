@@ -57,6 +57,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260810_word_edit_cache_fk_hardening.sql',
       '20260811_formal_question_quality_gate.sql',
       '20260814_assessment_parent_review_id.sql',
+      '20260814_assessment_context_zh.sql',
       '20260814_reconcile_word_mastery_status.sql',
     ]
   );
@@ -124,6 +125,7 @@ const COMPLETE_STATE = Object.freeze({
   assessments_table: true,
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
+  assessment_context_zh_column: true,
   assessment_parent_review_index: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   backfill_hardening_revision: true,
@@ -172,6 +174,11 @@ const ASSESSMENT_PARENT_REVIEW_MISSING_STATE = Object.freeze({
   ...COMPLETE_STATE,
   assessment_parent_review_id_column: false,
   assessment_parent_review_index: false,
+});
+
+const ASSESSMENT_CONTEXT_ZH_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  assessment_context_zh_column: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -304,6 +311,26 @@ test('a database missing only assessment parent review support replays the fixed
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing only assessment context translation support replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_CONTEXT_ZH_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -365,6 +392,22 @@ test('post-migration verification fails closed when assessment parent review sup
   assert.equal(harness.instances[0].ended, true);
 });
 
+test('post-migration verification fails closed when assessment context translation remains incomplete', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_CONTEXT_ZH_MISSING_STATE, ASSESSMENT_CONTEXT_ZH_MISSING_STATE],
+  });
+
+  await assert.rejects(
+    applyQuestionGenerationMigrations({
+      env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+      Client: harness.Client,
+      readFile: async filePath => `-- ${path.basename(filePath)}`,
+    }),
+    /verification failed.*assessment_context_zh_column/i
+  );
+  assert.equal(harness.instances[0].ended, true);
+});
+
 test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
   assert.match(VERIFICATION_SQL, /formal_challenges_table/);
@@ -395,15 +438,16 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /formal_quality_function_service_role_execute/);
   assert.match(VERIFICATION_SQL, /formal_quality_trigger/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_id_column/);
+  assert.match(VERIFICATION_SQL, /assessment_context_zh_column/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_index/);
   assert.match(VERIFICATION_SQL, /assessments_rls_enabled/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, masteryReconciliationSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, masteryReconciliationSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -430,6 +474,10 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(assessmentParentSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
   assert.doesNotMatch(assessmentParentSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
   assert.doesNotMatch(assessmentParentSql, /\b(?:grant|revoke)\b/i);
+  assert.match(assessmentContextSql, /add column if not exists context_zh text/i);
+  assert.match(assessmentContextSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
+  assert.doesNotMatch(assessmentContextSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
+  assert.doesNotMatch(assessmentContextSql, /\b(?:grant|revoke)\b/i);
   assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
   assert.match(masteryReconciliationSql, /security definer/i);
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
