@@ -436,6 +436,7 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /formal_quality_function_anon_execute/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_authenticated_execute/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_service_role_execute/);
+  assert.match(VERIFICATION_SQL, /has_function_privilege\('service_role',\s*rpc\.oid,\s*'EXECUTE'\)/i);
   assert.match(VERIFICATION_SQL, /formal_quality_trigger/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_id_column/);
   assert.match(VERIFICATION_SQL, /assessment_context_zh_column/);

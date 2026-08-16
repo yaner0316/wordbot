@@ -850,7 +850,7 @@ grant execute on function public.fail_question_generation_job(uuid, text, bigint
     to service_role;
 
 revoke all on function public.enqueue_question_generation_job_if_needed(uuid, uuid, text)
-    from public, anon, authenticated;
+    from public, anon, authenticated, service_role;
 grant execute on function public.enqueue_question_generation_job_if_needed(uuid, uuid, text)
     to service_role;
 

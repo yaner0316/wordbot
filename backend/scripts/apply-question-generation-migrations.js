@@ -56,7 +56,7 @@ with claim_proc as (
     coalesce(bool_or(acl.grantee = 0 and acl.privilege_type = 'EXECUTE'), false) as public_execute,
     coalesce(bool_or(role.rolname = 'anon' and acl.privilege_type = 'EXECUTE'), false) as anon_execute,
     coalesce(bool_or(role.rolname = 'authenticated' and acl.privilege_type = 'EXECUTE'), false) as authenticated_execute,
-    coalesce(bool_or(role.rolname = 'service_role' and acl.privilege_type = 'EXECUTE'), false) as service_role_execute
+    coalesce(has_function_privilege('service_role', rpc.oid, 'EXECUTE'), false) as service_role_execute
   from rpc_proc as rpc
   left join pg_catalog.pg_proc as proc on proc.oid = rpc.oid
   left join lateral aclexplode(
