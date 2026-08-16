@@ -467,6 +467,9 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(versionSql, /create or replace function public\.fence_word_question_generation/i);
   assert.match(versionSql, /create or replace function public\.finalize_word_question_generation_edit/i);
   assert.match(versionSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
+  assert.match(versionSql, /quiz_challenge_questions[\s\S]*cache_state\s*=\s*'retired'/i);
+  assert.match(versionSql, /not exists\s*\([\s\S]*quiz_challenge_questions[\s\S]*cache_question_id\s*=\s*cache\.id/i);
+  assert.match(versionSql, /to_regclass\('public\.quiz_challenge_questions'\)/i);
   assert.match(qualitySql, /create or replace function public\.validate_formal_challenge_question_quality\(\)/i);
   assert.match(qualitySql, /drop trigger if exists validate_formal_challenge_question_quality/i);
   assert.match(assessmentParentSql, /add column if not exists parent_review_id text/i);

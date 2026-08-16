@@ -47,15 +47,63 @@ where word.id = job.word_id
   and word.user_id = job.user_id
   and job.word_version is distinct from word.question_generation_version;
 
-delete from public.question_cache as cache
-using public.words as word
-where word.id = cache.word_id
-  and word.user_id = cache.user_id
-  and (
-      word.mastery_status = 'mastered'
-      or lower(btrim(word.word)) = 'genaine'
-      or btrim(word.word) !~* '^[a-z]+([ ''-][a-z]+)*$'
-  );
+-- Formal challenge questions retain a restricted reference to their cache
+-- snapshot. Retire referenced rows and physically delete only unreferenced
+-- rows. Use dynamic SQL because this migration runs before the formal
+-- challenge table on a fresh database.
+do $$
+begin
+    if to_regclass('public.quiz_challenge_questions') is null then
+        execute $sql$
+            delete from public.question_cache as cache
+            using public.words as word
+            where word.id = cache.word_id
+              and word.user_id = cache.user_id
+              and (
+                  word.mastery_status = 'mastered'
+                  or lower(btrim(word.word)) = 'genaine'
+                  or btrim(word.word) !~* '^[a-z]+([ ''-][a-z]+)*$'
+              )
+        $sql$;
+    else
+        execute $sql$
+            update public.question_cache as cache
+            set cache_state = 'retired',
+                updated_at = clock_timestamp()
+            from public.words as word
+            where word.id = cache.word_id
+              and word.user_id = cache.user_id
+              and (
+                  word.mastery_status = 'mastered'
+                  or lower(btrim(word.word)) = 'genaine'
+                  or btrim(word.word) !~* '^[a-z]+([ ''-][a-z]+)*$'
+              )
+              and exists (
+                  select 1
+                  from public.quiz_challenge_questions as challenge_question
+                  where challenge_question.cache_question_id = cache.id
+              )
+        $sql$;
+
+        execute $sql$
+            delete from public.question_cache as cache
+            using public.words as word
+            where word.id = cache.word_id
+              and word.user_id = cache.user_id
+              and (
+                  word.mastery_status = 'mastered'
+                  or lower(btrim(word.word)) = 'genaine'
+                  or btrim(word.word) !~* '^[a-z]+([ ''-][a-z]+)*$'
+              )
+              and not exists (
+                  select 1
+                  from public.quiz_challenge_questions as challenge_question
+                  where challenge_question.cache_question_id = cache.id
+              )
+        $sql$;
+    end if;
+end;
+$$;
 
 delete from public.question_generation_jobs as job
 using public.words as word
