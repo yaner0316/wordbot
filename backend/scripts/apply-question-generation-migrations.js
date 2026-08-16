@@ -421,7 +421,12 @@ async function applyQuestionGenerationMigrations({
     for (const migrationPath of MIGRATION_PATHS) {
       const sql = await readFile(migrationPath, 'utf8');
       if (!String(sql).trim()) throw new Error(`Migration file is empty: ${path.basename(migrationPath)}`);
-      await client.query(sql);
+      try {
+        await client.query(sql);
+      } catch (error) {
+        error.migrationFile = path.basename(migrationPath);
+        throw error;
+      }
       appliedMigrations.push(path.basename(migrationPath));
     }
 
@@ -449,7 +454,10 @@ function publicFailureMessage(error) {
   const code = typeof error?.code === 'string' && /^[A-Z0-9]{5}$/.test(error.code)
     ? ` (${error.code})`
     : '';
-  return `Database migration failed${code}`;
+  const migration = error?.migrationFile ? ` in ${error.migrationFile}` : '';
+  const table = error?.table ? ` table=${error.table}` : '';
+  const constraint = error?.constraint ? ` constraint=${error.constraint}` : '';
+  return `Database migration failed${migration}${code}${table}${constraint}`;
 }
 
 async function main() {
