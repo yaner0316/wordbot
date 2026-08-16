@@ -7,6 +7,7 @@ const { PGlite } = require('@electric-sql/pglite');
 
 const {
   MIGRATION_PATHS,
+  RPC_VERIFICATION_ALIASES,
   applyQuestionGenerationMigrations,
   normalizeDatabaseUrl,
   VERIFICATION_SQL,
@@ -27,15 +28,24 @@ const RPC_SIGNATURES = Object.freeze({
 });
 
 const RPC_STATE_KEYS = Object.freeze(
-  Object.keys(RPC_SIGNATURES).flatMap(name => [
-    `rpc_${name}_signature`,
-    `rpc_${name}_security_definer`,
-    `rpc_${name}_public_execute`,
-    `rpc_${name}_anon_execute`,
-    `rpc_${name}_authenticated_execute`,
-    `rpc_${name}_service_role_execute`,
-  ])
+  Object.keys(RPC_SIGNATURES).flatMap(name => {
+    const stateName = RPC_VERIFICATION_ALIASES[name] || name;
+    return [
+      `rpc_${stateName}_signature`,
+      `rpc_${stateName}_security_definer`,
+      `rpc_${stateName}_public_execute`,
+      `rpc_${stateName}_anon_execute`,
+      `rpc_${stateName}_authenticated_execute`,
+      `rpc_${stateName}_service_role_execute`,
+    ];
+  })
 );
+
+test('verification keys fit PostgreSQL identifier limits', () => {
+  for (const key of RPC_STATE_KEYS) {
+    assert.ok(Buffer.byteLength(key, 'utf8') <= 63, key);
+  }
+});
 
 test('normalizes a DATABASE_URL whose password contains unencoded reserved characters', () => {
   assert.equal(
@@ -150,9 +160,9 @@ const INCOMPLETE_STATE = Object.freeze({
   job_lease_token_column: false,
   rpc_fence_word_question_generation_security_definer: false,
   rpc_fence_word_question_generation_service_role_execute: false,
-  rpc_finalize_word_question_generation_edit_signature: false,
-  rpc_finalize_word_question_generation_edit_security_definer: false,
-  rpc_finalize_word_question_generation_edit_service_role_execute: false,
+  rpc_finalize_word_edit_signature: false,
+  rpc_finalize_word_edit_security_definer: false,
+  rpc_finalize_word_edit_service_role_execute: false,
   formal_quality_function: false,
   formal_quality_function_security_invoker: false,
   formal_quality_function_safe_search_path: false,
@@ -425,8 +435,9 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /rolname = 'authenticated'/);
   assert.match(VERIFICATION_SQL, /rolname = 'service_role'/);
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
+    const verificationName = RPC_VERIFICATION_ALIASES[name] || name;
     assert.ok(VERIFICATION_SQL.includes(signature), signature);
-    assert.match(VERIFICATION_SQL, new RegExp('rpc_' + name + '_security_definer'));
+    assert.match(VERIFICATION_SQL, new RegExp('rpc_' + verificationName + '_security_definer'));
   }
   assert.match(VERIFICATION_SQL, /prosecdef/);
   assert.match(VERIFICATION_SQL, /rpc_old_claim_signature_absent/);

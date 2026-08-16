@@ -35,7 +35,7 @@ test('fixed migration runner verifies the version columns, revision, and edit RP
     assert.match(VERIFICATION_SQL, /fence_word_question_generation/i);
     assert.match(VERIFICATION_SQL, /finalize_word_question_generation_edit/i);
     assert.match(VERIFICATION_SQL, /rpc_fence_word_question_generation_service_role_execute/i);
-    assert.match(VERIFICATION_SQL, /rpc_finalize_word_question_generation_edit_service_role_execute/i);
+    assert.match(VERIFICATION_SQL, /rpc_finalize_word_edit_service_role_execute/i);
 });
 
 test('fixed migration runner restores and verifies the assessment context translation column', () => {

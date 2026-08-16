@@ -4,6 +4,11 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Client } = require('pg');
 
+const RPC_VERIFICATION_ALIASES = Object.freeze({
+  enqueue_question_generation_job_if_needed: 'enqueue_job_if_needed',
+  finalize_word_question_generation_edit: 'finalize_word_edit',
+});
+
 const VERIFICATION_SQL = `
 /* question-generation-migration-state */
 with claim_proc as (
@@ -222,19 +227,19 @@ select
   (select anon_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_anon_execute,
   (select authenticated_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_service_role_execute,
-  (select service_role_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_service_role_execute,
-  (select signature from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_signature,
-  (select security_definer from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_security_definer,
-  (select public_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_public_execute,
-  (select anon_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_anon_execute,
-  (select authenticated_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_question_generation_job_if_needed_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_service_role_execute,
+  (select signature from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_signature,
+  (select security_definer from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_security_definer,
+  (select public_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_public_execute,
+  (select anon_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_service_role_execute,
   (select signature from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_signature,
   (select security_definer from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_security_definer,
   (select public_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_public_execute,
   (select anon_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_anon_execute,
   (select authenticated_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_authenticated_execute,
-  (select service_role_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_service_role_execute,
+  (select service_role_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_service_role_execute,
   (select signature from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_signature,
   (select security_definer from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_security_definer,
   (select public_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_public_execute,
@@ -253,11 +258,11 @@ select
   (select anon_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_anon_execute,
   (select authenticated_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_service_role_execute,
-  (select signature from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_signature,
-  (select security_definer from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_security_definer,
-  (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_public_execute,
-  (select anon_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_anon_execute,
-  (select authenticated_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_question_generation_edit_authenticated_execute,
+  (select signature from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_signature,
+  (select security_definer from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_security_definer,
+  (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_public_execute,
+  (select anon_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_authenticated_execute,
   (select signature from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_signature,
   (select security_definer from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_security_definer,
   (select public_execute from rpc_state where name = 'reconcile_word_mastery_status') as rpc_reconcile_word_mastery_status_public_execute,
@@ -299,14 +304,17 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
   'create_formal_quiz_challenge',
   'invalidate_formal_quiz_question',
   'replace_formal_quiz_question',
-].flatMap(name => [
-  `rpc_${name}_signature`,
-  `rpc_${name}_security_definer`,
-  `rpc_${name}_public_execute`,
-  `rpc_${name}_anon_execute`,
-  `rpc_${name}_authenticated_execute`,
-  `rpc_${name}_service_role_execute`,
-]));
+].flatMap(name => {
+  const verificationName = RPC_VERIFICATION_ALIASES[name] || name;
+  return [
+    `rpc_${verificationName}_signature`,
+    `rpc_${verificationName}_security_definer`,
+    `rpc_${verificationName}_public_execute`,
+    `rpc_${verificationName}_anon_execute`,
+    `rpc_${verificationName}_authenticated_execute`,
+    `rpc_${verificationName}_service_role_execute`,
+  ];
+}));
 
 const EXPECTED_STATE = Object.freeze({
   jobs_table: true,
@@ -477,6 +485,7 @@ if (require.main === module) {
 }
 module.exports = {
   MIGRATION_PATHS,
+  RPC_VERIFICATION_ALIASES,
   VERIFICATION_SQL,
   applyQuestionGenerationMigrations,
   normalizeDatabaseUrl,
