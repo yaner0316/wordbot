@@ -59,6 +59,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260814_assessment_parent_review_id.sql',
       '20260814_assessment_context_zh.sql',
       '20260814_reconcile_word_mastery_status.sql',
+      '20260816_enqueue_rpc_acl.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -446,9 +447,9 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -487,6 +488,8 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
   assert.match(masteryReconciliationSql, /for update/i);
   assert.match(masteryReconciliationSql, /is distinct from/i);
+  assert.match(enqueueAclSql, /revoke all on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*service_role/i);
+  assert.match(enqueueAclSql, /grant execute on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*to service_role/i);
   const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {

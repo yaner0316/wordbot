@@ -283,6 +283,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260814_assessment_parent_review_id.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260814_assessment_context_zh.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260814_reconcile_word_mastery_status.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260816_enqueue_rpc_acl.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
