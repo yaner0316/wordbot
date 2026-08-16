@@ -24,6 +24,9 @@ const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 const { auditUniqueAnswer } = require('./question-semantic-audit');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
+const { createSupabaseAdminAdapter } = require('./supabase-admin');
+const { createSupabaseAuthAdapter } = require('./supabase-auth');
+const { createSupabaseMaintenanceAdapter } = require('./supabase-maintenance');
 const { fingerprintQuestion } = require('./question-generation-service');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
@@ -2980,9 +2983,27 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
     const distractorGenerator = generateDistractors || (async () => null);
     const contextTranslator = translateContext || translateSupabaseContext;
     const translator = translateWords || (async () => ({}));
+    const auth = createSupabaseAuthAdapter(client);
+    const admin = createSupabaseAdminAdapter(client);
+    const maintenance = createSupabaseMaintenanceAdapter(client, {
+        translateWords: translator,
+        translateContext: contextTranslator,
+    });
     return {
         name: 'supabase',
         canonicalUsernameKey,
+        registerUser: auth.register,
+        loginUser: auth.login,
+        verifyParentLogin: auth.verifyParentLogin,
+        setParentCredentials: auth.setParentCredentials,
+        initializeParentCredentials: auth.initializeParentCredentials,
+        resetChildPassword: auth.resetChildPassword,
+        getAllUsers: admin.getAllUsers,
+        getReviewWords: admin.getReviewWords,
+        markWordForReview: admin.markWordForReview,
+        clearWordReview: admin.clearWordReview,
+        deleteUserTestData: maintenance.deleteUserTestData,
+        backfillTranslations: maintenance.backfillTranslations,
         getUserByUsername: username => getUserByUsernameWithClient(client, username),
         getStats: username => getStatsWithClient(client, username),
         getAllStats: () => getAllStatsWithClient(client),
@@ -3059,6 +3080,18 @@ module.exports = {
     name: 'supabase',
     canonicalUsernameKey,
     createSupabaseDataAdapter,
+    registerUser: defaultAdapter.registerUser,
+    loginUser: defaultAdapter.loginUser,
+    verifyParentLogin: defaultAdapter.verifyParentLogin,
+    setParentCredentials: defaultAdapter.setParentCredentials,
+    initializeParentCredentials: defaultAdapter.initializeParentCredentials,
+    resetChildPassword: defaultAdapter.resetChildPassword,
+    getAllUsers: defaultAdapter.getAllUsers,
+    getReviewWords: defaultAdapter.getReviewWords,
+    markWordForReview: defaultAdapter.markWordForReview,
+    clearWordReview: defaultAdapter.clearWordReview,
+    deleteUserTestData: defaultAdapter.deleteUserTestData,
+    backfillTranslations: defaultAdapter.backfillTranslations,
     hydrateFormalChallengeSnapshot,
     buildCacheQuestionRowsForWord,
     generateReplacementContextWithAI,

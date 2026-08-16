@@ -809,6 +809,42 @@ test('parent word library endpoint returns paginated words', async () => {
     });
 });
 
+test('admin review mark forwards the explicit owner instead of relying on a child session', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        markWordForReview: async (...args) => {
+            calls.push(args);
+            return { success: true };
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/reviewWords/mark`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recordId: 'rec-1', userId: 'yusi', flags: ['manual_review'], note: 'check' }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(calls, [['rec-1', ['manual_review'], 'check', 'yusi']]);
+    });
+});
+
+test('admin review mutations reject requests without an explicit owner', async () => {
+    const app = loadServerWithFeishu(createFakeFeishu());
+
+    await withServer(app, async baseUrl => {
+        for (const route of ['mark', 'clear']) {
+            const response = await fetch(`${baseUrl}/api/admin/reviewWords/${route}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recordId: 'rec-1' }),
+            });
+            assert.equal(response.status, 400);
+        }
+    });
+});
+
 test('review submit endpoint starts the next round prebuild in the background', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

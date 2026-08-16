@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const { createSessionStore, normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, searchRecords, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
 const {
@@ -786,9 +786,9 @@ app.get('/api/admin/reviewWords', async (req, res) => {
 
 app.post('/api/admin/reviewWords/mark', async (req, res) => {
     try {
-        const { recordId, flags, note } = req.body;
-        if (!recordId) return res.status(400).json({ error: '缺少recordId' });
-        const data = await markWordForReview(recordId, flags, note, req.wordbotSession?.user || '');
+        const { recordId, userId, flags, note } = req.body;
+        if (!recordId || !userId) return res.status(400).json({ error: '缺少recordId或userId' });
+        const data = await markWordForReview(recordId, flags, note, userId);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -797,9 +797,9 @@ app.post('/api/admin/reviewWords/mark', async (req, res) => {
 
 app.post('/api/admin/reviewWords/clear', async (req, res) => {
     try {
-        const { recordId } = req.body;
-        if (!recordId) return res.status(400).json({ error: '缺少recordId' });
-        const data = await clearWordReview(recordId, req.wordbotSession?.user || '');
+        const { recordId, userId } = req.body;
+        if (!recordId || !userId) return res.status(400).json({ error: '缺少recordId或userId' });
+        const data = await clearWordReview(recordId, userId);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

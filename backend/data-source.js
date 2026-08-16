@@ -15,6 +15,9 @@ const {
 const { getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { normalizeCacheRow, isCacheQuestionReady } = require('./question-cache');
 const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
+if (process.env.NODE_ENV === 'production' && DATA_SOURCE === 'feishu') {
+    throw new Error('FEISHU_DATA_SOURCE_DISABLED_IN_PRODUCTION');
+}
 const quizQuestionsByTestId = new Map();
 const quizSubmitLocks = new Map();
 let lastQuizSessionCleanupAt = 0;
@@ -209,6 +212,28 @@ function loadFeishuDataSource() {
 
 function loadSupabaseDataSource() {
     const supabaseData = require('./supabase-data');
+    const requiredAuthMethods = [
+        'registerUser',
+        'loginUser',
+        'verifyParentLogin',
+        'setParentCredentials',
+        'initializeParentCredentials',
+        'resetChildPassword',
+    ];
+    const requiredAdminMethods = [
+        'getAllUsers',
+        'getReviewWords',
+        'markWordForReview',
+        'clearWordReview',
+        'deleteUserTestData',
+        'backfillTranslations',
+    ];
+    const missingMethods = [...requiredAuthMethods, ...requiredAdminMethods]
+        .filter(name => typeof supabaseData[name] !== 'function');
+    if (missingMethods.length) {
+        throw new Error(`SUPABASE_ADAPTER_INCOMPLETE: ${missingMethods.join(', ')}`);
+    }
+    if (CACHE_SOURCE !== 'db') throw new Error(`UNSUPPORTED_CACHE_SOURCE: ${CACHE_SOURCE}`);
 
     const WORD_TABLE = { dataSourceTable: 'words' };
     const TEST_TABLE = { dataSourceTable: 'assessments' };
@@ -240,29 +265,8 @@ function loadSupabaseDataSource() {
         return new Map(users.map(user => [user.id, user]));
     }
 
-    let feishuCacheDataSource;
-    function getFeishuCacheDataSource() {
-        if (!feishuCacheDataSource) feishuCacheDataSource = loadFeishuDataSource();
-        return feishuCacheDataSource;
-    }
-
     async function getQuestionCache(username, level, roundType) {
-        const source = CACHE_SOURCE;
-        const dbRead = () => supabaseData.getQuestionCache(username, level, roundType);
-        if (source === 'db') return dbRead();
-
-        const feishuRead = () => getFeishuCacheDataSource().getQuestionCache(username, level, roundType);
-        if (source === 'feishu') return feishuRead();
-
-        const feishuRows = await feishuRead();
-        try {
-            const dbRows = await dbRead();
-            console.warn('[question_cache compare] ' + JSON.stringify(summarizeCacheComparison(dbRows, feishuRows)));
-            return dbRows;
-        } catch (error) {
-            console.warn('[question_cache compare] ' + JSON.stringify({ dbError: error.message, feishuCount: feishuRows.length }));
-            throw error;
-        }
+        return supabaseData.getQuestionCache(username, level, roundType);
     }
     async function getRecords(table) {
         if (isTable(table, 'words')) {
@@ -635,7 +639,6 @@ function loadSupabaseDataSource() {
         return isResumableQuizSession(session, mode) ? session : null;
     }
     return {
-        ...loadFeishuFallbackExports(),
         ...supabaseData,
         getActiveFormalQuizChallenge,
         getQuizHistory: (username, mode) => supabaseData.getQuizHistory(username, mode),
@@ -682,14 +685,6 @@ async function getActiveFormalQuizChallengeBestEffort(supabaseData, user, option
 }
 }
 
-function loadFeishuFallbackExports() {
-    try {
-        return require('./feishu');
-    } catch (error) {
-        return {};
-    }
-}
-
 async function getActiveQuizSessionBestEffort(supabaseData, user, mode = 'real', options) {
     if (typeof supabaseData.getActiveQuizSession !== 'function') return null;
     try {
@@ -709,22 +704,6 @@ function normalizeCacheSource(value) {
 }
 
 const CACHE_SOURCE = normalizeCacheSource(process.env.WORDBOT_CACHE_SOURCE);
-
-function cacheRowKey(row) {
-    return String(row?.record_id || row?.feishu_record_id || row?.id || '').trim();
-}
-
-function summarizeCacheComparison(dbRows, feishuRows) {
-    const dbKeys = new Set((dbRows || []).map(cacheRowKey).filter(Boolean));
-    const feishuKeys = new Set((feishuRows || []).map(cacheRowKey).filter(Boolean));
-    return {
-        dbCount: Array.isArray(dbRows) ? dbRows.length : 0,
-        feishuCount: Array.isArray(feishuRows) ? feishuRows.length : 0,
-        dbOnlyCount: [...dbKeys].filter(key => !feishuKeys.has(key)).length,
-        feishuOnlyCount: [...feishuKeys].filter(key => !dbKeys.has(key)).length,
-    };
-}
-
 
 async function deleteQuizSessionBestEffort(supabaseData, user, testId) {
     if (typeof supabaseData.deleteQuizSession !== 'function' || !testId) return null;

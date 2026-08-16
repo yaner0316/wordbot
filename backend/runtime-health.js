@@ -1,4 +1,4 @@
-const REQUIRED_ENV = [
+const FEISHU_REQUIRED_ENV = [
     'FEISHU_APP_ID',
     'FEISHU_APP_SECRET',
     'FEISHU_WORD_APP_TOKEN',
@@ -8,6 +8,8 @@ const REQUIRED_ENV = [
     'FEISHU_STATS_APP_TOKEN',
     'FEISHU_STATS_TABLE_ID',
 ];
+const SUPABASE_REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+const REQUIRED_ENV = FEISHU_REQUIRED_ENV;
 
 const DEFAULT_WORKER_STALL_AFTER_MS = 15 * 60_000;
 
@@ -92,19 +94,19 @@ function getRuntimeHealth({
     version = '1.0.0',
     now = () => new Date().toISOString(),
 } = {}) {
-    const envStatus = {};
-    for (const name of REQUIRED_ENV) {
-        envStatus[name] = Boolean(env[name]);
-    }
-    const dataSource = String(env.DATA_SOURCE || env.WORDBOT_DATA_SOURCE || 'supabase').trim().toLowerCase() === 'feishu'
+    const dataSource = String(env.DATA_SOURCE || 'supabase').trim().toLowerCase() === 'feishu'
         ? 'feishu'
         : 'supabase';
-    const missing = dataSource === 'feishu' ? REQUIRED_ENV.filter(name => !envStatus[name]) : [];
-    const questionCache = {
-        appTokenConfigured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN),
-        tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),
-    };
-    questionCache.configured = questionCache.appTokenConfigured && questionCache.tableIdConfigured;
+    const requiredEnv = dataSource === 'feishu' ? FEISHU_REQUIRED_ENV : SUPABASE_REQUIRED_ENV;
+    const envStatus = Object.fromEntries(requiredEnv.map(name => [name, Boolean(env[name])]));
+    const missing = requiredEnv.filter(name => !envStatus[name]);
+    const questionCache = dataSource === 'feishu'
+        ? {
+            configured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN && env.FEISHU_QUESTION_CACHE_TABLE_ID),
+            appTokenConfigured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN),
+            tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),
+        }
+        : { configured: missing.length === 0, source: 'supabase' };
     const session = {
         sharedSecretConfigured: Boolean(env.WORDBOT_SESSION_SECRET || env.WORDBOT_ADMIN_TOKEN),
     };
@@ -123,7 +125,9 @@ function getRuntimeHealth({
 
 module.exports = {
     DEFAULT_WORKER_STALL_AFTER_MS,
+    FEISHU_REQUIRED_ENV,
     REQUIRED_ENV,
+    SUPABASE_REQUIRED_ENV,
     getQuestionGenerationWorkerHealth,
     getRuntimeHealth,
 };

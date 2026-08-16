@@ -18,7 +18,7 @@ try {
     // Production injects env vars directly; local dotenv is optional.
 }
 
-const { initializeParentCredentials, verifyParentLogin } = require('./feishu');
+const { initializeParentCredentials, verifyParentLogin } = require('./data-source');
 
 function parseArg(name, fallback = '') {
     const prefix = `--${name}=`;
@@ -91,7 +91,7 @@ async function main() {
     console.log(`Target users: ${users.join(', ')}`);
     console.log(`Parent username: ${parentUsername}`);
     if (dryRun) {
-        console.log('[dry-run] No Feishu records will be changed.');
+        console.log('[dry-run] No account records will be changed.');
         return;
     }
 
