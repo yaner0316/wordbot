@@ -70,6 +70,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260814_assessment_context_zh.sql',
       '20260814_reconcile_word_mastery_status.sql',
       '20260816_enqueue_rpc_acl.sql',
+      '20260816_assessment_option_meanings.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -137,6 +138,7 @@ const COMPLETE_STATE = Object.freeze({
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
   assessment_context_zh_column: true,
+  assessment_option_meanings_column: true,
   assessment_parent_review_index: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   backfill_hardening_revision: true,
@@ -190,6 +192,11 @@ const ASSESSMENT_PARENT_REVIEW_MISSING_STATE = Object.freeze({
 const ASSESSMENT_CONTEXT_ZH_MISSING_STATE = Object.freeze({
   ...COMPLETE_STATE,
   assessment_context_zh_column: false,
+});
+
+const ASSESSMENT_OPTION_MEANINGS_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  assessment_option_meanings_column: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -342,6 +349,26 @@ test('a database missing only assessment context translation support replays the
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing assessment option meanings replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_OPTION_MEANINGS_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -419,6 +446,22 @@ test('post-migration verification fails closed when assessment context translati
   assert.equal(harness.instances[0].ended, true);
 });
 
+test('post-migration verification fails closed when assessment option meanings remain missing', async () => {
+  const harness = createDatabaseHarness({
+    states: [ASSESSMENT_OPTION_MEANINGS_MISSING_STATE, ASSESSMENT_OPTION_MEANINGS_MISSING_STATE],
+  });
+
+  await assert.rejects(
+    applyQuestionGenerationMigrations({
+      env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+      Client: harness.Client,
+      readFile: async filePath => `-- ${path.basename(filePath)}`,
+    }),
+    /verification failed.*assessment_option_meanings_column/i
+  );
+  assert.equal(harness.instances[0].ended, true);
+});
+
 test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
   assert.match(VERIFICATION_SQL, /formal_challenges_table/);
@@ -452,15 +495,16 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /formal_quality_trigger/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_id_column/);
   assert.match(VERIFICATION_SQL, /assessment_context_zh_column/);
+  assert.match(VERIFICATION_SQL, /assessment_option_meanings_column/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_index/);
   assert.match(VERIFICATION_SQL, /assessments_rls_enabled/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -494,6 +538,10 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(assessmentContextSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
   assert.doesNotMatch(assessmentContextSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
   assert.doesNotMatch(assessmentContextSql, /\b(?:grant|revoke)\b/i);
+  assert.match(assessmentOptionMeaningsSql, /add column if not exists option_meanings jsonb not null default '\[\]'::jsonb/i);
+  assert.match(assessmentOptionMeaningsSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
+  assert.doesNotMatch(assessmentOptionMeaningsSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
+  assert.doesNotMatch(assessmentOptionMeaningsSql, /\b(?:grant|revoke)\b/i);
   assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
   assert.match(masteryReconciliationSql, /security definer/i);
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
@@ -513,6 +561,72 @@ test('approved SQL files are transactional and idempotent', () => {
       : 'security definer';
     assert.match(rpcSql, new RegExp('function public\\.' + name + '[\\s\\S]*' + securityKeyword, 'i'));
   }});
+
+test('assessment option meanings migration preserves RLS and ACL and defaults existing submissions safely', async () => {
+  const migrationPath = path.join(__dirname, '..', 'migrations', '20260816_assessment_option_meanings.sql');
+  const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+  const db = new PGlite();
+
+  try {
+    await db.exec(`
+      create role anon;
+      create role service_role;
+      create table public.assessments (
+        id uuid primary key
+      );
+      alter table public.assessments enable row level security;
+      grant select on table public.assessments to anon;
+      grant insert, update on table public.assessments to service_role;
+      insert into public.assessments (id) values ('00000000-0000-0000-0000-000000000001');
+    `);
+    const before = await db.query(`
+      select relrowsecurity, coalesce(relacl::text, '') as relacl
+      from pg_catalog.pg_class
+      where oid = 'public.assessments'::regclass
+    `);
+
+    await db.exec(migrationSql);
+    await db.exec(migrationSql);
+
+    const column = await db.query(`
+      select format_type(attribute.atttypid, attribute.atttypmod) as type,
+             attribute.attnotnull,
+             pg_get_expr(default_meta.adbin, default_meta.adrelid) as default_expr
+      from pg_catalog.pg_attribute as attribute
+      left join pg_catalog.pg_attrdef as default_meta
+        on default_meta.adrelid = attribute.attrelid
+       and default_meta.adnum = attribute.attnum
+      where attrelid = 'public.assessments'::regclass
+        and attname = 'option_meanings'
+        and not attisdropped
+    `);
+    assert.equal(column.rows[0].type, 'jsonb');
+    assert.equal(column.rows[0].attnotnull, true);
+    assert.match(column.rows[0].default_expr, /'\[\]'::jsonb/i);
+
+    const existing = await db.query(`select option_meanings from public.assessments`);
+    assert.deepEqual(existing.rows, [{ option_meanings: [] }]);
+
+    const after = await db.query(`
+      select relrowsecurity, coalesce(relacl::text, '') as relacl
+      from pg_catalog.pg_class
+      where oid = 'public.assessments'::regclass
+    `);
+    assert.deepEqual(after.rows, before.rows);
+
+    const verification = await db.query(VERIFICATION_SQL);
+    assert.equal(verification.rows[0].assessment_option_meanings_column, true);
+  } finally {
+    await db.close();
+  }
+});
+
+test('manual schema defines assessment option meanings for fresh databases', () => {
+  const schema = fs.readFileSync(path.join(__dirname, '..', 'manual-ddl.sql'), 'utf8');
+  const assessments = schema.match(/create table public\.assessments \(([\s\S]*?)\n\);/i);
+  assert.ok(assessments);
+  assert.match(assessments[1], /option_meanings jsonb not null default '\[\]'::jsonb/i);
+});
 
 test('root prestart runs only the fixed migration runner before the original server command', () => {
   const rootPackage = JSON.parse(

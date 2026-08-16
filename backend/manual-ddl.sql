@@ -130,6 +130,7 @@ create table public.assessments (
     word_snapshot text not null,
     question_text text,
     options jsonb not null default '[]'::jsonb,
+    option_meanings jsonb not null default '[]'::jsonb,
     correct_answer text,
     submitted_answer text,
     answer_confidence public.answer_confidence,
