@@ -108,6 +108,19 @@ select
   ) as assessment_context_zh_column,
   exists (
     select 1
+    from pg_catalog.pg_attribute as attribute
+    join pg_catalog.pg_attrdef as default_meta
+      on default_meta.adrelid = attribute.attrelid
+     and default_meta.adnum = attribute.attnum
+    where attribute.attrelid = to_regclass('public.assessments')
+      and attribute.attname = 'option_meanings'
+      and attribute.atttypid = 'jsonb'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+      and pg_get_expr(default_meta.adbin, default_meta.adrelid) = '''[]''::jsonb'
+  ) as assessment_option_meanings_column,
+  exists (
+    select 1
     from pg_catalog.pg_class as index_class
     join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace
     join pg_catalog.pg_index as index_meta on index_meta.indexrelid = index_class.oid
@@ -289,6 +302,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260814_assessment_context_zh.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260814_reconcile_word_mastery_status.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260816_enqueue_rpc_acl.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260816_assessment_option_meanings.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -350,6 +364,7 @@ const EXPECTED_STATE = Object.freeze({
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
   assessment_context_zh_column: true,
+  assessment_option_meanings_column: true,
   assessment_parent_review_index: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
