@@ -38,6 +38,12 @@ test('fixed migration runner verifies the version columns, revision, and edit RP
     assert.match(VERIFICATION_SQL, /rpc_finalize_word_question_generation_edit_service_role_execute/i);
 });
 
+test('fixed migration runner restores and verifies the assessment context translation column', () => {
+    assert.ok(MIGRATION_PATHS.some(filePath => path.basename(filePath) === '20260814_assessment_context_zh.sql'));
+    assert.match(VERIFICATION_SQL, /assessment_context_zh_column/i);
+    assert.match(VERIFICATION_SQL, /attribute\.attname\s*=\s*'context_zh'/i);
+});
+
 test('fence locks the exact owned word before incrementing its version and upserting an unclaimable job', () => {
     const body = functionBody('fence_word_question_generation');
     const lockIndex = body.search(/from public\.words[\s\S]*for update/i);

@@ -94,6 +94,15 @@ select
   ) as assessment_parent_review_id_column,
   exists (
     select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.assessments')
+      and attribute.attname = 'context_zh'
+      and attribute.atttypid = 'text'::regtype
+      and not attribute.attnotnull
+      and not attribute.attisdropped
+  ) as assessment_context_zh_column,
+  exists (
+    select 1
     from pg_catalog.pg_class as index_class
     join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace
     join pg_catalog.pg_index as index_meta on index_meta.indexrelid = index_class.oid
@@ -272,6 +281,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260810_word_edit_cache_fk_hardening.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260811_formal_question_quality_gate.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260814_assessment_parent_review_id.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260814_assessment_context_zh.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260814_reconcile_word_mastery_status.sql'),
 ]);
 
@@ -330,6 +340,7 @@ const EXPECTED_STATE = Object.freeze({
   assessments_table: true,
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
+  assessment_context_zh_column: true,
   assessment_parent_review_index: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
@@ -410,7 +421,12 @@ async function applyQuestionGenerationMigrations({
     for (const migrationPath of MIGRATION_PATHS) {
       const sql = await readFile(migrationPath, 'utf8');
       if (!String(sql).trim()) throw new Error(`Migration file is empty: ${path.basename(migrationPath)}`);
-      await client.query(sql);
+      try {
+        await client.query(sql);
+      } catch (error) {
+        error.migrationFile = path.basename(migrationPath);
+        throw error;
+      }
       appliedMigrations.push(path.basename(migrationPath));
     }
 
@@ -438,7 +454,10 @@ function publicFailureMessage(error) {
   const code = typeof error?.code === 'string' && /^[A-Z0-9]{5}$/.test(error.code)
     ? ` (${error.code})`
     : '';
-  return `Database migration failed${code}`;
+  const migration = error?.migrationFile ? ` in ${error.migrationFile}` : '';
+  const table = error?.table ? ` table=${error.table}` : '';
+  const constraint = error?.constraint ? ` constraint=${error.constraint}` : '';
+  return `Database migration failed${migration}${code}${table}${constraint}`;
 }
 
 async function main() {
