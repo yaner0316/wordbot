@@ -43,6 +43,45 @@ test('auth endpoints call the server-side account service', async () => {
     });
 });
 
+test('session progress endpoint is registered when the progress adapter is supplied', async () => {
+    const calls = [];
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        updateQuizSessionProgress: async (user, testId, progress) => {
+            calls.push({ user, testId, progress });
+            return { test_id: testId };
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/quiz/session/progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                user: 'test_user',
+                testId: 'real-session-progress-contract',
+                currentQuestion: 1,
+                answers: [{ answer: 'A', confidence: 'sure' }],
+            }),
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            saved: true,
+            testId: 'real-session-progress-contract',
+        });
+    });
+
+    assert.deepEqual(calls, [{
+        user: 'test_user',
+        testId: 'real-session-progress-contract',
+        progress: {
+            currentQuestion: 1,
+            answers: [{ answer: 'A', confidence: 'sure' }],
+        },
+    }]);
+});
+
 test('parent auth endpoint verifies the parent account in child context', async () => {
     const calls = [];
     const app = createApp({

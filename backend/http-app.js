@@ -141,6 +141,7 @@ function createApp({
     setParentCredentials,
     resetChildPassword,
     getActiveFormalQuizChallenge,
+    updateQuizSessionProgress,
     createReviewRound,
     prebuildWrongQuestionCache,
     getActiveReviewRound,
