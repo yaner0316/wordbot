@@ -71,6 +71,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260814_reconcile_word_mastery_status.sql',
       '20260816_enqueue_rpc_acl.sql',
       '20260816_assessment_option_meanings.sql',
+      '20260817_quiz_session_progress.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -140,6 +141,9 @@ const COMPLETE_STATE = Object.freeze({
   assessment_context_zh_column: true,
   assessment_option_meanings_column: true,
   assessment_parent_review_index: true,
+  quiz_session_state_column: true,
+  quiz_session_updated_at_column: true,
+  quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
@@ -197,6 +201,13 @@ const ASSESSMENT_CONTEXT_ZH_MISSING_STATE = Object.freeze({
 const ASSESSMENT_OPTION_MEANINGS_MISSING_STATE = Object.freeze({
   ...COMPLETE_STATE,
   assessment_option_meanings_column: false,
+});
+
+const QUIZ_SESSION_SCHEMA_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  quiz_session_state_column: false,
+  quiz_session_updated_at_column: false,
+  quiz_session_updated_at_trigger: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -369,6 +380,26 @@ test('a database missing assessment option meanings replays the fixed chain', as
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing quiz session progress schema replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [QUIZ_SESSION_SCHEMA_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -462,6 +493,22 @@ test('post-migration verification fails closed when assessment option meanings r
   assert.equal(harness.instances[0].ended, true);
 });
 
+test('post-migration verification fails closed when quiz session progress schema remains missing', async () => {
+  const harness = createDatabaseHarness({
+    states: [QUIZ_SESSION_SCHEMA_MISSING_STATE, QUIZ_SESSION_SCHEMA_MISSING_STATE],
+  });
+
+  await assert.rejects(
+    applyQuestionGenerationMigrations({
+      env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+      Client: harness.Client,
+      readFile: async filePath => `-- ${path.basename(filePath)}`,
+    }),
+    /verification failed.*quiz_session_state_column.*quiz_session_updated_at_column.*quiz_session_updated_at_trigger/i
+  );
+  assert.equal(harness.instances[0].ended, true);
+});
+
 test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
   assert.match(VERIFICATION_SQL, /formal_challenges_table/);
@@ -498,13 +545,16 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /assessment_option_meanings_column/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_index/);
   assert.match(VERIFICATION_SQL, /assessments_rls_enabled/);
+  assert.match(VERIFICATION_SQL, /quiz_session_state_column/);
+  assert.match(VERIFICATION_SQL, /quiz_session_updated_at_column/);
+  assert.match(VERIFICATION_SQL, /quiz_session_updated_at_trigger/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -542,6 +592,11 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(assessmentOptionMeaningsSql, /notify\s+pgrst\s*,\s*'reload schema'/i);
   assert.doesNotMatch(assessmentOptionMeaningsSql, /alter table public\.assessments (?:enable|disable|force|no force) row level security/i);
   assert.doesNotMatch(assessmentOptionMeaningsSql, /\b(?:grant|revoke)\b/i);
+  assert.match(quizSessionProgressSql, /add column if not exists session_state jsonb not null default '\{\}'::jsonb/i);
+  assert.match(quizSessionProgressSql, /add column if not exists updated_at timestamptz not null default now\(\)/i);
+  assert.match(quizSessionProgressSql, /security invoker/i);
+  assert.match(quizSessionProgressSql, /set search_path = pg_catalog/i);
+  assert.match(quizSessionProgressSql, /quiz_sessions_updated_at_trigger/i);
   assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
   assert.match(masteryReconciliationSql, /security definer/i);
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
