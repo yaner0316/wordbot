@@ -61,7 +61,7 @@ test('session progress endpoint is registered when the progress adapter is suppl
                 user: 'test_user',
                 testId: 'real-session-progress-contract',
                 currentQuestion: 1,
-                answers: [{ answer: 'A', confidence: 'sure' }],
+                answers: [{ option: 0, confidence: 'sure' }],
             }),
         });
 
@@ -77,7 +77,7 @@ test('session progress endpoint is registered when the progress adapter is suppl
         testId: 'real-session-progress-contract',
         progress: {
             currentQuestion: 1,
-            answers: [{ answer: 'A', confidence: 'sure' }],
+            answers: [{ option: 0, confidence: 'sure' }],
         },
     }]);
 });
