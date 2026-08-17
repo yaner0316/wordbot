@@ -119,17 +119,20 @@ test('repository factory defaults to Feishu and validates the repository shape',
     assert.equal(assertRepositoryShape(repositories), repositories);
 });
 
-test('runtime health reports the selected data source without changing env checks', () => {
+test('runtime health reports the selected data source and checks only its required environment', () => {
     const health = getRuntimeHealth({
         env: {
             DATA_SOURCE: 'supabase',
             WORDBOT_DATA_SOURCE: 'feishu',
             FEISHU_APP_ID: 'app',
+            SUPABASE_URL: 'https://wordbot.invalid',
+            SUPABASE_SERVICE_ROLE_KEY: 'configured',
         },
         now: () => '2026-06-21T00:00:00.000Z',
     });
 
     assert.equal(health.dataSource, 'supabase');
-    assert.equal(health.env.FEISHU_APP_ID, true);
-    assert.equal(health.env.FEISHU_APP_SECRET, false);
+    assert.equal(health.env.SUPABASE_URL, true);
+    assert.equal(health.env.SUPABASE_SERVICE_ROLE_KEY, true);
+    assert.equal(Object.hasOwn(health.env, 'FEISHU_APP_ID'), false);
 });

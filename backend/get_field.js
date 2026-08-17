@@ -5,7 +5,10 @@ if (!APP_ID) {
     console.error('错误：缺少 FEISHU_APP_ID 环境变量');
     process.exit(1);
 }
-const APP_SECRET = 'pppKJAybbiNqKIDB9hlvshTnXGPg7OVH';
+const APP_SECRET = process.env.FEISHU_APP_SECRET;
+if (!APP_SECRET) {
+    throw new Error('FEISHU_APP_SECRET is required');
+}
 const TEST_TABLE = { appToken: 'FyyPb1urFacfn7sGSjpca2UwnHe', tableId: 'tbl6Nx0kJWjr7qQZ' };
 
 function request(method, path, body, token) {

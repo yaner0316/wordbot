@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 
 const {
     DEFAULT_WORKER_STALL_AFTER_MS,
+    FEISHU_REQUIRED_ENV,
     REQUIRED_ENV,
+    SUPABASE_REQUIRED_ENV,
     getRuntimeHealth,
     getQuestionGenerationWorkerHealth,
 } = require('../runtime-health');
@@ -41,7 +43,10 @@ test('runtime health marks missing required environment variables', () => {
 });
 
 test('runtime health is ok when all required variables are present', () => {
-    const env = Object.fromEntries(REQUIRED_ENV.map(name => [name, 'set']));
+    const env = {
+        DATA_SOURCE: 'supabase',
+        ...Object.fromEntries(SUPABASE_REQUIRED_ENV.map(name => [name, 'set'])),
+    };
     const health = getRuntimeHealth({ env });
 
     assert.equal(health.ok, true);
@@ -51,7 +56,8 @@ test('runtime health is ok when all required variables are present', () => {
 
 test('runtime health reports question cache configuration booleans without secrets', () => {
     const env = {
-        ...Object.fromEntries(REQUIRED_ENV.map(name => [name, 'set'])),
+        DATA_SOURCE: 'feishu',
+        ...Object.fromEntries(FEISHU_REQUIRED_ENV.map(name => [name, 'set'])),
         FEISHU_QUESTION_CACHE_APP_TOKEN: 'secret-app-token',
         FEISHU_QUESTION_CACHE_TABLE_ID: 'secret-table-id',
     };
@@ -76,15 +82,25 @@ test('runtime health reports DATA_SOURCE used by runtime data-source module', ()
     assert.equal(health.dataSource, 'supabase');
 });
 
-test('runtime health defaults dataSource to supabase like data-source module', () => {
-    const health = getRuntimeHealth({ env: {} });
+test('runtime health defaults dataSource to supabase and ignores the retired alias', () => {
+    const health = getRuntimeHealth({ env: { WORDBOT_DATA_SOURCE: 'feishu' } });
 
     assert.equal(health.dataSource, 'supabase');
 });
-test('runtime health does not require Feishu variables for Supabase data source', () => {
-    const health = getRuntimeHealth({ env: { DATA_SOURCE: 'supabase' } });
-    assert.equal(health.ok, true);
-    assert.deepEqual(health.missing, []);
+test('runtime health requires Supabase credentials but not Feishu credentials in Supabase mode', () => {
+    const missing = getRuntimeHealth({ env: { DATA_SOURCE: 'supabase' } });
+    assert.equal(missing.ok, false);
+    assert.deepEqual(missing.missing, SUPABASE_REQUIRED_ENV);
+    assert.equal(Object.hasOwn(missing.env, 'FEISHU_APP_SECRET'), false);
+
+    const configured = getRuntimeHealth({ env: {
+        DATA_SOURCE: 'supabase',
+        SUPABASE_URL: 'https://wordbot.invalid',
+        SUPABASE_SERVICE_ROLE_KEY: 'configured',
+    } });
+    assert.equal(configured.ok, true);
+    assert.deepEqual(configured.missing, []);
+    assert.deepEqual(configured.questionCache, { configured: true, source: 'supabase' });
 });
 
 test('worker health exposes unknown backlog and never-succeeded startup without failing during grace', () => {

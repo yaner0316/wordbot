@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const { hashPassword } = require('../auth-service');
 
 const {
     createSupabaseDataAdapter: createRawSupabaseDataAdapter,
@@ -31,6 +32,55 @@ const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 const contextualDistractorsForTest = async ({ excludedDistractors = [] }) => excludedDistractors.length
     ? ['delta', 'echo', 'foxtrot']
     : ['alpha', 'bravo', 'charlie'];
+
+test('Supabase data adapter exposes database-backed child authentication', async () => {
+    const salt = '00112233445566778899aabbccddeeff';
+    const client = createFakeSupabase({
+        users: [{
+            id: 'user-test',
+            username: 'test_user',
+            username_key: 'test_user',
+            password_hash: hashPassword('goodpass', salt),
+            password_salt: salt,
+            auth_created_at: '2026-08-16T00:00:00.000Z',
+        }],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    assert.deepEqual(
+        await adapter.loginUser({ username: 'TEST_USER', password: 'goodpass' }),
+        { user: 'test_user' }
+    );
+});
+
+test('Supabase data adapter exposes database-backed admin user enumeration', async () => {
+    const client = createFakeSupabase({
+        users: [
+            { id: 'user-2', username: 'yusi', username_key: 'yusi' },
+            { id: 'user-1', username: 'Draggy', username_key: 'draggy' },
+        ],
+    });
+    const adapter = createSupabaseDataAdapter(client);
+
+    assert.deepEqual(await adapter.getAllUsers(), ['Draggy', 'yusi']);
+});
+
+test('Supabase data adapter exposes maintenance operations without a Feishu dependency', async () => {
+    const adapter = createSupabaseDataAdapter(createFakeSupabase());
+
+    assert.deepEqual(await adapter.deleteUserTestData('missing-user'), {
+        success: true,
+        deleted: 0,
+        rebuilt: 0,
+    });
+    assert.deepEqual(await adapter.backfillTranslations('missing-user'), {
+        cnFilled: 0,
+        cnSkipped: 0,
+        ctxFilled: 0,
+        ctxSkipped: 0,
+        total: 0,
+    });
+});
 
 test('Supabase stats derive progress and quiz metrics from words and assessments', async () => {
     const client = createFakeSupabase({

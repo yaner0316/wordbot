@@ -14,10 +14,11 @@ function clearBackendModules() {
     }
 }
 
-function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExports = {} } = {}) {
+function loadDataSource({ envValue, cacheSource, nodeEnv, supabaseExports = {}, feishuExports = {}, rejectFeishuAccess = false } = {}) {
     clearBackendModules();
     const previous = process.env.DATA_SOURCE;
     const previousCacheSource = process.env.WORDBOT_CACHE_SOURCE;
+    const previousNodeEnv = process.env.NODE_ENV;
     if (cacheSource === undefined) {
         delete process.env.WORDBOT_CACHE_SOURCE;
     } else {
@@ -28,12 +29,26 @@ function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExp
     } else {
         process.env.DATA_SOURCE = envValue;
     }
+    if (nodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = nodeEnv;
     require.cache[SUPABASE_DATA_PATH] = {
         id: SUPABASE_DATA_PATH,
         filename: SUPABASE_DATA_PATH,
         loaded: true,
         exports: {
             name: 'supabase',
+            registerUser: async input => ({ source: 'supabase-register', input }),
+            loginUser: async input => ({ source: 'supabase-login', input }),
+            verifyParentLogin: async input => ({ source: 'supabase-parent-login', input }),
+            setParentCredentials: async input => ({ source: 'supabase-parent-setup', input }),
+            initializeParentCredentials: async input => ({ source: 'supabase-parent-initialize', input }),
+            resetChildPassword: async input => ({ source: 'supabase-child-reset', input }),
+            getAllUsers: async () => ['supabase-user'],
+            getReviewWords: async username => [{ source: 'supabase-review', username }],
+            markWordForReview: async (...args) => ({ source: 'supabase-review-mark', args }),
+            clearWordReview: async (...args) => ({ source: 'supabase-review-clear', args }),
+            deleteUserTestData: async (...args) => ({ source: 'supabase-cleanup', args }),
+            backfillTranslations: async (...args) => ({ source: 'supabase-backfill', args }),
             getUserByUsername: async username => ({ source: 'supabase', username }),
             getWordsForUser: async username => [{ source: 'supabase', username }],
             getAssessmentsForUser: async username => [{ source: 'supabase', username }],
@@ -48,19 +63,24 @@ function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExp
             ...supabaseExports,
         },
     };
+    const feishuModule = {
+        name: 'feishu',
+        getRecords: async () => [],
+        getQuestionCache: async username => [{ source: 'feishu', username }],
+        generateQuiz: async (...args) => ({ source: 'feishu-generate', args }),
+        submitAnswers: async (...args) => ({ source: 'feishu-submit', args }),
+        addWord: async (...args) => ({ source: 'feishu-add', args }),
+        ...feishuExports,
+    };
     require.cache[FEISHU_PATH] = {
         id: FEISHU_PATH,
         filename: FEISHU_PATH,
         loaded: true,
-        exports: {
-            name: 'feishu',
-            getRecords: async () => [],
-            getQuestionCache: async username => [{ source: 'feishu', username }],
-            generateQuiz: async (...args) => ({ source: 'feishu-generate', args }),
-            submitAnswers: async (...args) => ({ source: 'feishu-submit', args }),
-            addWord: async (...args) => ({ source: 'feishu-add', args }),
-            ...feishuExports,
-        },
+        exports: rejectFeishuAccess
+            ? new Proxy(feishuModule, {
+                ownKeys() { throw new Error('FEISHU_MODULE_ACCESSED_IN_SUPABASE_MODE'); },
+            })
+            : feishuModule,
     };
     require.cache[CONFIG_PATH] = {
         id: CONFIG_PATH,
@@ -81,6 +101,8 @@ function loadDataSource({ envValue, cacheSource, supabaseExports = {}, feishuExp
         else process.env.WORDBOT_CACHE_SOURCE = previousCacheSource;
         if (previous === undefined) delete process.env.DATA_SOURCE;
         else process.env.DATA_SOURCE = previous;
+        if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = previousNodeEnv;
     }
 }
 
@@ -647,6 +669,22 @@ test('defaults DATA_SOURCE to supabase and exposes the unified interface', async
     assert.equal((await dataSource.addWord({ username: 'qiuqiu', word: 'apple', meaning: 'fruit' })).source, 'supabase');
 });
 
+test('DATA_SOURCE=supabase fails closed when the Supabase authentication adapter is incomplete', () => {
+    assert.throws(
+        () => loadDataSource({
+            envValue: 'supabase',
+            supabaseExports: { loginUser: undefined },
+            feishuExports: { loginUser: async () => ({ source: 'feishu-login' }) },
+        }),
+        /SUPABASE_ADAPTER_INCOMPLETE.*loginUser/
+    );
+});
+
+test('DATA_SOURCE=supabase does not load or enumerate Feishu exports', async () => {
+    const dataSource = loadDataSource({ envValue: 'supabase', rejectFeishuAccess: true });
+    assert.equal((await dataSource.loginUser({ username: 'test_user', password: 'secret' })).source, 'supabase-login');
+});
+
 test('DATA_SOURCE=supabase never falls back to Feishu for updateWord', async () => {
     const dataSource = loadDataSource({
         envValue: 'supabase',
@@ -656,36 +694,18 @@ test('DATA_SOURCE=supabase never falls back to Feishu for updateWord', async () 
 });
 
 
-test('WORDBOT_CACHE_SOURCE=feishu reads the Feishu cache while keeping Supabase data source', async () => {
-    const dataSource = loadDataSource({ cacheSource: 'feishu', feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] } });
-    assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }]);
+test('WORDBOT_CACHE_SOURCE=feishu is rejected in Supabase mode without loading Feishu', () => {
+    assert.throws(
+        () => loadDataSource({ cacheSource: 'feishu', rejectFeishuAccess: true }),
+        /UNSUPPORTED_CACHE_SOURCE.*feishu/
+    );
 });
 
-test('WORDBOT_CACHE_SOURCE=compare compares against Feishu but returns Supabase cache rows', async () => {
-    const warnings = [];
-    const originalWarn = console.warn;
-    console.warn = message => warnings.push(String(message));
-    try {
-        const dataSource = loadDataSource({
-            cacheSource: 'compare',
-            supabaseExports: { getQuestionCache: async () => [{ id: 'db-1' }] },
-            feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
-        });
-        assert.deepEqual(await dataSource.getQuestionCache('qiuqiu'), [{ id: 'db-1' }]);
-        assert.match(warnings.join(' '), /question_cache compare/);
-        assert.doesNotMatch(warnings.join(' '), /feishu-1|db-1/);
-    } finally {
-        console.warn = originalWarn;
-    }
-});
-
-test('WORDBOT_CACHE_SOURCE=compare fails closed when the Supabase comparison read fails', async () => {
-    const dataSource = loadDataSource({
-        cacheSource: 'compare',
-        supabaseExports: { getQuestionCache: async () => { throw new Error('db unavailable'); } },
-        feishuExports: { getRecords: async () => [{ record_id: 'feishu-1', fields: { user: 'qiuqiu' } }] },
-    });
-    await assert.rejects(dataSource.getQuestionCache('qiuqiu'), /db unavailable/);
+test('WORDBOT_CACHE_SOURCE=compare is rejected in Supabase mode without loading Feishu', () => {
+    assert.throws(
+        () => loadDataSource({ cacheSource: 'compare', rejectFeishuAccess: true }),
+        /UNSUPPORTED_CACHE_SOURCE.*compare/
+    );
 });
 test('supabase data source reads stats from Supabase instead of Feishu fallback', async () => {
     const dataSource = loadDataSource({
@@ -737,6 +757,13 @@ test('DATA_SOURCE=feishu routes high-level quiz and submit functions to feishu.j
         source: 'feishu-submit',
         args: ['qiuqiu', 'test-1', [{ option: 0 }]],
     });
+});
+
+test('production refuses to start with DATA_SOURCE=feishu', () => {
+    assert.throws(
+        () => loadDataSource({ envValue: 'feishu', nodeEnv: 'production' }),
+        /FEISHU_DATA_SOURCE_DISABLED_IN_PRODUCTION/
+    );
 });
 
 test('supabase quiz generation stores questions for submitAnswers routing', async () => {
