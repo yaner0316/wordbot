@@ -78,6 +78,47 @@ select
   to_regclass('public.quiz_challenge_questions') is not null as formal_challenge_questions_table,
   to_regclass('public.quiz_display_events') is not null as formal_display_events_table,
   to_regclass('public.assessments') is not null as assessments_table,
+  exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute
+    join pg_catalog.pg_attrdef as default_meta
+      on default_meta.adrelid = attribute.attrelid
+     and default_meta.adnum = attribute.attnum
+    where attribute.attrelid = to_regclass('public.quiz_sessions')
+      and attribute.attname = 'session_state'
+      and attribute.atttypid = 'jsonb'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+      and pg_get_expr(default_meta.adbin, default_meta.adrelid) = '''{}''::jsonb'
+  ) as quiz_session_state_column,
+  exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute
+    join pg_catalog.pg_attrdef as default_meta
+      on default_meta.adrelid = attribute.attrelid
+     and default_meta.adnum = attribute.attnum
+    where attribute.attrelid = to_regclass('public.quiz_sessions')
+      and attribute.attname = 'updated_at'
+      and attribute.atttypid = 'timestamp with time zone'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+      and pg_get_expr(default_meta.adbin, default_meta.adrelid) = 'now()'
+  ) as quiz_session_updated_at_column,
+  exists (
+    select 1
+    from pg_catalog.pg_trigger as trigger
+    join pg_catalog.pg_proc as proc on proc.oid = trigger.tgfoid
+    join pg_catalog.pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where trigger.tgrelid = to_regclass('public.quiz_sessions')
+      and trigger.tgname = 'quiz_sessions_updated_at_trigger'
+      and trigger.tgtype = 19
+      and not trigger.tgisinternal
+      and trigger.tgenabled <> 'D'
+      and namespace.nspname = 'public'
+      and proc.proname = 'touch_quiz_sessions_updated_at'
+      and not proc.prosecdef
+      and proc.proconfig @> array['search_path=pg_catalog']
+  ) as quiz_session_updated_at_trigger,
   coalesce((
     select cls.relrowsecurity
     from pg_catalog.pg_class as cls
@@ -303,6 +344,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260814_reconcile_word_mastery_status.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260816_enqueue_rpc_acl.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260816_assessment_option_meanings.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260817_quiz_session_progress.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -366,6 +408,9 @@ const EXPECTED_STATE = Object.freeze({
   assessment_context_zh_column: true,
   assessment_option_meanings_column: true,
   assessment_parent_review_index: true,
+  quiz_session_state_column: true,
+  quiz_session_updated_at_column: true,
+  quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,

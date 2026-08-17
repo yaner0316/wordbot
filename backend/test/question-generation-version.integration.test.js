@@ -49,6 +49,14 @@ create table public.assessments (
 
 alter table public.assessments enable row level security;
 
+create table public.quiz_sessions (
+    test_id text primary key,
+    user_id uuid not null references public.users(id) on delete cascade,
+    questions jsonb not null default '[]'::jsonb,
+    created_at timestamptz not null default now(),
+    expires_at timestamptz not null default (now() + interval '1 hour')
+);
+
 create table public.question_cache (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references public.users(id) on delete cascade,
@@ -129,6 +137,9 @@ test('migration verification SQL executes against the real versioned PGlite sche
     const db = await createDatabase();
     try {
         const result = await db.query(VERIFICATION_SQL);
+        assert.equal(result.rows[0].quiz_session_state_column, true);
+        assert.equal(result.rows[0].quiz_session_updated_at_column, true);
+        assert.equal(result.rows[0].quiz_session_updated_at_trigger, true);
         assert.equal(result.rows[0].assessment_context_zh_column, true);
         assert.equal(result.rows[0].job_lease_token_column, true);
         assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_signature, true);
