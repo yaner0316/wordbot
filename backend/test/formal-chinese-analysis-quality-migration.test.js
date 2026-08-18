@@ -48,6 +48,11 @@ test('formal Chinese analysis migration rejects English meanings and incomplete 
           values ('00000000-0000-0000-0000-000000000003', 'short-context',
             '{"answer":"A","contextCN":"苹果","optionMeanings":["苹果","梨","椅子","道路"]}'::jsonb)
         `), /context_zh/);
+        await assert.rejects(db.query(`
+          insert into public.quiz_challenge_questions (id, question_fingerprint, question_snapshot)
+          values ('00000000-0000-0000-0000-000000000006', 'long-context-short-translation',
+            '{"context":"One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty.","answer":"A","contextCN":"这是一个中文句子","optionMeanings":["苹果","梨","椅子","道路"]}'::jsonb)
+        `), /context_zh/);
     } finally {
         await db.close();
     }

@@ -3697,6 +3697,7 @@ test('formal challenge adapter reads authoritative questions and updates challen
                 question_snapshot: {
                     word: 'bank', context: 'Sentence with _____.', answer: 'A',
                     source: 'question_cache', cacheRecordId: 'cache-1', meaningId: 'meaning-1', type: 1,
+                    optionMeanings: [],
                 },
             },
         }],

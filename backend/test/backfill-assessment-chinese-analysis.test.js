@@ -39,6 +39,10 @@ test('inventory produces exact field-limited patches without mutating source row
             context_zh: '这个学生午饭后吃了一个苹果。',
         },
         expected: { option_meanings: [], context_zh: null },
+        identity: {
+            user_id: 'user-1', word_id: 'word-1', test_id: 'real-history-1',
+            question_text: 'The student ate an _____ after lunch.', correct_answer: 'A',
+        },
         sourceCacheId: 'cache-1',
     }]);
     assert.deepEqual(plan.unresolvedIds, []);
@@ -61,6 +65,19 @@ test('inventory refuses a same-stem cache fallback with different answer options
     input.assessments[0].source_question_id = null;
     input.assessments[0].options = ['A. apple', 'B. pear', 'C. chair', 'D. road'];
     input.caches[0].options = ['A. apple', 'B. banana', 'C. desk', 'D. road'];
+
+    const plan = buildAssessmentChineseAnalysisPlan(input);
+
+    assert.deepEqual(plan.repairs, []);
+    assert.deepEqual(plan.unresolvedIds, ['assessment-1']);
+});
+
+test('inventory refuses an exact cache id owned by another user or meaning', () => {
+    const input = fixture();
+    input.assessments[0].source_question_id = 'cache-foreign';
+    input.caches = [{
+        ...input.caches[0], id: 'cache-foreign', user_id: 'user-2', word_id: 'word-2',
+    }];
 
     const plan = buildAssessmentChineseAnalysisPlan(input);
 
@@ -144,6 +161,29 @@ test('inventory rejects a challenge snapshot whose saved answer differs from the
     assert.deepEqual(plan.unresolvedIds, ['assessment-1']);
 });
 
+test('inventory rejects a challenge snapshot whose options differ from the assessment', () => {
+    const input = fixture();
+    input.caches = [];
+    input.assessments[0].options = ['A. apple', 'B. pear', 'C. chair', 'D. road'];
+    input.challenges = [{ id: 'challenge-1', user_id: 'user-1', test_id: 'real-history-1' }];
+    input.challengeQuestions[0] = {
+        id: 'challenge-question-1', challenge_id: 'challenge-1', meaning_id: 'word-1',
+        cache_question_id: 'cache-1', stem: input.assessments[0].question_text,
+        question_snapshot: {
+            type: 1, meaningId: 'word-1', cacheRecordId: 'cache-1',
+            context: input.assessments[0].question_text, answer: 'A',
+            options: ['A. apple', 'B. banana', 'C. desk', 'D. road'],
+            optionMeanings: ['苹果', '香蕉', '课桌', '道路'],
+            contextCN: '这个学生午饭后吃了一个苹果。',
+        },
+    };
+
+    const plan = buildAssessmentChineseAnalysisPlan(input);
+
+    assert.deepEqual(plan.repairs, []);
+    assert.deepEqual(plan.unresolvedIds, ['assessment-1']);
+});
+
 test('apply mode updates only planned fields and is idempotent after reread', async () => {
     const input = fixture();
     const plan = buildAssessmentChineseAnalysisPlan(input);
@@ -174,6 +214,11 @@ test('apply mode updates only planned fields and is idempotent after reread', as
     assert.deepEqual(operations, [{ id: 'assessment-1', patch: plan.repairs[0].patch }]);
     assert.deepEqual(filters, [
         { type: 'eq', column: 'id', value: 'assessment-1' },
+        { type: 'eq', column: 'user_id', value: 'user-1' },
+        { type: 'eq', column: 'word_id', value: 'word-1' },
+        { type: 'eq', column: 'test_id', value: 'real-history-1' },
+        { type: 'eq', column: 'question_text', value: 'The student ate an _____ after lunch.' },
+        { type: 'eq', column: 'correct_answer', value: 'A' },
         { type: 'filter', column: 'option_meanings', operator: 'eq', value: '[]' },
         { type: 'is', column: 'context_zh', value: null },
     ]);

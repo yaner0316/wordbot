@@ -43,6 +43,9 @@ function validContext(questionText, contextZh, correctMeaning) {
 
 function cacheAnalysis(cache, assessment, word) {
     if (!cache) return null;
+    if (String(cache.user_id || '') !== String(assessment.user_id || '')
+        || String(cache.word_id || '') !== String(assessment.word_id || '')
+        || normalizedText(cache.question_text) !== normalizedText(assessment.question_text)) return null;
     const assessmentAnswer = String(assessment?.correct_answer || '').trim().toUpperCase();
     const cacheAnswer = String(cache?.answer || '').trim().toUpperCase();
     if (assessmentAnswer && cacheAnswer && assessmentAnswer !== cacheAnswer) return null;
@@ -89,6 +92,14 @@ function challengeAnalysis(challengeQuestion, challenge, assessment) {
     if ((snapshotMeaningId && snapshotMeaningId !== String(challengeQuestion.meaning_id || ''))
         || (snapshotCacheId && snapshotCacheId !== String(challengeQuestion.cache_question_id || ''))
         || normalizedText(snapshot.context || snapshot.stem) !== normalizedText(assessment.question_text)) return null;
+    const assessmentOptions = Array.isArray(assessment.options)
+        ? assessment.options.map(value => normalizedText(value))
+        : [];
+    const snapshotOptions = Array.isArray(snapshot.options)
+        ? snapshot.options.map(value => normalizedText(value))
+        : [];
+    if (assessmentOptions.length && snapshotOptions.length
+        && JSON.stringify(assessmentOptions) !== JSON.stringify(snapshotOptions)) return null;
     const answer = String(snapshot.answer || snapshot.correctAnswer || '').trim().toUpperCase();
     if (!answer || answer !== String(assessment.correct_answer || '').trim().toUpperCase()) return null;
     const meanings = validMeanings(snapshot.optionMeanings || snapshot.option_meanings);
@@ -170,6 +181,13 @@ function buildAssessmentChineseAnalysisPlan({ assessments = [], caches = [], cha
                     option_meanings: assessment.option_meanings,
                     context_zh: assessment.context_zh,
                 },
+                identity: {
+                    user_id: assessment.user_id,
+                    word_id: assessment.word_id,
+                    test_id: assessment.test_id,
+                    question_text: assessment.question_text,
+                    correct_answer: assessment.correct_answer,
+                },
                 sourceCacheId: String(cache?.id || snapshotSource?.cache_question_id || ''),
                 ...(snapshotSource ? { sourceChallengeQuestionId: String(snapshotSource.id || '') } : {}),
             });
@@ -188,6 +206,11 @@ async function applyAssessmentChineseAnalysisPlan(client, plan) {
         let query = client.from('assessments')
             .update(allowedPatch)
             .eq('id', repair.id);
+        for (const [key, expected] of Object.entries(repair.identity || {})) {
+            query = expected === null || expected === undefined
+                ? query.is(key, null)
+                : query.eq(key, expected);
+        }
         for (const key of Object.keys(allowedPatch)) {
             const expected = repair.expected?.[key];
             query = expected === null || expected === undefined

@@ -2670,12 +2670,19 @@ function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow, wordRow) {
     if (!question.context && cacheRow?.question_text) question.context = cacheRow.question_text;
     if (!question.answer && cacheRow?.answer) question.answer = cacheRow.answer;
     if (!question.type && cacheRow?.question_type) question.type = Number(cacheRow.question_type);
-    if (!Array.isArray(question.optionMeanings) && Array.isArray(cacheRow?.option_meanings)) {
-        question.optionMeanings = cacheRow.option_meanings;
+    const cachedMeanings = validChineseMeanings(cacheRow?.option_meanings);
+    if (!validChineseMeanings(question.optionMeanings) && cachedMeanings) {
+        question.optionMeanings = cachedMeanings;
     }
-    if (!String(question.contextCN || '').trim() && cacheRow?.context_zh) question.contextCN = cacheRow.context_zh;
-    if (!String(question.correctMeaning || '').trim() && cacheRow?.correct_meaning) {
-        question.correctMeaning = cacheRow.correct_meaning;
+    const answerIndex = 'ABCD'.indexOf(String(question.answer || '').trim().toUpperCase());
+    const correctMeaning = String(question.correctMeaning || cacheRow?.correct_meaning
+        || question.optionMeanings?.[answerIndex] || '').trim();
+    if (!hasCompleteChineseContext(question.context || row.stem, question.contextCN, correctMeaning)
+        && hasCompleteChineseContext(question.context || row.stem, cacheRow?.context_zh, correctMeaning)) {
+        question.contextCN = cacheRow.context_zh;
+    }
+    if (!hasMeaningfulChineseMeaning(question.correctMeaning) && hasMeaningfulChineseMeaning(correctMeaning)) {
+        question.correctMeaning = correctMeaning;
     }
     if (!String(question.word || '').trim() && wordRow?.word) question.word = wordRow.word;
     if (!String(question.wordRecordId || '').trim() && wordRow?.feishu_record_id) {

@@ -14,6 +14,9 @@ declare
   correct_meaning text;
   context_zh text;
   context_chinese text;
+  context_en text;
+  english_word_count integer;
+  minimum_chinese_length integer;
   snapshot jsonb;
 begin
   if nullif(btrim(new.question_fingerprint), '') is null then
@@ -53,7 +56,12 @@ begin
   correct_meaning := btrim(snapshot->'optionMeanings'->>answer_index);
   context_zh := btrim(coalesce(snapshot->>'contextCN', ''));
   context_chinese := regexp_replace(context_zh, '[^㐀-鿿]', '', 'g');
-  if char_length(context_chinese) < 6
+  context_en := btrim(coalesce(snapshot->>'context', snapshot->>'stem', ''));
+  select count(*)::integer
+    into english_word_count
+    from regexp_matches(context_en, '[A-Za-z]+([''-][A-Za-z]+)*', 'g');
+  minimum_chinese_length := greatest(6, ceil(english_word_count * 0.5)::integer);
+  if char_length(context_chinese) < minimum_chinese_length
      or context_chinese = regexp_replace(correct_meaning, '[^㐀-鿿]', '', 'g') then
     raise exception 'FORMAL_QUIZ_QUALITY_REQUIRED: context_zh';
   end if;
