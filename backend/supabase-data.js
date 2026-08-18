@@ -20,6 +20,7 @@ const {
     generateElementaryTemplateContext,
 } = require('./elementary-context');
 const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
+const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 const { auditUniqueAnswer } = require('./question-semantic-audit');
@@ -499,6 +500,19 @@ function normalizeHistoryQuestionText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+function historyFeedbackKey(row) {
+    const options = Array.isArray(row?.options)
+        ? row.options.map(value => normalizeHistoryQuestionText(value)).join('|')
+        : '';
+    return [
+        row?.user_id,
+        row?.word_id,
+        normalizeHistoryQuestionText(row?.question_text),
+        String(row?.answer || row?.correct_answer || '').trim().toUpperCase(),
+        options,
+    ].join(':');
+}
+
 function isSubmittedHistoryAssessment(row) {
     const correctness = String(row?.is_correct || '').trim().toLowerCase();
     return correctness === 'correct' || correctness === 'wrong';
@@ -506,31 +520,69 @@ function isSubmittedHistoryAssessment(row) {
 
 async function getHistoryQuestionFeedbackWithClient(client, rows) {
     const userIds = [...new Set((rows || []).map(row => String(row?.user_id || '').trim()).filter(Boolean))];
-    if (!userIds.length) return new Map();
+    if (!userIds.length) return { byId: new Map(), byKey: new Map() };
     const cacheRows = await fetchAllRows(
         () => client
             .from('question_cache')
-            .select('id, user_id, word_id, source_word_record_id, question_text, context_zh, option_meanings')
+            .select('id, user_id, word_id, source_word_record_id, question_text, options, answer, context_zh, option_meanings')
             .in('user_id', userIds),
         'getQuizHistory.questionFeedback'
     );
-    const byKey = new Map();
+    const byId = new Map();
+    const rowsByKey = new Map();
     for (const cacheRow of cacheRows) {
-        const key = `${cacheRow.user_id}:${cacheRow.word_id}:${normalizeHistoryQuestionText(cacheRow.question_text)}`;
-        if (!byKey.has(key)) byKey.set(key, cacheRow);
+        byId.set(String(cacheRow.id || '').trim(), cacheRow);
+        const key = historyFeedbackKey(cacheRow);
+        if (!rowsByKey.has(key)) rowsByKey.set(key, []);
+        rowsByKey.get(key).push(cacheRow);
     }
-    return byKey;
+    const byKey = new Map([...rowsByKey].filter(([, candidates]) => candidates.length === 1)
+        .map(([key, candidates]) => [key, candidates[0]]));
+    return { byId, byKey };
 }
 
-function toHistoryQuestion(row, feedback = {}) {
+function validChineseMeanings(values) {
+    if (!Array.isArray(values) || values.length !== 4) return null;
+    const normalized = values.map(value => String(value || '').trim());
+    if (!normalized.every(hasMeaningfulChineseMeaning)) return null;
+    if (new Set(normalized.map(value => value.toLowerCase())).size !== normalized.length) return null;
+    return normalized;
+}
+
+function hasCompleteChineseContext(context, translation, correctMeaning = '') {
+    return isContextSentenceTranslationAcceptable({
+        type: 1,
+        context: String(context || '').trim(),
+        contextCN: String(translation || '').trim(),
+        correctMeaning: String(correctMeaning || '').trim(),
+    });
+}
+
+function hydrateHistoryOptionMeanings(row, feedback, word) {
+    const snapshot = validChineseMeanings(row?.option_meanings);
+    if (snapshot) return snapshot;
+    const cached = Array.isArray(feedback?.option_meanings)
+        ? feedback.option_meanings.map(value => String(value || '').trim())
+        : [];
+    const answerIndex = 'ABCD'.indexOf(String(row?.correct_answer || '').trim().toUpperCase());
+    if (cached.length === 4 && answerIndex >= 0 && hasMeaningfulChineseMeaning(word?.meaning_zh)) {
+        cached[answerIndex] = String(word.meaning_zh).trim();
+    }
+    return validChineseMeanings(cached) || [];
+}
+
+function toHistoryQuestion(row, feedback = {}, word = {}) {
     const question = String(row?.question_text || '').trim();
     const options = Array.isArray(row?.options) ? row.options.map(value => String(value || '').trim()).filter(Boolean) : [];
-    const optionMeanings = Array.isArray(row?.option_meanings)
-        ? row.option_meanings
-        : Array.isArray(feedback?.option_meanings) ? feedback.option_meanings : [];
+    const optionMeanings = hydrateHistoryOptionMeanings(row, feedback, word);
+    const contextCN = [row?.context_zh, row?.contextCN, feedback?.context_zh, word?.context_zh]
+        .map(value => String(value || '').trim())
+        .find(value => hasCompleteChineseContext(question, value, word?.meaning_zh)) || '';
     const missingFields = [
         ...(question ? [] : ['question_text']),
         ...(options.length ? [] : ['options']),
+        ...(optionMeanings.length === 4 ? [] : ['option_meanings']),
+        ...(contextCN ? [] : ['context_zh']),
     ];
     const answer = toHistoryAnswer(row);
     return {
@@ -539,9 +591,9 @@ function toHistoryQuestion(row, feedback = {}) {
         word: String(row?.word_snapshot || '').trim(),
         question: question || '这是一条早期考核记录，当时没有保存完整题目。答题结果仍然保留。',
         type: Number(row?.question_type) || 1,
-        contextCN: String(row?.context_zh || row?.contextCN || feedback?.context_zh || '').trim(),
+        contextCN,
         options,
-        optionMeanings: optionMeanings.map(value => String(value || '').trim()),
+        optionMeanings,
         yourAnswer: answer.option,
         confidence: answer.confidence,
         correctAnswer: String(row?.correct_answer || '').trim(),
@@ -555,7 +607,8 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
     const normalizedMode = normalizeAssessmentMode(mode);
     const rows = (await getAssessmentsForUserWithClient(client, username))
         .filter(isSubmittedHistoryAssessment);
-    const feedbackByKey = await getHistoryQuestionFeedbackWithClient(client, rows);
+    const feedback = await getHistoryQuestionFeedbackWithClient(client, rows);
+    const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
     const groups = new Map();
     for (const row of rows) {
         if (getAssessmentMode(row.test_id) !== normalizedMode) continue;
@@ -568,8 +621,9 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
         const group = groups.get(testId);
         const timestamp = Date.parse(String(row.assessed_at || row.created_at || '')) || 0;
         if (!group.time || (timestamp && timestamp < group.time)) group.time = timestamp;
-        const feedbackKey = `${row.user_id}:${row.word_id}:${normalizeHistoryQuestionText(row.question_text)}`;
-        const question = toHistoryQuestion(row, feedbackByKey.get(feedbackKey));
+        const feedbackKey = historyFeedbackKey(row);
+        const exactFeedback = feedback.byId.get(String(row.source_question_id || '').trim());
+        const question = toHistoryQuestion(row, exactFeedback || feedback.byKey.get(feedbackKey), wordsById.get(row.word_id));
         group.questions.push(question);
         group.total++;
         if (question.isCorrect) group.correct++;
@@ -677,7 +731,7 @@ async function getWordsByIdWithClient(client, wordIds) {
     const rows = await fetchAllRows(
         () => client
             .from('words')
-            .select('id, feishu_record_id, word')
+            .select('id, feishu_record_id, word, meaning_zh, context_zh')
             .in('id', uniqueIds),
         'getQuestionCache.words'
     );
@@ -1128,7 +1182,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     });
     if (!optionMeanings) return null;
     const contextTranslation = typeof translateContext === 'function'
-        ? String(await translateContext(context).catch(() => '') || '').trim()
+        ? String(await translateContext(context) || '').trim()
         : '';
     if (!contextTranslation) return null;
 
@@ -1164,14 +1218,38 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         : row;
 }
 
-async function buildCacheQuestionRowsForWord({ user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit }) {
+async function persistTranslatedWordMeaning(client, word, meaning) {
+    if (!client?.from || hasMeaningfulChineseMeaning(word?.meaning_zh)) return;
+    let query = client
+        .from('words')
+        .update({ meaning_zh: meaning })
+        .eq('id', word.id)
+        .eq('user_id', word.user_id);
+    query = word.meaning_zh === null || word.meaning_zh === undefined
+        ? query.is('meaning_zh', null)
+        : query.eq('meaning_zh', word.meaning_zh);
+    const { data, error } = await query
+        .select('id, meaning_zh')
+        .maybeSingle();
+    ensureNoError(error, 'questionGeneration.persistMeaningZh');
+    if (!data) {
+        const persistError = new Error('Translated word meaning could not be persisted');
+        persistError.code = 'TRANSLATED_MEANING_PERSIST_FAILED';
+        throw persistError;
+    }
+}
+
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
     if (!cleanChineseMeaningForCache(cacheWord) && typeof translateWords === 'function') {
         const translated = await translateWords([wordText]);
         const candidate = String(translated?.[wordText] || '').trim();
-        if (hasMeaningfulChineseMeaning(candidate)) cacheWord = { ...word, meaning_zh: candidate };
+        if (hasMeaningfulChineseMeaning(candidate)) {
+            await persistTranslatedWordMeaning(client, word, candidate);
+            cacheWord = { ...word, meaning_zh: candidate };
+        }
     }
     const meaning = cacheWord.meaning_zh || cacheWord.meaning_en || wordText;
     let firstContext = level === ELEMENTARY_LEVEL
@@ -1686,10 +1764,23 @@ function buildAssessmentRow(input, user, wordRow) {
         answer_confidence: normalizeConfidence(input.confidence),
         is_correct: normalizeCorrectness(input.correctness),
         source: input.source || null,
+        source_question_id: input.cacheQuestionId || input.sourceQuestionId || null,
         assessment_kind: input.assessmentKind || null,
     };
     if (!row.test_id) throw new Error('TEST_ID_REQUIRED');
     if (!row.word_snapshot) throw new Error('WORD_REQUIRED');
+    if (isRealAssessment(row.test_id) && row.question_type === '1' && row.assessment_kind !== 'review') {
+        const completeMeanings = validChineseMeanings(row.option_meanings);
+        const answerIndex = 'ABCD'.indexOf(String(row.correct_answer || '').trim().toUpperCase());
+        const correctMeaning = answerIndex >= 0 ? completeMeanings?.[answerIndex] : '';
+        if (!completeMeanings || !hasCompleteChineseContext(row.question_text, row.context_zh, correctMeaning)) {
+            const error = new Error('Formal assessment requires four Chinese option meanings and a complete Chinese sentence translation');
+            error.code = 'FORMAL_ANALYSIS_SNAPSHOT_REQUIRED';
+            throw error;
+        }
+        row.option_meanings = completeMeanings;
+        row.context_zh = String(row.context_zh).trim();
+    }
     return row;
 }
 
@@ -2466,11 +2557,11 @@ function normalizeFormalChallengeQuestion(question) {
     const stem = String(question?.context || question?.stem || question?.question_text || '').trim();
     if (!meaningId || !cacheQuestionId || !stem) throw new Error('FORMAL_CHALLENGE_QUESTION_CANONICAL_IDS_REQUIRED');
     return {
+        ...question,
         meaning_id: meaningId,
         cache_question_id: cacheQuestionId,
         stem,
         question_fingerprint: String(question?.questionFingerprint || question?.question_fingerprint || '').trim() || null,
-        question_snapshot: question,
     };
 }
 
@@ -2498,6 +2589,9 @@ function assertFormalChallengeQuestionsRenderable(questions) {
         throw new Error('FORMAL_QUIZ_QUALITY_REQUIRED');
     }
     for (const question of questions) {
+        const answer = String(question.answer || question.correctAnswer || '').trim().toUpperCase();
+        const answerIndex = 'ABCD'.indexOf(answer);
+        const optionMeanings = Array.isArray(question.optionMeanings) ? question.optionMeanings : [];
         const readinessIssues = getCacheQuestionReadinessIssues({
             record_id: question.cacheRecordId || question.cache_question_id,
             fields: {
@@ -2511,16 +2605,12 @@ function assertFormalChallengeQuestionsRenderable(questions) {
                 question_text: question.context || question.stem,
                 context_cn: question.contextCN,
                 options: question.options,
-                answer: question.answer || question.correctAnswer,
-                option_meanings: question.optionMeanings,
-                correct_meaning: question.correctMeaning || question.correct_meaning,
+                answer,
+                option_meanings: optionMeanings,
+                correct_meaning: question.correctMeaning || question.correct_meaning || optionMeanings[answerIndex],
             },
         });
-        const formalQualityIssues = readinessIssues.filter(issue => [
-            'duplicate_option_meanings',
-            'missing_question_fingerprint',
-            'ambiguous_fill_in_context',
-        ].includes(issue));
+        const formalQualityIssues = readinessIssues.filter(issue => issue !== 'missing_generated_at');
         if (formalQualityIssues.length) throw new Error('FORMAL_QUIZ_QUALITY_REQUIRED: ' + formalQualityIssues.join(','));
     }
 }
@@ -2561,9 +2651,13 @@ function hasFourFormalOptions(options) {
 }
 
 function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow, wordRow) {
+    const nestedSnapshot = snapshot?.question_snapshot;
+    const persistedSnapshot = nestedSnapshot && typeof nestedSnapshot === 'object' && !Array.isArray(nestedSnapshot)
+        ? nestedSnapshot
+        : snapshot;
     const cachedOptions = Array.isArray(cacheRow?.options) ? cacheRow.options : [];
     const question = {
-        ...(snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {}),
+        ...(persistedSnapshot && typeof persistedSnapshot === 'object' && !Array.isArray(persistedSnapshot) ? persistedSnapshot : {}),
         id: row.id,
         ordinal: row.ordinal,
         meaningId: row.meaning_id,
@@ -2576,6 +2670,13 @@ function hydrateFormalChallengeSnapshot(snapshot, row, cacheRow, wordRow) {
     if (!question.context && cacheRow?.question_text) question.context = cacheRow.question_text;
     if (!question.answer && cacheRow?.answer) question.answer = cacheRow.answer;
     if (!question.type && cacheRow?.question_type) question.type = Number(cacheRow.question_type);
+    if (!Array.isArray(question.optionMeanings) && Array.isArray(cacheRow?.option_meanings)) {
+        question.optionMeanings = cacheRow.option_meanings;
+    }
+    if (!String(question.contextCN || '').trim() && cacheRow?.context_zh) question.contextCN = cacheRow.context_zh;
+    if (!String(question.correctMeaning || '').trim() && cacheRow?.correct_meaning) {
+        question.correctMeaning = cacheRow.correct_meaning;
+    }
     if (!String(question.word || '').trim() && wordRow?.word) question.word = wordRow.word;
     if (!String(question.wordRecordId || '').trim() && wordRow?.feishu_record_id) {
         question.wordRecordId = wordRow.feishu_record_id;
@@ -2608,7 +2709,7 @@ async function getFormalQuizChallengeWithClient(client, username, testId) {
     if (cacheIds.length) {
         const { data: cacheRows, error: cacheError } = await client
             .from('question_cache')
-            .select('id, question_type, question_text, options, answer')
+            .select('id, question_type, question_text, options, answer, option_meanings, context_zh, correct_meaning')
             .in('id', cacheIds);
         ensureNoError(cacheError, 'getFormalQuizChallenge.cacheQuestions');
         cacheById = new Map((cacheRows || []).map(row => [row.id, row]));

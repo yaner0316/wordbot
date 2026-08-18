@@ -401,7 +401,7 @@ test('a fenced cache referenced by a formal challenge is retired instead of dele
             ) values (
                 $1::uuid, 1, $2::uuid, $3::uuid, 'The child ate an ___.',
                 'fk-protected-cache',
-                '{"optionMeanings":["apple","bread","rice","soup"]}'::jsonb,
+                '{"answer":"A","contextCN":"这个孩子吃了一个苹果。","optionMeanings":["苹果","面包","米饭","汤"]}'::jsonb,
                 now() + interval '30 days'
             )
         `, [challenge.rows[0].id, WORD_ID, cache.rows[0].id]);

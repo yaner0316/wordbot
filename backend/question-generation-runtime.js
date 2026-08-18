@@ -4,6 +4,8 @@ const { createQuestionGenerationJobStore } = require('./question-generation-job'
 const { createQuestionGenerationService } = require('./question-generation-service');
 const { createQuestionGenerationWorker } = require('./question-generation-worker');
 const { normalizeLevel } = require('./learning-level');
+const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 
 const DEFAULT_CLAIM_RPC = 'claim_question_generation_jobs';
 const RENEW_RPC = 'renew_question_generation_job';
@@ -237,6 +239,25 @@ function defaultValidateCandidate(candidate, word) {
     if (!String(candidate?.question_type || candidate?.questionType || '').trim()) issues.push('question_type_required');
     if (!String(candidate?.correct_meaning || candidate?.meaning_zh || candidate?.meaning_en || '').trim()) {
         issues.push('correct_meaning_required');
+    }
+    const optionMeanings = Array.isArray(candidate?.option_meanings)
+        ? candidate.option_meanings.map(value => String(value || '').trim())
+        : [];
+    if (optionMeanings.length !== 4 || !optionMeanings.every(hasMeaningfulChineseMeaning)) {
+        issues.push('bad_option_meanings');
+    } else if (new Set(optionMeanings.map(value => value.toLowerCase())).size !== 4) {
+        issues.push('duplicate_option_meanings');
+    }
+    if (!hasMeaningfulChineseMeaning(candidate?.correct_meaning)) {
+        issues.push('bad_correct_meaning');
+    }
+    if (!isContextSentenceTranslationAcceptable({
+        type: Number(candidate?.question_type || candidate?.questionType || 0),
+        context: candidate?.question_text || candidate?.questionText,
+        contextCN: candidate?.context_zh || candidate?.contextCN,
+        correctMeaning: candidate?.correct_meaning,
+    })) {
+        issues.push('invalid_context_translation');
     }
     if (candidate?.quality_status && candidate.quality_status !== 'ready') issues.push('quality_status_not_ready');
     if (candidate?.round_type && candidate.round_type !== 'primary') issues.push('round_type_not_primary');
