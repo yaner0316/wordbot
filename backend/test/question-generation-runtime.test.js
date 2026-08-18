@@ -494,6 +494,41 @@ test('generation service publishes two variants before retiring old ready primar
     assert.equal(new Set(newReady.map(row => row.question_fingerprint)).size, 2);
 });
 
+test('default cache validation rejects ambiguous racket-sport fill-ins before publish', async () => {
+    const fake = createFakeSupabase({
+        jobs: [generationJob({ word_id: 'word-badminton', user_id: 'user-1' })],
+        words: [{ id: 'word-badminton', user_id: 'user-1', word: 'badminton', meaning_zh: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403), level: 'middle' }],
+    });
+    const service = createSupabaseQuestionGenerationService({
+        client: fake.client,
+        workerId: 'worker-a',
+        maxAttempts: 1,
+        buildCandidates: async () => [
+            {
+                question_type: '1',
+                question_text: 'After setting up the net in the backyard, they grabbed their rackets and started a lively game of _____.',
+                options: ['A. badminton', 'B. volleyball', 'C. squash', 'D. tennis'],
+                answer: 'A',
+                correct_meaning: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403),
+            },
+            {
+                question_type: '1',
+                question_text: 'They set up the net, picked up their rackets, and began a competitive game of _____.',
+                options: ['A. badminton', 'B. volleyball', 'C. squash', 'D. tennis'],
+                answer: 'A',
+                correct_meaning: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403),
+            },
+        ],
+    });
+
+    await assert.rejects(
+        service.process(generationJob({ word_id: 'word-badminton', user_id: 'user-1' })),
+        error => error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
+            && error.rejectionReasons.ambiguous_fill_in_context === 2
+    );
+    assert.equal(fake.calls.some(call => call.type === 'rpc' && call.name === 'publish_question_generation_variants'), false);
+});
+
 test('insufficient candidates do not write or retire existing ready cache', async () => {
     const old = {
         id: 'cache-old',

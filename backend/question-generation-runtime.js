@@ -4,7 +4,7 @@ const { createQuestionGenerationJobStore } = require('./question-generation-job'
 const { createQuestionGenerationService } = require('./question-generation-service');
 const { createQuestionGenerationWorker } = require('./question-generation-worker');
 const { normalizeLevel } = require('./learning-level');
-const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { getQuestionQualityIssues, hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 
 const DEFAULT_CLAIM_RPC = 'claim_question_generation_jobs';
@@ -263,6 +263,21 @@ function defaultValidateCandidate(candidate, word) {
     if (candidate?.round_type && candidate.round_type !== 'primary') issues.push('round_type_not_primary');
     if (candidate?.word_id && String(candidate.word_id) !== String(word?.id)) issues.push('word_id_mismatch');
     if (candidate?.user_id && String(candidate.user_id) !== String(word?.user_id)) issues.push('user_id_mismatch');
+    const questionType = Number(candidate?.question_type || candidate?.questionType);
+    const qualityQuestion = {
+        type: questionType,
+        level: candidate?.level || word?.level || '',
+        word: candidate?.word || word?.word || '',
+        context: questionText,
+        options,
+        answer,
+        correctMeaning: candidate?.correct_meaning || candidate?.meaning_zh || candidate?.meaning_en || '',
+        optionMeanings: candidate?.option_meanings || candidate?.optionMeanings || [],
+    };
+    // Type-one candidates must contain a blank before semantic context checks are meaningful.
+    if (questionType !== 1 || /_{3,}/.test(questionText)) {
+        issues.push(...getQuestionQualityIssues(qualityQuestion));
+    }
     return issues;
 }
 

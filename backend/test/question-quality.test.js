@@ -719,6 +719,39 @@ test('fill-in rejects screenshot method-strategy distractors in broad problem-so
         assert.ok(issues.includes('ambiguous_fill_in_context'), `${context} issues=${issues.join(',')}`);
     }
 });
+
+test('fill-in rejects net and rackets context when badminton and tennis are both options', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'badminton',
+        context: 'After setting up the net in the backyard, they grabbed their rackets and started a lively game of _____.',
+        correctMeaning: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403),
+        options: ['A. badminton', 'B. volleyball', 'C. squash', 'D. tennis'],
+        answer: 'A',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), false);
+    assert.ok(issues.includes('ambiguous_fill_in_context'), 'issues=' + issues.join(','));
+});
+
+test('fill-in keeps a racket sport context when only one racket sport option exists', () => {
+    const question = {
+        type: 1,
+        level: JUNIOR_HIGH,
+        word: 'badminton',
+        context: 'They grabbed their rackets and started a lively game of _____.',
+        correctMeaning: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403),
+        options: ['A. badminton', 'B. basketball', 'C. swimming', 'D. running'],
+        answer: 'A',
+    };
+
+    const issues = getQuestionQualityIssues(question);
+    assert.equal(isQuestionQualityAcceptable(question), true);
+    assert.equal(issues.includes('ambiguous_fill_in_context'), false, 'issues=' + issues.join(','));
+});
+
 test('fill-in keeps a unique non-solution meaning acceptable', () => {
     const question = {
         type: 1,

@@ -64,6 +64,21 @@ test('reports multi-answer readiness issues beyond overlapping Chinese meanings'
     assert.deepEqual(report.multiAnswerReadinessIssues, { ambiguous_fill_in_context: 1 });
 });
 
+test('reports ambiguous racket-sport cache questions as multi-answer readiness issues', () => {
+    const report = auditQuestionCacheRows([{
+        id: 'cache-badminton', user_id: 'u1', word: 'badminton', quality_status: 'ready', cache_state: 'active',
+        question_type: 1,
+        question_text: 'After setting up the net in the backyard, they grabbed their rackets and started a lively game of _____.',
+        options: ['A. badminton', 'B. volleyball', 'C. squash', 'D. tennis'], answer: 'A',
+        option_meanings: [String.fromCharCode(0x7fbd, 0x6bdb, 0x7403), String.fromCharCode(0x6392, 0x7403), String.fromCharCode(0x58c1, 0x7403), String.fromCharCode(0x7f51, 0x7403)],
+        correct_meaning: String.fromCharCode(0x7fbd, 0x6bdb, 0x7403), ai_audit_status: 'approved',
+    }], [{ id: 'u1', username: 'qiuqiu' }]);
+
+    assert.equal(report.affectedCount, 1);
+    assert.deepEqual(report.affected[0].reasons, ['ambiguous_fill_in_context']);
+    assert.deepEqual(report.multiAnswerReadinessIssues, { ambiguous_fill_in_context: 1 });
+});
+
 test('treats English-only option meanings as unauditable semantic evidence', () => {
     const report = auditQuestionCacheRows([{
         id: 'cache-english-meanings', user_id: 'u1', word: 'apple', quality_status: 'ready', cache_state: 'active',

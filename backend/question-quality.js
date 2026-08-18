@@ -347,6 +347,9 @@ const PROBLEM_SOLVING_METHOD_WORDS = new Set([
 const UNDERGROUND_SPACE_WORDS = new Set(['basement', 'bunker', 'tunnel']);
 const HIDDEN_LOCATION_WORDS = new Set(['cave', 'tunnel', 'attic', 'basement', 'bunker']);
 const MARCHING_ROLE_WORDS = new Set(['soldier', 'warrior', 'serviceman', 'civilian']);
+const RACKET_SPORT_WORDS = new Set([
+    'badminton', 'tennis', 'squash', 'racquetball', 'pickleball',
+]);
 
 function getAmbiguousFillInAnswerLetters(question) {
     if (Number(question?.type) !== 1) return [];
@@ -372,6 +375,13 @@ function hasAmbiguousFillInContext(question) {
     const hasMarchingRoleCue = /\b(?:brave|determined)\s+_____\s+marched\b/.test(context)
         && optionWords.filter(word => MARCHING_ROLE_WORDS.has(word)).length > 1;
     if (hasMarchingRoleCue) return true;
+
+    const racketSportOptionCount = optionWords.filter(word => RACKET_SPORT_WORDS.has(word)).length;
+    const hasRacketSportCue = /\bnet\b/.test(context)
+        && /\b(?:racket|rackets|racquet|racquets)\b/.test(context)
+        && /\b(?:game|match|play|playing)\b/.test(context);
+    if (racketSportOptionCount >= 2 && hasRacketSportCue) return true;
+
     const foodOptionCount = optionWords.filter(word => FOOD_CATEGORY_WORDS.has(word)).length;
     const hasAmbiguousFoodContext = [
         /\b(?:a\(n\)|a|an)\s+_____\s+(?:salad|soup|dish|meal|sandwich)\b/,
