@@ -5,6 +5,7 @@ const { hashPassword } = require('../auth-service');
 
 const {
     createSupabaseDataAdapter: createRawSupabaseDataAdapter,
+    buildCacheQuestionRowsForWord,
     generateReplacementContextWithAI,
     hydrateFormalChallengeSnapshot,
 } = require('../supabase-data');
@@ -188,6 +189,7 @@ function createFakeSupabase(seed = {}, options = {}) {
         return filters.every(filter => {
             if (filter.type === 'eq') return row[filter.column] === filter.value;
             if (filter.type === 'in') return filter.values.includes(row[filter.column]);
+            if (filter.type === 'is') return row[filter.column] === filter.value;
             if (filter.type === 'gt') return row[filter.column] > filter.value;
             if (filter.type === 'lt') return row[filter.column] < filter.value;
             if (filter.type === 'lte') return row[filter.column] <= filter.value;
@@ -218,6 +220,7 @@ function createFakeSupabase(seed = {}, options = {}) {
         limit(count) { this.limitCount = count; return this; }
         eq(column, value) { this.filters.push({ type: 'eq', column, value }); return this; }
         in(column, values) { this.filters.push({ type: 'in', column, values }); return this; }
+        is(column, value) { this.filters.push({ type: 'is', column, value }); return this; }
         gt(column, value) { this.filters.push({ type: 'gt', column, value }); return this; }
         lt(column, value) { this.filters.push({ type: 'lt', column, value }); return this; }
         lte(column, value) { this.filters.push({ type: 'lte', column, value }); return this; }
@@ -537,6 +540,9 @@ test('submitAssessment resolves username and source word record to Supabase fore
         questionText: 'I ate an _____.',
         options: ['A. Apple', 'B. Pear', 'C. Chair', 'D. Desk'],
         correctAnswer: 'A',
+        contextZh: '我吃了一个苹果。',
+        optionMeanings: ['苹果', '梨', '椅子', '书桌'],
+        cacheQuestionId: 'cache-1',
     });
 
     assert.equal(row.user_id, 'user-1');
@@ -548,6 +554,94 @@ test('submitAssessment resolves username and source word record to Supabase fore
     assert.equal(row.submitted_answer, 'A');
     assert.equal(row.answer_confidence, 'sure');
     assert.equal(row.learning_day, '2026-07-19');
+    assert.equal(row.context_zh, '我吃了一个苹果。');
+    assert.deepEqual(row.option_meanings, ['苹果', '梨', '椅子', '书桌']);
+    assert.equal(row.source_question_id, 'cache-1');
+});
+
+test('formal type-1 assessment rejects an incomplete Chinese analysis snapshot', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+
+    await assert.rejects(
+        adapter.submitAssessment({
+            username: 'qiuqiu',
+            word: 'Apple',
+            sourceWordRecordId: 'rec-word-1',
+            testId: 'real-missing-analysis',
+            questionType: 1,
+            correctness: 'correct',
+            yourAnswer: 'A',
+            confidence: 'sure',
+            source: 'question_cache',
+            questionText: 'I ate an _____.',
+            options: ['A. Apple', 'B. Pear', 'C. Chair', 'D. Desk'],
+            correctAnswer: 'A',
+            contextZh: '',
+            optionMeanings: [],
+        }),
+        error => error.code === 'FORMAL_ANALYSIS_SNAPSHOT_REQUIRED'
+    );
+    assert.equal(client.db.assessments.length, 0);
+});
+
+test('cache generation persists a translated target meaning without overwriting valid Chinese', async () => {
+    const untranslated = {
+        id: 'word-target', user_id: 'user-1', feishu_record_id: 'rec-target',
+        word: 'apple', meaning_en: 'a fruit', meaning_zh: null,
+        context_en: 'The student ate an apple after lunch.',
+    };
+    const preserved = {
+        id: 'word-preserved', user_id: 'user-1', feishu_record_id: 'rec-preserved',
+        word: 'pear', meaning_en: 'a fruit', meaning_zh: '梨',
+        context_en: 'The student ate a pear after lunch.',
+    };
+    const client = createFakeSupabase({ words: [untranslated, preserved] });
+    const translations = {
+        apple: '苹果', pear: '错误覆盖', river: '河流', chair: '椅子', road: '道路',
+    };
+    const build = word => buildCacheQuestionRowsForWord({
+        client,
+        user: { id: 'user-1' },
+        word,
+        level: MIDDLE,
+        generateDistractors: async () => ['river', 'chair', 'road'],
+        translateWords: async words => Object.fromEntries(words.map(value => [value, translations[value]])),
+        translateContext: async sentence => sentence.includes('pear')
+            ? '这个学生午饭后吃了一个梨。'
+            : '这个学生午饭后吃了一个苹果。',
+        generateContext: async (wordText, meaning, level, previous) => previous
+            ? `After lunch, the student shared a ${wordText} with a friend.`
+            : `The student ate a ${wordText} after lunch.`,
+        semanticAudit: async () => ({ approved: true }),
+    });
+
+    await build(untranslated);
+    await build(preserved);
+    assert.equal(client.db.words.find(row => row.id === 'word-target').meaning_zh, '苹果');
+    assert.equal(client.db.words.find(row => row.id === 'word-preserved').meaning_zh, '梨');
+});
+
+test('cache generation does not overwrite a Chinese meaning written concurrently', async () => {
+    const word = {
+        id: 'word-race', user_id: 'user-1', feishu_record_id: 'rec-race',
+        word: 'apple', meaning_en: 'a fruit', meaning_zh: null,
+        context_en: 'The student ate an apple after lunch.',
+    };
+    const client = createFakeSupabase({ words: [word] }, {
+        beforeOperation({ table, operation, db }) {
+            if (table === 'words' && operation === 'update') db.words[0].meaning_zh = '已有释义';
+        },
+    });
+
+    await assert.rejects(buildCacheQuestionRowsForWord({
+        client,
+        user: { id: 'user-1' },
+        word,
+        level: MIDDLE,
+        translateWords: async () => ({ apple: '苹果' }),
+    }), error => error.code === 'TRANSLATED_MEANING_PERSIST_FAILED');
+    assert.equal(client.db.words[0].meaning_zh, '已有释义');
 });
 
 test('updateWordMastery updates the resolved user word row', async () => {
@@ -3046,6 +3140,7 @@ test('Supabase formal history keeps the exact submitted stem and options', async
             id: 'cache-citizen-1', user_id: 'user-1', word_id: 'meaning-citizen',
             question_text: 'Every good _____ obeys the law.',
             context_zh: '每一个好公民都应遵守法律。',
+            options: ['A. citizen', 'B. visitor', 'C. teacher', 'D. singer'], answer: 'A',
             option_meanings: ['公民', '访客', '老师', '歌手'],
         }],
         assessments: [
@@ -3094,6 +3189,67 @@ test('Supabase formal history keeps the exact submitted stem and options', async
             missingFields: [],
         }],
     }]);
+});
+
+test('Supabase history treats migrated empty option meanings as missing and hydrates from cache', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-apple', user_id: 'user-1', word: 'apple', meaning_zh: '苹果' }],
+        question_cache: [{
+            id: 'cache-apple', user_id: 'user-1', word_id: 'word-apple',
+            question_text: 'The student ate an _____ after lunch.',
+            context_zh: '这个学生午饭后吃了一个苹果。',
+            options: ['A. apple', 'B. pear', 'C. chair', 'D. road'], answer: 'A',
+            option_meanings: ['苹果', '梨', '椅子', '道路'],
+        }],
+        assessments: [{
+            id: 'assessment-empty-default', user_id: 'user-1', word_id: 'word-apple',
+            test_id: 'real-history-empty-default', assessed_at: '2026-08-17T00:00:00.000Z',
+            word_snapshot: 'apple', question_type: '1',
+            question_text: 'The student ate an _____ after lunch.',
+            context_zh: null, option_meanings: [],
+            options: ['A. apple', 'B. pear', 'C. chair', 'D. road'],
+            correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
+        }],
+    });
+
+    const history = await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu', 'real');
+
+    assert.deepEqual(history[0].questions[0].optionMeanings, ['苹果', '梨', '椅子', '道路']);
+    assert.equal(history[0].questions[0].contextCN, '这个学生午饭后吃了一个苹果。');
+    assert.equal(history[0].questions[0].contentState, 'complete');
+    const wordRead = client.readOperations.find(operation => operation.table === 'words');
+    assert.match(wordRead.selectColumns, /meaning_zh/);
+    assert.match(wordRead.selectColumns, /context_zh/);
+});
+
+test('Supabase history does not hydrate analysis from a same-stem cache with different options', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-apple', user_id: 'user-1', word: 'apple', meaning_zh: '苹果' }],
+        question_cache: [{
+            id: 'cache-other-options', user_id: 'user-1', word_id: 'word-apple',
+            question_text: 'The student ate an _____ after lunch.',
+            options: ['A. apple', 'B. banana', 'C. desk', 'D. road'], answer: 'A',
+            context_zh: '这个学生午饭后吃了一个苹果。',
+            option_meanings: ['苹果', '香蕉', '课桌', '道路'],
+        }],
+        assessments: [{
+            id: 'assessment-original-options', user_id: 'user-1', word_id: 'word-apple',
+            test_id: 'real-history-original-options', assessed_at: '2026-08-17T00:00:00.000Z',
+            word_snapshot: 'apple', question_type: '1',
+            question_text: 'The student ate an _____ after lunch.',
+            options: ['A. apple', 'B. pear', 'C. chair', 'D. road'],
+            correct_answer: 'A', submitted_answer: 'A|sure', is_correct: 'correct',
+            context_zh: null, option_meanings: [],
+        }],
+    });
+
+    const question = (await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu', 'real'))[0].questions[0];
+
+    assert.deepEqual(question.optionMeanings, []);
+    assert.equal(question.contextCN, '');
+    assert.equal(question.contentState, 'legacy_incomplete');
 });
 
 test('non-mastered stage changes preserve cache and do not fence generation', async () => {
@@ -3416,11 +3572,11 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
     assert.equal(calls[0].args.p_level, MIDDLE);
     assert.equal(calls[0].args.p_now, '2026-08-07T00:00:00.000Z');
     assert.deepEqual(calls[0].args.p_questions, questions.map(question => ({
+        ...question,
         meaning_id: question.meaningId,
         cache_question_id: question.cacheRecordId,
         stem: question.context,
         question_fingerprint: question.questionFingerprint,
-        question_snapshot: question,
     })));
 });
 
@@ -3491,6 +3647,40 @@ test('formal challenge second gate rejects duplicate option meanings', async () 
     assert.equal(calls.length, 0);
 });
 
+test('formal challenge second gate rejects English meanings and incomplete sentence translation', async () => {
+    const baseClient = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+    });
+    const calls = [];
+    const adapter = createSupabaseDataAdapter({
+        ...baseClient,
+        rpc: async (name, args) => {
+            calls.push({ name, args });
+            return { data: { challenge_id: 'challenge-1', question_count: 10 }, error: null };
+        },
+    });
+    const questions = Array.from({ length: 10 }, (_, index) => ({
+        meaningId: `meaning-${index + 1}`,
+        cacheRecordId: `cache-${index + 1}`,
+        context: `The student selected the correct _____ in question ${index + 1}.`,
+        contextCN: '释义',
+        questionFingerprint: `fingerprint-${index + 1}`,
+        type: 1,
+        word: 'bank',
+        source: 'question_cache',
+        options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
+        optionMeanings: ['bank', 'river', 'road', 'desk'],
+        correctMeaning: 'bank',
+        answer: 'A',
+    }));
+
+    await assert.rejects(
+        adapter.createFormalQuizChallenge({ username: 'qiuqiu', testId: 'real-non-chinese-analysis', level: MIDDLE, questions }),
+        /FORMAL_QUIZ_QUALITY_REQUIRED/
+    );
+    assert.equal(calls.length, 0);
+});
+
 test('formal challenge adapter reads authoritative questions and updates challenge progress', async () => {
     const baseClient = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -3503,13 +3693,19 @@ test('formal challenge adapter reads authoritative questions and updates challen
             id: 'challenge-question-1', challenge_id: 'challenge-1', ordinal: 1,
             meaning_id: 'meaning-1', cache_question_id: 'cache-1',
             stem: 'Sentence with _____.', question_snapshot: {
-                word: 'bank', context: 'Sentence with _____.', answer: 'A',
-                source: 'question_cache', cacheRecordId: 'cache-1', meaningId: 'meaning-1', type: 1,
+                meaning_id: 'meaning-1', cache_question_id: 'cache-1', stem: 'Sentence with _____.',
+                question_snapshot: {
+                    word: 'bank', context: 'Sentence with _____.', answer: 'A',
+                    source: 'question_cache', cacheRecordId: 'cache-1', meaningId: 'meaning-1', type: 1,
+                    optionMeanings: [],
+                },
             },
         }],
         question_cache: [{
             id: 'cache-1', question_type: '1', question_text: 'Sentence with _____.',
             options: ['A. bank', 'B. river', 'C. road', 'D. desk'], answer: 'A',
+            option_meanings: ['银行', '河流', '道路', '书桌'],
+            context_zh: '这是一个完整的中文句子。', correct_meaning: '银行',
         }],
     });
     const adapter = createSupabaseDataAdapter(baseClient);
@@ -3520,7 +3716,10 @@ test('formal challenge adapter reads authoritative questions and updates challen
     assert.deepEqual(challenge.questions, [{
         id: 'challenge-question-1', ordinal: 1, meaningId: 'meaning-1',
         cacheRecordId: 'cache-1', stem: 'Sentence with _____.',
-        ...baseClient.db.quiz_challenge_questions[0].question_snapshot,
+        ...baseClient.db.quiz_challenge_questions[0].question_snapshot.question_snapshot,
+        contextCN: '这是一个完整的中文句子。',
+        optionMeanings: ['银行', '河流', '道路', '书桌'],
+        correctMeaning: '银行',
         options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
     }]);
 

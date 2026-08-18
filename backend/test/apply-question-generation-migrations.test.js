@@ -72,6 +72,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260816_enqueue_rpc_acl.sql',
       '20260816_assessment_option_meanings.sql',
       '20260817_quiz_session_progress.sql',
+      '20260818_formal_chinese_analysis_quality_gate.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -130,6 +131,7 @@ const COMPLETE_STATE = Object.freeze({
   formal_quality_function: true,
   formal_quality_function_security_invoker: true,
   formal_quality_function_safe_search_path: true,
+  formal_quality_translation_contract: true,
   formal_quality_function_public_execute: false,
   formal_quality_function_anon_execute: false,
   formal_quality_function_authenticated_execute: false,
@@ -172,6 +174,7 @@ const INCOMPLETE_STATE = Object.freeze({
   formal_quality_function: false,
   formal_quality_function_security_invoker: false,
   formal_quality_function_safe_search_path: false,
+  formal_quality_translation_contract: false,
   formal_quality_function_public_execute: true,
   formal_quality_trigger: false,
   assessment_parent_review_id_column: false,
@@ -183,6 +186,7 @@ const QUALITY_GATE_MISSING_STATE = Object.freeze({
   formal_quality_function: false,
   formal_quality_function_security_invoker: false,
   formal_quality_function_safe_search_path: false,
+  formal_quality_translation_contract: false,
   formal_quality_function_public_execute: true,
   formal_quality_trigger: false,
 });
@@ -534,6 +538,7 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /validate_formal_challenge_question_quality\(\)/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_security_invoker/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_safe_search_path/);
+  assert.match(VERIFICATION_SQL, /formal_quality_translation_contract/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_public_execute/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_anon_execute/);
   assert.match(VERIFICATION_SQL, /formal_quality_function_authenticated_execute/);

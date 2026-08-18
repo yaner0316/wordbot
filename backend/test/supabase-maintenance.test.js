@@ -237,3 +237,74 @@ test('backfillTranslations skips unusable translations and fails closed on datab
         code: 'MAINTENANCE_DATABASE_ERROR',
     });
 });
+
+test('backfillTranslations skips a failed translation batch and continues with later batches', async () => {
+    const words = Array.from({ length: 21 }, (_, index) => ({
+        id: `word-${index + 1}`,
+        user_id: 'user-q',
+        meaning_en: `meaning ${index + 1}`,
+        meaning_zh: null,
+        context_en: '',
+        context_zh: null,
+    }));
+    const fake = createFakeSupabase({
+        users: [{ id: 'user-q', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words,
+    });
+    let translateCalls = 0;
+    const adapter = createSupabaseMaintenanceAdapter(fake.client, {
+        translateWords: async meanings => {
+            translateCalls++;
+            if (translateCalls === 1) {
+                const error = new Error('provider unavailable');
+                error.code = 'TRANSLATION_PROVIDER_UNAVAILABLE';
+                throw error;
+            }
+            return Object.fromEntries(meanings.map(value => [value, '可用释义']));
+        },
+    });
+
+    assert.deepEqual(await adapter.backfillTranslations('qiuqiu'), {
+        cnFilled: 1,
+        cnSkipped: 20,
+        ctxFilled: 0,
+        ctxSkipped: 0,
+        total: 21,
+    });
+    assert.equal(translateCalls, 2);
+    assert.equal(fake.db.words[0].meaning_zh, null);
+    assert.equal(fake.db.words[20].meaning_zh, '可用释义');
+});
+
+test('backfillTranslations skips a failed context translation and continues with later records', async () => {
+    const fake = createFakeSupabase({
+        users: [{ id: 'user-q', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [
+            { id: 'word-1', user_id: 'user-q', meaning_en: '', meaning_zh: null, context_en: 'First sentence.', context_zh: null },
+            { id: 'word-2', user_id: 'user-q', meaning_en: '', meaning_zh: null, context_en: 'Second sentence.', context_zh: null },
+        ],
+    });
+    let translateCalls = 0;
+    const adapter = createSupabaseMaintenanceAdapter(fake.client, {
+        translateContext: async () => {
+            translateCalls++;
+            if (translateCalls === 1) {
+                const error = new Error('translation quality invalid');
+                error.code = 'TRANSLATION_QUALITY_INVALID';
+                throw error;
+            }
+            return '第二个句子的完整中文译文。';
+        },
+    });
+
+    assert.deepEqual(await adapter.backfillTranslations('qiuqiu'), {
+        cnFilled: 0,
+        cnSkipped: 0,
+        ctxFilled: 1,
+        ctxSkipped: 1,
+        total: 2,
+    });
+    assert.equal(translateCalls, 2);
+    assert.equal(fake.db.words[0].context_zh, null);
+    assert.equal(fake.db.words[1].context_zh, '第二个句子的完整中文译文。');
+});

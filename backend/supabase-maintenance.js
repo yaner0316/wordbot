@@ -57,6 +57,10 @@ function translatedValue(translations, source) {
     return String(translations[String(source).toLowerCase()] || '').trim();
 }
 
+function isTypedTranslationError(error) {
+    return typeof error?.code === 'string' && error.code.startsWith('TRANSLATION_');
+}
+
 function createSupabaseMaintenanceAdapter(client, options = {}) {
     if (!client || typeof client.from !== 'function') {
         throw new TypeError('Supabase client is required');
@@ -155,7 +159,14 @@ function createSupabaseMaintenanceAdapter(client, options = {}) {
         for (let index = 0; index < missingMeanings.length; index += 20) {
             const batch = missingMeanings.slice(index, index + 20);
             const sources = batch.map(row => String(row.meaning_en).trim());
-            const translations = await translateWords(sources);
+            let translations;
+            try {
+                translations = await translateWords(sources);
+            } catch (error) {
+                if (!isTypedTranslationError(error)) throw error;
+                cnSkipped += batch.length;
+                continue;
+            }
             for (const row of batch) {
                 const source = String(row.meaning_en).trim();
                 const translation = translatedValue(translations, source);
@@ -172,7 +183,14 @@ function createSupabaseMaintenanceAdapter(client, options = {}) {
             isEmptyDatabaseText(row.context_zh) && String(row.context_en || '').trim()
         );
         for (const row of missingContexts) {
-            const translation = String(await translateContext(String(row.context_en).trim()) || '').trim();
+            let translation;
+            try {
+                translation = String(await translateContext(String(row.context_en).trim()) || '').trim();
+            } catch (error) {
+                if (!isTypedTranslationError(error)) throw error;
+                ctxSkipped++;
+                continue;
+            }
             if (!hasChineseSentenceTranslation(translation)) {
                 ctxSkipped++;
                 continue;

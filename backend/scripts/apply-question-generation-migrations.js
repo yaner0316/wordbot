@@ -22,6 +22,7 @@ with claim_proc as (
     quality.oid is not null as function_exists,
     coalesce(not proc.prosecdef, false) as security_invoker,
     coalesce(proc.proconfig @> array['search_path=pg_catalog'], false) as safe_search_path,
+    coalesce(proc.prosrc like '%FORMAL_QUIZ_QUALITY_REQUIRED: context_zh%', false) as translation_contract,
     coalesce(bool_or(acl.grantee = 0 and acl.privilege_type = 'EXECUTE'), false) as public_execute,
     coalesce(bool_or(role.rolname = 'anon' and acl.privilege_type = 'EXECUTE'), false) as anon_execute,
     coalesce(bool_or(role.rolname = 'authenticated' and acl.privilege_type = 'EXECUTE'), false) as authenticated_execute,
@@ -34,7 +35,7 @@ with claim_proc as (
     end
   ) as acl on true
   left join pg_catalog.pg_roles as role on role.oid = acl.grantee
-  group by quality.oid, proc.prosecdef, proc.proconfig
+  group by quality.oid, proc.prosecdef, proc.proconfig, proc.prosrc
 ), rpc_specs(name, signature) as (
   values
     ('claim_question_generation_jobs', 'public.claim_question_generation_jobs(text,integer,bigint)'),
@@ -176,6 +177,7 @@ select
   (select function_exists from formal_quality_state) as formal_quality_function,
   (select security_invoker from formal_quality_state) as formal_quality_function_security_invoker,
   (select safe_search_path from formal_quality_state) as formal_quality_function_safe_search_path,
+  (select translation_contract from formal_quality_state) as formal_quality_translation_contract,
   (select public_execute from formal_quality_state) as formal_quality_function_public_execute,
   (select anon_execute from formal_quality_state) as formal_quality_function_anon_execute,
   (select authenticated_execute from formal_quality_state) as formal_quality_function_authenticated_execute,
@@ -345,6 +347,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260816_enqueue_rpc_acl.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260816_assessment_option_meanings.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260817_quiz_session_progress.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260818_formal_chinese_analysis_quality_gate.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -397,6 +400,7 @@ const EXPECTED_STATE = Object.freeze({
   formal_quality_function: true,
   formal_quality_function_security_invoker: true,
   formal_quality_function_safe_search_path: true,
+  formal_quality_translation_contract: true,
   formal_quality_function_public_execute: false,
   formal_quality_function_anon_execute: false,
   formal_quality_function_authenticated_execute: false,

@@ -664,6 +664,7 @@ async function submitQuizWithDataSource({
             yourAnswer,
             confidence: submitted.confidence,
             source: question.source || (question.cacheRecordId ? 'question_cache' : 'live_fallback'),
+            cacheQuestionId: question.cacheRecordId || question.cache_question_id || '',
             recordTime: Number(now()) + index,
             level: question.level,
             questionText: question.context || question.questionText || '',

@@ -273,7 +273,9 @@ function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
     return {
         question_type: '1',
         question_text: questionText,
+        context_zh: '这是与当前英文题干对应的完整中文句子翻译。',
         options: ['bank', ...distractors].map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`),
+        option_meanings: ['银行', '岸边', '书桌', '道路'],
         answer: 'A',
         correct_meaning: '银行',
     };
@@ -594,6 +596,68 @@ test('runtime returns its worker and independently testable persistence componen
     assert.equal(typeof runtime.generationService.process, 'function');
     assert.equal(typeof runtime.loadWord, 'function');
     assert.equal(typeof runtime.publishReadyVariants, 'function');
+});
+
+test('generation service rejects variants whose Chinese analysis is incomplete', async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-bank-finance', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'middle' }],
+    });
+    const invalid = {
+        ...candidate('The student deposited money at the bank after class.'),
+        context_zh: '银行',
+        option_meanings: ['bank', 'shore', 'desk', 'road'],
+        correct_meaning: 'bank',
+    };
+    const service = createSupabaseQuestionGenerationService({
+        client: fake.client,
+        buildCandidates: async () => [invalid, { ...invalid, question_text: 'The bank approved a loan for the family.' }],
+        maxAttempts: 1,
+    });
+
+    await assert.rejects(
+        service.process(generationJob()),
+        error => error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
+            && error.rejectionReasons.bad_option_meanings >= 2
+            && error.rejectionReasons.invalid_context_translation >= 2
+    );
+    assert.equal(fake.calls.some(call => call.name === 'publish_question_generation_variants'), false);
+});
+
+test('runtime records a typed translation failure for retry instead of hiding it', async () => {
+    const pending = generationJob({
+        status: 'pending',
+        attempt_count: 0,
+        lease_owner: null,
+        lease_token: null,
+        lease_expires_at: null,
+    });
+    const fake = createFakeSupabase({
+        jobs: [pending],
+        words: [{
+            id: pending.word_id,
+            user_id: pending.user_id,
+            word: 'bank',
+            meaning_zh: null,
+            level: 'middle',
+        }],
+    });
+    const runtime = createQuestionGenerationRuntime({
+        client: fake.client,
+        workerId: 'worker-a',
+        now: () => new Date(NOW),
+        buildCandidates: async () => {
+            const error = new Error('Translation provider unavailable');
+            error.code = 'TRANSLATION_PROVIDER_UNAVAILABLE';
+            throw error;
+        },
+        runImmediately: false,
+    });
+
+    const result = await runtime.worker.runOnce();
+
+    assert.deepEqual(result, { claimed: 1, completed: 0, failed: 1, abandoned: 0, lostLease: 0 });
+    assert.equal(fake.state.question_generation_jobs[0].status, 'retry_wait');
+    assert.equal(fake.state.question_generation_jobs[0].last_error_code, 'TRANSLATION_PROVIDER_UNAVAILABLE');
 });
 
 
