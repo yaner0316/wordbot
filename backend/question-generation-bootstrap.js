@@ -9,11 +9,23 @@ const {
 } = require('./supabase-data');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
+const { auditUniqueAnswer } = require('./question-semantic-audit');
 
 const DEFAULT_QUESTION_WORKER_BATCH_SIZE = 1;
 const DEFAULT_QUESTION_WORKER_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_QUESTION_WORKER_MAX_ATTEMPTS = 20;
 const DEFAULT_QUESTION_GENERATION_ATTEMPTS = 1;
+
+function createDefaultCandidateBuilderOptions() {
+    return {
+        generateDistractors: generateSupabaseDistractors,
+        translateWords: translateSupabaseWords,
+        translateContext: translateSupabaseContext,
+        generateContext: generateReplacementContextWithAI,
+        semanticAudit: auditUniqueAnswer,
+        requireSemanticAudit: true,
+    };
+}
 
 function createDefaultQuestionGenerationRuntime({ onError, onSuccess } = {}) {
     const workerId = String(process.env.WORDBOT_QUESTION_WORKER_ID || '').trim()
@@ -22,12 +34,7 @@ function createDefaultQuestionGenerationRuntime({ onError, onSuccess } = {}) {
         client: supabaseClient,
         workerId,
         buildCandidates: buildCacheQuestionRowsForWord,
-        candidateBuilderOptions: {
-            generateDistractors: generateSupabaseDistractors,
-            translateWords: translateSupabaseWords,
-            translateContext: translateSupabaseContext,
-            generateContext: generateReplacementContextWithAI,
-        },
+        candidateBuilderOptions: createDefaultCandidateBuilderOptions(),
         batchSize: Number(process.env.WORDBOT_QUESTION_WORKER_BATCH_SIZE || DEFAULT_QUESTION_WORKER_BATCH_SIZE),
         pollIntervalMs: Number(process.env.WORDBOT_QUESTION_WORKER_POLL_MS || 5000),
         leaseDurationMs: Number(process.env.WORDBOT_QUESTION_WORKER_LEASE_MS || DEFAULT_QUESTION_WORKER_LEASE_MS),
@@ -44,5 +51,6 @@ module.exports = {
     DEFAULT_QUESTION_WORKER_MAX_ATTEMPTS,
     DEFAULT_QUESTION_WORKER_BATCH_SIZE,
     DEFAULT_QUESTION_WORKER_LEASE_MS,
+    createDefaultCandidateBuilderOptions,
     createDefaultQuestionGenerationRuntime,
 };

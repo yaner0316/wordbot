@@ -271,6 +271,11 @@ select
   (select anon_execute from rpc_state where name = 'publish_question_generation_variants') as rpc_publish_question_generation_variants_anon_execute,
   (select authenticated_execute from rpc_state where name = 'publish_question_generation_variants') as rpc_publish_question_generation_variants_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'publish_question_generation_variants') as rpc_publish_question_generation_variants_service_role_execute,
+  coalesce((
+    select proc.prosrc like '%lower(btrim(variant->>''ai_audit_status'')) = ''approved''%'
+    from pg_catalog.pg_proc as proc
+    where proc.oid = (select oid from rpc_proc where name = 'publish_question_generation_variants')
+  ), false) as rpc_publish_question_generation_variants_ai_audit_contract,
   (select signature from rpc_state where name = 'complete_question_generation_job') as rpc_complete_question_generation_job_signature,
   (select security_definer from rpc_state where name = 'complete_question_generation_job') as rpc_complete_question_generation_job_security_definer,
   (select public_execute from rpc_state where name = 'complete_question_generation_job') as rpc_complete_question_generation_job_public_execute,
@@ -348,6 +353,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260816_assessment_option_meanings.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260817_quiz_session_progress.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260818_formal_chinese_analysis_quality_gate.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260819_mandatory_ai_question_audit.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -416,6 +422,7 @@ const EXPECTED_STATE = Object.freeze({
   quiz_session_updated_at_column: true,
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
+  rpc_publish_question_generation_variants_ai_audit_contract: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),
