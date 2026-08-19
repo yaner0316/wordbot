@@ -142,6 +142,19 @@ test('cached question selection chooses a different primary variant after the pr
     assert.deepEqual(selected.map(question => question.cacheRecordId), ['cache-prospect-new']);
 });
 
+test('cached question selection carries approved AI audit status into the quiz question DTO', () => {
+    const selected = selectCachedQuestionsForWordQueue({
+        cacheRows: [cache('audited', { fields: { word_record_id: 'rec-audited', ai_audit_status: 'approved' } })],
+        queue: ['rec-audited'],
+        userId: 'student',
+        level: LEVEL,
+        limit: 1,
+        now: NOW,
+    });
+
+    assert.equal(selected[0]?.aiAuditStatus, 'approved');
+});
+
 test('cached question selection tracks recent variants by word record ID', () => {
     const selected = selectCachedQuestionsForWordQueue({
         cacheRows: [

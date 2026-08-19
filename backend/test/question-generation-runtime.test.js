@@ -278,6 +278,7 @@ function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
         option_meanings: ['银行', '岸边', '书桌', '道路'],
         answer: 'A',
         correct_meaning: '银行',
+        ai_audit_status: 'approved',
     };
 }
 
@@ -525,6 +526,26 @@ test('default cache validation rejects ambiguous racket-sport fill-ins before pu
         service.process(generationJob({ word_id: 'word-badminton', user_id: 'user-1' })),
         error => error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
             && error.rejectionReasons.ambiguous_fill_in_context === 2
+    );
+    assert.equal(fake.calls.some(call => call.type === 'rpc' && call.name === 'publish_question_generation_variants'), false);
+});
+
+test('default cache validation rejects type-one candidates without approved AI audit', async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-bank-finance', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'middle' }],
+    });
+    const skipped = { ...candidate('She deposited money at the _____.'), ai_audit_status: 'skipped' };
+    const rejected = { ...candidate('The family applied at the _____.'), ai_audit_status: 'rejected' };
+    const service = createSupabaseQuestionGenerationService({
+        client: fake.client,
+        buildCandidates: async () => [skipped, rejected],
+        maxAttempts: 1,
+    });
+
+    await assert.rejects(
+        service.process(generationJob()),
+        error => error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
+            && error.rejectionReasons.ai_audit_not_approved === 2
     );
     assert.equal(fake.calls.some(call => call.type === 'rpc' && call.name === 'publish_question_generation_variants'), false);
 });

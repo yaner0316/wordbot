@@ -73,6 +73,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260816_assessment_option_meanings.sql',
       '20260817_quiz_session_progress.sql',
       '20260818_formal_chinese_analysis_quality_gate.sql',
+      '20260819_mandatory_ai_question_audit.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -147,6 +148,7 @@ const COMPLETE_STATE = Object.freeze({
   quiz_session_updated_at_column: true,
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
+  rpc_publish_question_generation_variants_ai_audit_contract: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
   rpc_old_renew_signature_absent: true,
@@ -212,6 +214,11 @@ const QUIZ_SESSION_SCHEMA_MISSING_STATE = Object.freeze({
   quiz_session_state_column: false,
   quiz_session_updated_at_column: false,
   quiz_session_updated_at_trigger: false,
+});
+
+const MANDATORY_AI_AUDIT_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  rpc_publish_question_generation_variants_ai_audit_contract: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -404,6 +411,26 @@ test('a database missing quiz session progress schema replays the fixed chain', 
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing only the publish AI-audit contract replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [MANDATORY_AI_AUDIT_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -554,12 +581,13 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_column/);
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_trigger/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
+  assert.match(VERIFICATION_SQL, /rpc_publish_question_generation_variants_ai_audit_contract/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -602,6 +630,12 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(quizSessionProgressSql, /security invoker/i);
   assert.match(quizSessionProgressSql, /set search_path = pg_catalog/i);
   assert.match(quizSessionProgressSql, /quiz_sessions_updated_at_trigger/i);
+  assert.match(mandatoryAiAuditSql, /create or replace function public\.publish_question_generation_variants/i);
+  assert.match(mandatoryAiAuditSql, /lower\(btrim\(variant->>'ai_audit_status'\)\)\s*=\s*'approved'/i);
+  assert.match(mandatoryAiAuditSql, /security definer/i);
+  assert.match(mandatoryAiAuditSql, /set search_path = public/i);
+  assert.match(mandatoryAiAuditSql, /revoke all on function public\.publish_question_generation_variants\(uuid, text, bigint, uuid, jsonb\)/i);
+  assert.match(mandatoryAiAuditSql, /grant execute on function public\.publish_question_generation_variants\(uuid, text, bigint, uuid, jsonb\)\s+to service_role/i);
   assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
   assert.match(masteryReconciliationSql, /security definer/i);
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);

@@ -264,6 +264,9 @@ function defaultValidateCandidate(candidate, word) {
     if (candidate?.word_id && String(candidate.word_id) !== String(word?.id)) issues.push('word_id_mismatch');
     if (candidate?.user_id && String(candidate.user_id) !== String(word?.user_id)) issues.push('user_id_mismatch');
     const questionType = Number(candidate?.question_type || candidate?.questionType);
+    if (questionType === 1 && String(candidate?.ai_audit_status || '').trim().toLowerCase() !== 'approved') {
+        issues.push('ai_audit_not_approved');
+    }
     const qualityQuestion = {
         type: questionType,
         level: candidate?.level || word?.level || '',

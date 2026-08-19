@@ -2742,6 +2742,47 @@ test('new cache generation fails closed when semantic audit is unavailable', asy
     assert.equal(client.db.question_cache.some(row => row.source_version === 'supabase-contextual-variant-v3'), false);
 });
 
+test('mandatory new cache generation returns no ready rows when semantic auditor is missing', async () => {
+    const rows = await buildCacheQuestionRowsForWord({
+        user: { id: 'user-1' },
+        word: rebuildCoverageWord('semantic-missing', 'lucky'),
+        level: MIDDLE,
+        generateContext: async () => 'The second lucky sentence is ready.',
+        generateDistractors: contextualDistractorsForTest,
+        translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['甲项', '乙项', '丙项', '丁项'][index]])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        requireSemanticAudit: true,
+    });
+
+    assert.deepEqual(rows, []);
+});
+
+test('new cache generation rejects deterministic quality failures before calling semantic AI', async () => {
+    let auditCalls = 0;
+    const rows = await buildCacheQuestionRowsForWord({
+        user: { id: 'user-1' },
+        word: {
+            id: 'word-local-reject',
+            user_id: 'user-1',
+            word: 'lucky',
+            meaning_zh: '幸运的',
+            context_en: 'She felt lucky before the game.',
+        },
+        level: MIDDLE,
+        generateContext: async () => 'They were lucky during the final match.',
+        generateDistractors: contextualDistractorsForTest,
+        translateWords: async words => Object.fromEntries(words.map(word => [word, '相同释义'])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        semanticAudit: async () => {
+            auditCalls += 1;
+            return { approved: true, status: 'approved', validLetters: ['A'] };
+        },
+    });
+
+    assert.deepEqual(rows, []);
+    assert.equal(auditCalls, 0);
+});
+
 test('new cache generation records approved semantic audit before ready publication', async () => {
     const word = rebuildCoverageWord('semantic-approved', 'lucky');
     const client = createFakeSupabase({
@@ -3578,6 +3619,92 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
         stem: question.context,
         question_fingerprint: question.questionFingerprint,
     })));
+});
+
+test('strict formal challenge accepts approved AI-audited cache questions', async () => {
+    const previous = process.env.WORDBOT_REQUIRE_AI_AUDIT;
+    process.env.WORDBOT_REQUIRE_AI_AUDIT = '1';
+    try {
+        const baseClient = createFakeSupabase({
+            users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        });
+        const calls = [];
+        const adapter = createSupabaseDataAdapter({
+            ...baseClient,
+            rpc: async (name, args) => {
+                calls.push({ name, args });
+                return { data: { challenge_id: 'challenge-approved', question_count: 10 }, error: null };
+            },
+        });
+        const questions = Array.from({ length: 10 }, (_, index) => ({
+            meaningId: `meaning-approved-${index + 1}`,
+            cacheRecordId: `cache-approved-${index + 1}`,
+            context: `Approved sentence ${index + 1} with _____.`,
+            questionFingerprint: `fingerprint-approved-${index + 1}`,
+            type: 1,
+            word: 'bank',
+            source: 'question_cache',
+            options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
+            answer: 'A',
+            contextCN: '这是一个完整的中文句子。',
+            optionMeanings: ['释义', '河流', '道路', '桌子'],
+            aiAuditStatus: 'approved',
+        }));
+
+        const result = await adapter.createFormalQuizChallenge({
+            username: 'qiuqiu', testId: 'real-approved-audit', level: MIDDLE, questions,
+        });
+
+        assert.equal(result.challenge_id, 'challenge-approved');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].args.p_questions.every(question => question.ai_audit_status === 'approved'), true);
+    } finally {
+        if (previous === undefined) delete process.env.WORDBOT_REQUIRE_AI_AUDIT;
+        else process.env.WORDBOT_REQUIRE_AI_AUDIT = previous;
+    }
+});
+
+test('strict formal challenge rejects cache questions without approved AI audit', async () => {
+    const previous = process.env.WORDBOT_REQUIRE_AI_AUDIT;
+    process.env.WORDBOT_REQUIRE_AI_AUDIT = '1';
+    try {
+        const baseClient = createFakeSupabase({
+            users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        });
+        const calls = [];
+        const adapter = createSupabaseDataAdapter({
+            ...baseClient,
+            rpc: async (name, args) => {
+                calls.push({ name, args });
+                return { data: null, error: null };
+            },
+        });
+        const questions = Array.from({ length: 10 }, (_, index) => ({
+            meaningId: `meaning-skipped-${index + 1}`,
+            cacheRecordId: `cache-skipped-${index + 1}`,
+            context: `Skipped sentence ${index + 1} with _____.`,
+            questionFingerprint: `fingerprint-skipped-${index + 1}`,
+            type: 1,
+            word: 'bank',
+            source: 'question_cache',
+            options: ['A. bank', 'B. river', 'C. road', 'D. desk'],
+            answer: 'A',
+            contextCN: '这是一个完整的中文句子。',
+            optionMeanings: ['释义', '河流', '道路', '桌子'],
+            aiAuditStatus: 'skipped',
+        }));
+
+        await assert.rejects(
+            adapter.createFormalQuizChallenge({
+                username: 'qiuqiu', testId: 'real-skipped-audit', level: MIDDLE, questions,
+            }),
+            /ai_audit_not_approved/
+        );
+        assert.equal(calls.length, 0);
+    } finally {
+        if (previous === undefined) delete process.env.WORDBOT_REQUIRE_AI_AUDIT;
+        else process.env.WORDBOT_REQUIRE_AI_AUDIT = previous;
+    }
 });
 
 test('formal challenge adapter refuses to persist a cache question without four renderable options', async () => {

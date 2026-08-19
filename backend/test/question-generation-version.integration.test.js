@@ -88,7 +88,7 @@ insert into public.words (id, user_id, word, meaning_en, context_en, level)
 values ('${WORD_ID}', '${USER_ID}', 'apple', 'a fruit', 'The child ate an apple.', 'middle');
 `;
 
-function variantsJson() {
+function variantsJson({ aiAuditStatus = 'approved' } = {}) {
     return JSON.stringify([
         {
             source_word_record_id: 'rec-apple',
@@ -100,6 +100,7 @@ function variantsJson() {
             answer: 'A',
             option_meanings: ['apple meaning', 'pear meaning', 'plum meaning', 'peach meaning'],
             correct_meaning: 'a fruit',
+            ai_audit_status: aiAuditStatus,
             question_fingerprint: 'apple-v1-a',
         },
         {
@@ -112,6 +113,7 @@ function variantsJson() {
             answer: 'A',
             option_meanings: ['apple meaning', 'grape meaning', 'melon meaning', 'lemon meaning'],
             correct_meaning: 'a fruit',
+            ai_audit_status: aiAuditStatus,
             question_fingerprint: 'apple-v1-b',
         },
     ]);
@@ -149,6 +151,7 @@ test('migration verification SQL executes against the real versioned PGlite sche
         assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_anon_execute, false);
         assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_authenticated_execute, false);
         assert.equal(result.rows[0].rpc_reconcile_word_mastery_status_service_role_execute, true);
+        assert.equal(result.rows[0].rpc_publish_question_generation_variants_ai_audit_contract, true);
     } finally {
         await db.close();
     }
@@ -462,6 +465,100 @@ test('publish rejects an obsolete job version even if stale lease fields remain'
         );
         assert.equal(publish.rows.length, 0);
         assert.equal(cache.rows[0].count, 0);
+    } finally {
+        await db.close();
+    }
+});
+
+for (const aiAuditStatus of ['skipped', 'rejected']) {
+    test(`publish rejects type-1 variants with ai_audit_status=${aiAuditStatus} before writing cache`, async () => {
+        const db = await createDatabase();
+        try {
+            await db.query(
+                "select public.enqueue_question_generation_job_if_needed($1::uuid, $2::uuid, 'cache_backfill')",
+                [USER_ID, WORD_ID]
+            );
+            const claim = await db.query(
+                "select * from public.claim_question_generation_jobs('audit-worker', 1, 60000)"
+            );
+            assert.equal(claim.rows.length, 1);
+
+            await assert.rejects(
+                db.query(
+                    'select * from public.publish_question_generation_variants($1::uuid, $2, $3::bigint, $4::uuid, $5::jsonb)',
+                    [
+                        claim.rows[0].id,
+                        'audit-worker',
+                        claim.rows[0].word_version,
+                        claim.rows[0].lease_token,
+                        variantsJson({ aiAuditStatus }),
+                    ]
+                ),
+                /INVALID_VARIANT_STRUCTURE/
+            );
+
+            const cache = await db.query(
+                'select count(*)::integer as count from public.question_cache where word_id = $1::uuid',
+                [WORD_ID]
+            );
+            assert.equal(cache.rows[0].count, 0);
+        } finally {
+            await db.close();
+        }
+    });
+}
+
+test('publish accepts approved type-1 variants and preserves service-role-only RPC security', async () => {
+    const db = await createDatabase();
+    try {
+        await db.query(
+            "select public.enqueue_question_generation_job_if_needed($1::uuid, $2::uuid, 'cache_backfill')",
+            [USER_ID, WORD_ID]
+        );
+        const claim = await db.query(
+            "select * from public.claim_question_generation_jobs('approved-worker', 1, 60000)"
+        );
+        assert.equal(claim.rows.length, 1);
+
+        const publish = await db.query(
+            'select * from public.publish_question_generation_variants($1::uuid, $2, $3::bigint, $4::uuid, $5::jsonb)',
+            [
+                claim.rows[0].id,
+                'approved-worker',
+                claim.rows[0].word_version,
+                claim.rows[0].lease_token,
+                variantsJson({ aiAuditStatus: 'approved' }),
+            ]
+        );
+        assert.equal(publish.rows[0].published, 2);
+
+        const cache = await db.query(
+            'select count(*)::integer as count, array_agg(distinct ai_audit_status) as statuses from public.question_cache where word_id = $1::uuid',
+            [WORD_ID]
+        );
+        assert.deepEqual(cache.rows[0], { count: 2, statuses: ['approved'] });
+
+        const security = await db.query(`
+            select
+                proc.prosecdef as security_definer,
+                proc.proconfig @> array['search_path=public'] as safe_search_path,
+                has_function_privilege('service_role', proc.oid, 'EXECUTE') as service_role_execute,
+                has_function_privilege('public', proc.oid, 'EXECUTE') as public_execute,
+                has_function_privilege('anon', proc.oid, 'EXECUTE') as anon_execute,
+                has_function_privilege('authenticated', proc.oid, 'EXECUTE') as authenticated_execute
+            from pg_catalog.pg_proc as proc
+            join pg_catalog.pg_namespace as namespace on namespace.oid = proc.pronamespace
+            where namespace.nspname = 'public'
+              and proc.oid = to_regprocedure('public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)')
+        `);
+        assert.deepEqual(security.rows, [{
+            security_definer: true,
+            safe_search_path: true,
+            service_role_execute: true,
+            public_execute: false,
+            anon_execute: false,
+            authenticated_execute: false,
+        }]);
     } finally {
         await db.close();
     }

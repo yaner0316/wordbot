@@ -29,6 +29,10 @@ function userKey(value) {
     return String(value || '').trim().toLowerCase();
 }
 
+function requireApprovedAiAudit() {
+    return String(process.env.WORDBOT_REQUIRE_AI_AUDIT || '').trim() === '1';
+}
+
 function buildCacheQuestionFields({ question, sourceVersion, now = Date.now() }) {
     return {
         question_type: question.type,
@@ -99,6 +103,7 @@ function normalizeCacheRow(row) {
         level: fields.level || '',
         roundType: fields.round_type || 'primary',
         qualityStatus: fields.quality_status || QUESTION_CACHE_STATUS.PENDING,
+        aiAuditStatus: fields.ai_audit_status || '',
         cacheState: fields.cache_state || 'active',
         variantSlot: Number(fields.variant_slot || 1),
         questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
@@ -119,6 +124,7 @@ function normalizeCacheRow(row) {
             optionMeanings: parseJsonList(fields.option_meanings),
             correctMeaning: fields.correct_meaning || '',
             questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
+            aiAuditStatus: fields.ai_audit_status || '',
         },
     };
 }
@@ -128,12 +134,16 @@ function isFailedOptionMeaning(value) {
     return text.startsWith(OPTION_MEANING_FAILURE_PREFIX) || text.startsWith('涓枃閲婁箟琛ュ厖');
 }
 
-function getCacheQuestionReadinessIssues(row) {
+function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApprovedAiAudit() } = {}) {
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
     if (['retired', 'replace_pending'].includes(normalized.cacheState)) issues.push('inactive_cache_state');
     if (normalized.qualityStatus !== QUESTION_CACHE_STATUS.READY) issues.push('not_ready_status');
+    if (requireAiAudit && Number(question.type) === 1
+        && String(normalized.aiAuditStatus || '').trim().toLowerCase() !== 'approved') {
+        issues.push('ai_audit_not_approved');
+    }
     if ([2, 3].includes(Number(question.type))) issues.push('disabled_question_type');
     if (!question.record_id) issues.push('missing_record_id');
     if (!String(question.questionFingerprint || '').trim()) issues.push('missing_question_fingerprint');
@@ -168,8 +178,8 @@ function getCacheQuestionReadinessIssues(row) {
     return [...new Set(issues)];
 }
 
-function isCacheQuestionReady(row) {
-    return getCacheQuestionReadinessIssues(row).length === 0;
+function isCacheQuestionReady(row, options) {
+    return getCacheQuestionReadinessIssues(row, options).length === 0;
 }
 function getTypePolicy(level, limit) {
     return { quota: { 1: limit, 2: 0, 3: 0 }, allowed: new Set([1]) };

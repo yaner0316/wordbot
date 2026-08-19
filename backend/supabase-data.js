@@ -749,6 +749,7 @@ function toQuestionCacheStatusRecord(row, { user, word }) {
             level: row.level || '',
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
+            ai_audit_status: row.ai_audit_status || '',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),
             question_fingerprint: row.question_fingerprint || '',
@@ -1164,7 +1165,7 @@ function countDistractorOverlap(left, right) {
     const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
     return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
 }
-async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit }) {
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     const blankedContext = blankWordInContext(context, wordText);
@@ -1186,10 +1187,6 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         : '';
     if (!contextTranslation) return null;
 
-    const audit = typeof semanticAudit === 'function'
-        ? await semanticAudit({ type: 1, word: wordText, level, context: blankedContext, options, answer, optionMeanings })
-        : null;
-    if (audit && audit.approved !== true) return null;
     const row = {
         user_id: user.id,
         word_id: word.id,
@@ -1205,17 +1202,34 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         answer,
         option_meanings: optionMeanings,
         correct_meaning: optionMeanings[optionWords.indexOf(wordText)] || String(meaning || ''),
-        ai_audit_status: audit ? 'approved' : 'skipped',
-        source_version: audit ? 'supabase-contextual-variant-v3' : 'supabase-contextual-variant-v2',
+        ai_audit_status: 'skipped',
+        source_version: 'supabase-contextual-variant-v2',
         used_count: 0,
         generated_at: toIsoString(now),
         last_used_at: null,
         ...buildInitialVariantMetadata({ slot, now }),
     };
     row.question_fingerprint = fingerprintQuestion(row, word.id);
-    return getCacheQuestionReadinessIssues(toQuestionCacheStatusRecord(row, { user, word })).length
-        ? null
-        : row;
+    const statusRecord = toQuestionCacheStatusRecord(row, { user, word });
+    if (getCacheQuestionReadinessIssues(statusRecord, { requireAiAudit: false }).length) return null;
+    if (typeof semanticAudit !== 'function') return requireSemanticAudit ? null : row;
+
+    const audit = await semanticAudit({
+        type: 1,
+        word: wordText,
+        level,
+        context: blankedContext,
+        options,
+        answer,
+        optionMeanings,
+    });
+    if (audit?.approved !== true) return null;
+    row.ai_audit_status = 'approved';
+    row.source_version = 'supabase-contextual-variant-v3';
+    return getCacheQuestionReadinessIssues(
+        toQuestionCacheStatusRecord(row, { user, word }),
+        { requireAiAudit: true }
+    ).length ? null : row;
 }
 
 async function persistTranslatedWordMeaning(client, word, meaning) {
@@ -1239,7 +1253,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, requireSemanticAudit = false }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -1309,8 +1323,8 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     const secondDistractors = await generateForContext(secondContext, firstDistractors);
     if (!secondDistractors) return [];
 
-    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords, translateContext, semanticAudit });
-    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords, translateContext, semanticAudit });
+    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords, translateContext, semanticAudit, requireSemanticAudit });
+    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords, translateContext, semanticAudit, requireSemanticAudit });
     if (!first) return [];
     return second ? [first, second] : [];
 }
@@ -1399,7 +1413,7 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
         throw new Error(`rebuildQuestionCache.enqueueJob: durable job was not confirmed for word ${wordId}`);
     }
 }
-async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null, semanticAuditor = null) {
+async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null, semanticAuditor = null, requireSemanticAudit = false) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level) || normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL);
     const defaultWordLevel = level;
@@ -1570,7 +1584,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
         if (hasSelectablePrimaryRows) {
             await isolatePrimaryCachePairForReplacementWithClient(client, user.id, word.id);
         }
-        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level: wordLevel, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator, semanticAudit: semanticAuditor });
+        const wordRows = await buildCacheQuestionRowsForWord({ user, word, level: wordLevel, generateDistractors, translateWords, translateContext: contextTranslator, generateContext: contextGenerator, semanticAudit: semanticAuditor, requireSemanticAudit });
         const primaryRows = wordRows.filter(row => row.round_type === 'primary' && row.quality_status === 'ready');
         if (!primaryRows.length) {
             await enqueueQuestionGenerationJobWithConfirmation(client, {
@@ -1973,7 +1987,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     }
 }
 
-async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}, distractorGenerator, translator, contextTranslator, contextGenerator, semanticAuditor) {
+async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, result } = {}, distractorGenerator, translator, contextTranslator, contextGenerator, semanticAuditor, requireSemanticAudit = false) {
     const buildContext = typeof contextGenerator === 'function' ? contextGenerator : generateReplacementContextWithAI;
     const buildDistractors = typeof distractorGenerator === 'function' ? distractorGenerator : generateSupabaseDistractors;
     const translateOptions = typeof translator === 'function' ? translator : translateSupabaseWords;
@@ -2005,6 +2019,7 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
             generateContext: buildContext,
             translateContext: sentence => translateSentence(sentence),
             semanticAudit: semanticAuditor,
+            requireSemanticAudit,
         });
         const primary = candidates.find(row => row.round_type === 'primary' && String(row.question_text || '').trim().toLowerCase() !== String(assessment.question_text || '').trim().toLowerCase());
         if (primary) {
@@ -2556,12 +2571,14 @@ function normalizeFormalChallengeQuestion(question) {
     const cacheQuestionId = String(question?.cacheRecordId || question?.cache_question_id || '').trim();
     const stem = String(question?.context || question?.stem || question?.question_text || '').trim();
     if (!meaningId || !cacheQuestionId || !stem) throw new Error('FORMAL_CHALLENGE_QUESTION_CANONICAL_IDS_REQUIRED');
+    const aiAuditStatus = String(question?.aiAuditStatus || question?.ai_audit_status || '').trim();
     return {
         ...question,
         meaning_id: meaningId,
         cache_question_id: cacheQuestionId,
         stem,
         question_fingerprint: String(question?.questionFingerprint || question?.question_fingerprint || '').trim() || null,
+        ...(aiAuditStatus ? { ai_audit_status: aiAuditStatus } : {}),
     };
 }
 
@@ -2608,6 +2625,7 @@ function assertFormalChallengeQuestionsRenderable(questions) {
                 answer,
                 option_meanings: optionMeanings,
                 correct_meaning: question.correctMeaning || question.correct_meaning || optionMeanings[answerIndex],
+                ai_audit_status: question.aiAuditStatus || question.ai_audit_status || '',
             },
         });
         const formalQualityIssues = readinessIssues.filter(issue => issue !== 'missing_generated_at');
@@ -3087,7 +3105,7 @@ async function getAllStatsWithClient(client) {
     return Promise.all(users.map(user => getStatsWithClient(client, user.username)));
 }
 
-function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null, translateContext = null, generateContext = null, semanticAudit = null } = {}) {
+function createSupabaseDataAdapter(client = supabase, { generateDistractors = null, translateWords = null, translateContext = null, generateContext = null, semanticAudit = null, requireSemanticAudit = false } = {}) {
     const distractorGenerator = generateDistractors || (async () => null);
     const contextTranslator = translateContext || translateSupabaseContext;
     const translator = translateWords || (async () => ({}));
@@ -3147,7 +3165,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
-        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit),
+        rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit, requireSemanticAudit),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
         saveQuizSession: (username, testId, questions, options) =>
@@ -3177,12 +3195,12 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getActiveReviewRound: input => getActiveReviewRoundWithClient(client, input),
         deferReviewRound: input => deferReviewRoundWithClient(client, input),
         getReviewSummary: input => getReviewSummaryWithClient(client, input),
-        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit),
+        prebuildWrongQuestionCache: input => prebuildWrongQuestionCacheWithClient(client, input, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit, requireSemanticAudit),
         submitReviewRound: input => submitReviewRoundWithClient(client, input),
     };
 }
 
-const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors, translateWords: translateSupabaseWords, translateContext: translateSupabaseContext, generateContext: generateReplacementContextWithAI, semanticAudit: auditUniqueAnswer });
+const defaultAdapter = createSupabaseDataAdapter(supabase, { generateDistractors: generateSupabaseDistractors, translateWords: translateSupabaseWords, translateContext: translateSupabaseContext, generateContext: generateReplacementContextWithAI, semanticAudit: auditUniqueAnswer, requireSemanticAudit: true });
 
 module.exports = {
     name: 'supabase',
