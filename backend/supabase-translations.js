@@ -15,6 +15,17 @@ function translationError(code, message, cause) {
     return new TranslationError(code, message, cause ? { cause } : undefined);
 }
 
+async function retryInvalidTranslationResponse(operation, attempts = 2) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            return await operation();
+        } catch (error) {
+            if (error?.code !== 'TRANSLATION_RESPONSE_INVALID' || attempt === attempts) throw error;
+        }
+    }
+    throw translationError('TRANSLATION_RESPONSE_INVALID', 'Translation response remained invalid');
+}
+
 function callMiniMax(prompt, timeout) {
     return new Promise((resolve, reject) => {
         const apiKey = process.env.MINIMAX_API_KEY;
@@ -75,22 +86,24 @@ async function translateSupabaseWords(words, options = {}) {
         'Return only one JSON object mapping each original word to its Chinese meaning.',
     ].join('\n');
     const request = typeof options.request === 'function' ? options.request : callMiniMax;
-    const raw = await request(prompt);
-    const match = String(raw || '').match(/\{[\s\S]*\}/);
-    if (!match) {
-        throw translationError('TRANSLATION_RESPONSE_INVALID', 'Word translation response did not contain a JSON object');
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(match[0]);
-    } catch (error) {
-        throw translationError('TRANSLATION_RESPONSE_INVALID', 'Word translation response contained invalid JSON', error);
-    }
-    const translated = Object.fromEntries(uniqueWords.map(word => [word, String(parsed?.[word] || '').trim()]));
-    if (uniqueWords.some(word => !hasMeaningfulChineseMeaning(translated[word]))) {
-        throw translationError('TRANSLATION_QUALITY_INVALID', 'Word translation response was incomplete or non-Chinese');
-    }
-    return translated;
+    return retryInvalidTranslationResponse(async () => {
+        const raw = await request(prompt);
+        const match = String(raw || '').match(/\{[\s\S]*\}/);
+        if (!match) {
+            throw translationError('TRANSLATION_RESPONSE_INVALID', 'Word translation response did not contain a JSON object');
+        }
+        let parsed;
+        try {
+            parsed = JSON.parse(match[0]);
+        } catch (error) {
+            throw translationError('TRANSLATION_RESPONSE_INVALID', 'Word translation response contained invalid JSON', error);
+        }
+        const translated = Object.fromEntries(uniqueWords.map(word => [word, String(parsed?.[word] || '').trim()]));
+        if (uniqueWords.some(word => !hasMeaningfulChineseMeaning(translated[word]))) {
+            throw translationError('TRANSLATION_QUALITY_INVALID', 'Word translation response was incomplete or non-Chinese');
+        }
+        return translated;
+    });
 }
 
 async function translateSupabaseContext(sentence, options = {}) {
@@ -102,12 +115,14 @@ async function translateSupabaseContext(sentence, options = {}) {
         'Return only the complete Chinese sentence. Do not explain or label the translation.',
     ].join('\n');
     const request = typeof options.request === 'function' ? options.request : callMiniMax;
-    const raw = String(await request(prompt) || '').trim();
-    const translated = raw.replace(/^```(?:text)?\s*|\s*```$/gi, '').trim();
-    if (!isContextSentenceTranslationAcceptable({ type: 1, context: text, contextCN: translated })) {
-        throw translationError('TRANSLATION_QUALITY_INVALID', 'Sentence translation was missing or incomplete');
-    }
-    return translated;
+    return retryInvalidTranslationResponse(async () => {
+        const raw = String(await request(prompt) || '').trim();
+        const translated = raw.replace(/^```(?:text)?\s*|\s*```$/gi, '').trim();
+        if (!isContextSentenceTranslationAcceptable({ type: 1, context: text, contextCN: translated })) {
+            throw translationError('TRANSLATION_QUALITY_INVALID', 'Sentence translation was missing or incomplete');
+        }
+        return translated;
+    });
 }
 
 module.exports = {

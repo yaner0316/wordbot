@@ -50,3 +50,31 @@ test('translation preserves the provider error code for job retry diagnostics', 
         error => error === providerError
     ));
 });
+
+test('word translation retries one malformed response before succeeding', async () => {
+    let calls = 0;
+    const translated = await translateSupabaseWords(['apple'], {
+        request: async () => {
+            calls += 1;
+            return calls === 1 ? 'not json' : JSON.stringify({ apple: '苹果' });
+        },
+    });
+
+    assert.deepEqual(translated, { apple: '苹果' });
+    assert.equal(calls, 2);
+});
+
+test('word translation stops after two malformed responses with the typed error', async () => {
+    let calls = 0;
+    await assert.rejects(
+        translateSupabaseWords(['apple'], {
+            request: async () => {
+                calls += 1;
+                return 'not json';
+            },
+        }),
+        error => error.code === 'TRANSLATION_RESPONSE_INVALID'
+    );
+
+    assert.equal(calls, 2);
+});
