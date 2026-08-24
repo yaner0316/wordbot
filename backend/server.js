@@ -386,7 +386,6 @@ app.use('/api/submit', requireUserSession);
 app.use('/api/stats', requireUserSession);
 app.use('/api/history', requireUserSession);
 app.use('/api/reviews', requireUserSession);
-app.use('/api/game/state', requireUserSession);
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
@@ -549,7 +548,7 @@ app.put('/api/admin/userSettings', async (req, res) => {
     }
 });
 
-app.get('/api/game/state/:user', async (req, res) => {
+app.get('/api/game/state/:user', requireUserSession, async (req, res) => {
     try {
         if (typeof getGameState !== 'function') return res.status(503).json({ error: 'Game state storage is unavailable.' });
         res.json({ state: await getGameState(req.params.user) });
@@ -558,7 +557,7 @@ app.get('/api/game/state/:user', async (req, res) => {
     }
 });
 
-app.put('/api/game/state/:user', async (req, res) => {
+app.put('/api/game/state/:user', requireUserSession, async (req, res) => {
     try {
         if (typeof saveGameState !== 'function') return res.status(503).json({ error: 'Game state storage is unavailable.' });
         res.json({ state: await saveGameState(req.params.user, req.body || {}) });

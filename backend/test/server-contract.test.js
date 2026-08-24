@@ -328,7 +328,7 @@ test('production server rejects anonymous game state access before business adap
         await withServer(app, async baseUrl => {
             const read = await fetch(`${baseUrl}/api/game/state/student`);
             const write = await fetch(`${baseUrl}/api/game/state/student`, {
-                method: 'POST',
+                method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ state: {} }),
             });
@@ -372,6 +372,14 @@ test('authenticated user can read and save their own game state', async () => {
             });
             assert.equal(read.status, 200);
             assert.equal(write.status, 200);
+            const crossUser = await fetch(`${baseUrl}/api/game/state/qiuqiu`, { headers: { Cookie: cookie } });
+            assert.equal(crossUser.status, 403);
+            const crossUserWrite = await fetch(`${baseUrl}/api/game/state/qiuqiu`, {
+                method: 'PUT',
+                headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ minutes: 999, user: 'student' }),
+            });
+            assert.equal(crossUserWrite.status, 403);
         });
     });
     assert.deepEqual(calls, [['get', 'student'], ['save', 'student', { minutes: 4 }]]);

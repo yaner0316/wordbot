@@ -75,6 +75,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260818_formal_chinese_analysis_quality_gate.sql',
       '20260819_mandatory_ai_question_audit.sql',
       '20260824_formal_ai_audit_gate.sql',
+      '20260824_game_states.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -140,6 +141,11 @@ const COMPLETE_STATE = Object.freeze({
   formal_quality_function_service_role_execute: false,
   formal_quality_trigger: true,
   assessments_table: true,
+  game_states_table: true,
+  game_states_rls_enabled: true,
+  game_states_service_role_access: true,
+  game_states_anon_access: false,
+  game_states_authenticated_access: false,
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
   assessment_context_zh_column: true,
@@ -606,6 +612,12 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /assessment_option_meanings_column/);
   assert.match(VERIFICATION_SQL, /assessment_parent_review_index/);
   assert.match(VERIFICATION_SQL, /assessments_rls_enabled/);
+  assert.match(
+    VERIFICATION_SQL,
+    /has_table_privilege\('service_role',[\s\S]*?'SELECT'\)[\s\S]*?and[\s\S]*?has_table_privilege\('service_role',[\s\S]*?'INSERT'\)[\s\S]*?and[\s\S]*?has_table_privilege\('service_role',[\s\S]*?'UPDATE'\)/i
+  );
+  assert.match(VERIFICATION_SQL, /has_table_privilege\('anon',[\s\S]*?'SELECT,INSERT,UPDATE,DELETE'\)/i);
+  assert.match(VERIFICATION_SQL, /has_table_privilege\('authenticated',[\s\S]*?'SELECT,INSERT,UPDATE,DELETE'\)/i);
   assert.match(VERIFICATION_SQL, /quiz_session_state_column/);
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_column/);
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_trigger/);

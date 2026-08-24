@@ -79,6 +79,16 @@ select
   to_regclass('public.quiz_challenge_questions') is not null as formal_challenge_questions_table,
   to_regclass('public.quiz_display_events') is not null as formal_display_events_table,
   to_regclass('public.assessments') is not null as assessments_table,
+  to_regclass('public.game_states') is not null as game_states_table,
+  coalesce((select cls.relrowsecurity from pg_catalog.pg_class as cls join pg_catalog.pg_namespace as namespace on namespace.oid = cls.relnamespace where namespace.nspname = 'public' and cls.relname = 'game_states'), false) as game_states_rls_enabled,
+  coalesce(
+    has_table_privilege('service_role', to_regclass('public.game_states'), 'SELECT')
+    and has_table_privilege('service_role', to_regclass('public.game_states'), 'INSERT')
+    and has_table_privilege('service_role', to_regclass('public.game_states'), 'UPDATE'),
+    false
+  ) as game_states_service_role_access,
+  coalesce(has_table_privilege('anon', to_regclass('public.game_states'), 'SELECT,INSERT,UPDATE,DELETE'), false) as game_states_anon_access,
+  coalesce(has_table_privilege('authenticated', to_regclass('public.game_states'), 'SELECT,INSERT,UPDATE,DELETE'), false) as game_states_authenticated_access,
   exists (
     select 1
     from pg_catalog.pg_attribute as attribute
@@ -365,6 +375,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260818_formal_chinese_analysis_quality_gate.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260819_mandatory_ai_question_audit.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260824_formal_ai_audit_gate.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260824_game_states.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -424,6 +435,11 @@ const EXPECTED_STATE = Object.freeze({
   formal_quality_function_service_role_execute: false,
   formal_quality_trigger: true,
   assessments_table: true,
+  game_states_table: true,
+  game_states_rls_enabled: true,
+  game_states_service_role_access: true,
+  game_states_anon_access: false,
+  game_states_authenticated_access: false,
   assessments_rls_enabled: true,
   assessment_parent_review_id_column: true,
   assessment_context_zh_column: true,
