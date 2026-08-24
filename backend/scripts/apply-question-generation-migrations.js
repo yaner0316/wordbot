@@ -307,6 +307,11 @@ select
   (select anon_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_anon_execute,
   (select authenticated_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'create_formal_quiz_challenge') as rpc_create_formal_quiz_challenge_service_role_execute,
+  coalesce((
+    select proc.prosrc like '%FORMAL_CHALLENGE_CACHE_AI_AUDIT_REQUIRED%'
+    from pg_catalog.pg_proc as proc
+    where proc.oid = (select oid from rpc_proc where name = 'create_formal_quiz_challenge')
+  ), false) as rpc_create_formal_quiz_challenge_ai_audit_contract,
   (select signature from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_signature,
   (select security_definer from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_security_definer,
   (select public_execute from rpc_state where name = 'invalidate_formal_quiz_question') as rpc_invalidate_formal_quiz_question_public_execute,
@@ -319,6 +324,11 @@ select
   (select anon_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_anon_execute,
   (select authenticated_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'replace_formal_quiz_question') as rpc_replace_formal_quiz_question_service_role_execute,
+  coalesce((
+    select proc.prosrc like '%FORMAL_REPLACEMENT_CACHE_AI_AUDIT_REQUIRED%'
+    from pg_catalog.pg_proc as proc
+    where proc.oid = (select oid from rpc_proc where name = 'replace_formal_quiz_question')
+  ), false) as rpc_replace_formal_quiz_question_ai_audit_contract,
   (select signature from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_signature,
   (select security_definer from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_security_definer,
   (select public_execute from rpc_state where name = 'finalize_word_question_generation_edit') as rpc_finalize_word_edit_public_execute,
@@ -354,6 +364,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260817_quiz_session_progress.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260818_formal_chinese_analysis_quality_gate.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260819_mandatory_ai_question_audit.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260824_formal_ai_audit_gate.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -423,6 +434,8 @@ const EXPECTED_STATE = Object.freeze({
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   rpc_publish_question_generation_variants_ai_audit_contract: true,
+  rpc_create_formal_quiz_challenge_ai_audit_contract: true,
+  rpc_replace_formal_quiz_question_ai_audit_contract: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
     !key.endsWith('_public_execute') && !key.endsWith('_anon_execute') && !key.endsWith('_authenticated_execute'),

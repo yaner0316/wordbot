@@ -74,6 +74,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260817_quiz_session_progress.sql',
       '20260818_formal_chinese_analysis_quality_gate.sql',
       '20260819_mandatory_ai_question_audit.sql',
+      '20260824_formal_ai_audit_gate.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -149,6 +150,8 @@ const COMPLETE_STATE = Object.freeze({
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   rpc_publish_question_generation_variants_ai_audit_contract: true,
+  rpc_create_formal_quiz_challenge_ai_audit_contract: true,
+  rpc_replace_formal_quiz_question_ai_audit_contract: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
   rpc_old_renew_signature_absent: true,
@@ -219,6 +222,12 @@ const QUIZ_SESSION_SCHEMA_MISSING_STATE = Object.freeze({
 const MANDATORY_AI_AUDIT_MISSING_STATE = Object.freeze({
   ...COMPLETE_STATE,
   rpc_publish_question_generation_variants_ai_audit_contract: false,
+});
+
+const FORMAL_AI_AUDIT_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  rpc_create_formal_quiz_challenge_ai_audit_contract: false,
+  rpc_replace_formal_quiz_question_ai_audit_contract: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -431,6 +440,26 @@ test('a database missing only the publish AI-audit contract replays the fixed ch
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing only the formal AI-audit contracts replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [FORMAL_AI_AUDIT_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -582,12 +611,14 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_trigger/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
   assert.match(VERIFICATION_SQL, /rpc_publish_question_generation_variants_ai_audit_contract/);
+  assert.match(VERIFICATION_SQL, /rpc_create_formal_quiz_challenge_ai_audit_contract/);
+  assert.match(VERIFICATION_SQL, /rpc_replace_formal_quiz_question_ai_audit_contract/);
 });
 
 test('approved SQL files are transactional and idempotent', () => {
-  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql, formalAiAuditSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
 
-  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql]) {
+  for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql, formalAiAuditSql]) {
     assert.match(sql, /^\s*begin;/i);
     assert.match(sql, /commit;\s*$/i);
   }
@@ -636,6 +667,16 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(mandatoryAiAuditSql, /set search_path = public/i);
   assert.match(mandatoryAiAuditSql, /revoke all on function public\.publish_question_generation_variants\(uuid, text, bigint, uuid, jsonb\)/i);
   assert.match(mandatoryAiAuditSql, /grant execute on function public\.publish_question_generation_variants\(uuid, text, bigint, uuid, jsonb\)\s+to service_role/i);
+  assert.match(formalAiAuditSql, /create or replace function public\.create_formal_quiz_challenge/i);
+  assert.match(formalAiAuditSql, /FORMAL_CHALLENGE_CACHE_AI_AUDIT_REQUIRED/);
+  assert.match(formalAiAuditSql, /create or replace function public\.replace_formal_quiz_question/i);
+  assert.match(formalAiAuditSql, /FORMAL_REPLACEMENT_CACHE_AI_AUDIT_REQUIRED/);
+  assert.match(formalAiAuditSql, /security invoker/i);
+  assert.match(formalAiAuditSql, /set search_path = pg_catalog, public/i);
+  assert.match(formalAiAuditSql, /revoke all on function public\.create_formal_quiz_challenge\(uuid, text, text, jsonb, timestamptz\)/i);
+  assert.match(formalAiAuditSql, /grant execute on function public\.create_formal_quiz_challenge\(uuid, text, text, jsonb, timestamptz\)\s+to service_role/i);
+  assert.match(formalAiAuditSql, /revoke all on function public\.replace_formal_quiz_question\(uuid, text, uuid, uuid, text, text, jsonb, timestamptz\)/i);
+  assert.match(formalAiAuditSql, /grant execute on function public\.replace_formal_quiz_question\(uuid, text, uuid, uuid, text, text, jsonb, timestamptz\)\s+to service_role/i);
   assert.match(masteryReconciliationSql, /create or replace function public\.reconcile_word_mastery_status/i);
   assert.match(masteryReconciliationSql, /security definer/i);
   assert.match(masteryReconciliationSql, /set search_path = pg_catalog/i);
@@ -643,7 +684,7 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(masteryReconciliationSql, /is distinct from/i);
   assert.match(enqueueAclSql, /revoke all on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*service_role/i);
   assert.match(enqueueAclSql, /grant execute on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*to service_role/i);
-  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}`;
+  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');

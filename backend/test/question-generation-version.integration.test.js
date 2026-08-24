@@ -8,6 +8,7 @@ const { MIGRATION_PATHS, VERIFICATION_SQL } = require('../scripts/apply-question
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORD_ID = '22222222-2222-4222-8222-222222222222';
+const FORMAL_NOW = '2026-08-24T00:00:00.000Z';
 
 const BASE_SCHEMA_SQL = `
 create role anon;
@@ -133,6 +134,102 @@ async function fenceWord(db) {
         'select * from public.fence_word_question_generation($1::uuid, $2::uuid)',
         [USER_ID, WORD_ID]
     );
+}
+
+function formalWordId(index) {
+    return `33333333-3333-4333-8333-${String(index).padStart(12, '0')}`;
+}
+
+function formalCacheId(prefix, index) {
+    return `44444444-4444-4444-8444-${prefix}${String(index).padStart(8, '0')}`;
+}
+
+function formalQuestionSnapshot(index, cacheQuestionId = formalCacheId('0000', index)) {
+    return {
+        meaning_id: formalWordId(index),
+        cache_question_id: cacheQuestionId,
+        stem: `Formal sentence ${index} with ___.`,
+        question_fingerprint: `formal-fingerprint-${index}-${cacheQuestionId}`,
+        type: 1,
+        source: 'question_cache',
+        context: `Formal sentence ${index} with ___.`,
+        contextCN: `这是第${index}个完整的中文句子。`,
+        options: ['A. apple', 'B. pear', 'C. plum', 'D. peach'],
+        answer: 'A',
+        optionMeanings: ['苹果', '梨子', '李子', '桃子'],
+        correctMeaning: '苹果',
+    };
+}
+
+async function insertFormalWords(db, count = 10) {
+    for (let index = 1; index <= count; index += 1) {
+        await db.query(`
+            insert into public.words (id, user_id, word, meaning_en, meaning_zh, context_en, level, entered_at)
+            values ($1::uuid, $2::uuid, $3, 'a fruit', '苹果', $4, 'middle', '2026-08-20T00:00:00.000Z')
+        `, [formalWordId(index), USER_ID, `apple${index}`, `Formal sentence ${index} with apple.`]);
+    }
+}
+
+async function insertFormalCacheRow(db, { index, cacheQuestionId, aiAuditStatus = 'approved', cacheState = 'active' } = {}) {
+    await db.query(`
+        insert into public.question_cache (
+            id, user_id, word_id, source_word_record_id, level, question_type, round_type, quality_status,
+            question_text, context_zh, options, answer, option_meanings, correct_meaning,
+            ai_audit_status, variant_slot, cache_state, question_fingerprint
+        ) values (
+            $1::uuid, $2::uuid, $3::uuid, $4, 'middle', '1', 'primary', 'ready',
+            $5, $6, '["A. apple","B. pear","C. plum","D. peach"]'::jsonb, 'A',
+            '["苹果","梨子","李子","桃子"]'::jsonb, '苹果',
+            $7, 1, $8, $9
+        )
+    `, [
+        cacheQuestionId,
+        USER_ID,
+        formalWordId(index),
+        `formal-word-${index}`,
+        `Formal sentence ${index} with ___.`,
+        `这是第${index}个完整的中文句子。`,
+        aiAuditStatus,
+        cacheState,
+        `formal-fingerprint-${index}-${cacheQuestionId}`,
+    ]);
+}
+
+async function insertFormalCacheRows(db, aiAuditStatus = 'approved') {
+    for (let index = 1; index <= 10; index += 1) {
+        await insertFormalCacheRow(db, {
+            index,
+            cacheQuestionId: formalCacheId('0000', index),
+            aiAuditStatus,
+        });
+    }
+}
+
+function formalChallengeQuestions(cacheIdForIndex = index => formalCacheId('0000', index)) {
+    return Array.from({ length: 10 }, (_, offset) => {
+        const index = offset + 1;
+        return formalQuestionSnapshot(index, cacheIdForIndex(index));
+    });
+}
+
+async function createApprovedFormalChallenge(db) {
+    await insertFormalWords(db);
+    await insertFormalCacheRows(db, 'approved');
+    await db.query(
+        'select public.create_formal_quiz_challenge($1::uuid, $2, $3, $4::jsonb, $5::timestamptz)',
+        [USER_ID, 'real-approved-formal', 'middle', JSON.stringify(formalChallengeQuestions()), FORMAL_NOW]
+    );
+    const question = await db.query(`
+        select id, meaning_id, cache_question_id, stem, question_snapshot
+        from public.quiz_challenge_questions
+        order by ordinal
+        limit 1
+    `);
+    await db.query(
+        'select public.invalidate_formal_quiz_question($1::uuid, $2, $3::uuid, $4, $5::timestamptz)',
+        [USER_ID, 'real-approved-formal', question.rows[0].id, 'bad question', FORMAL_NOW]
+    );
+    return question.rows[0];
 }
 
 test('migration verification SQL executes against the real versioned PGlite schema', async () => {
@@ -416,6 +513,106 @@ test('a fenced cache referenced by a formal challenge is retired instead of dele
             [cache.rows[0].id]
         );
         assert.deepEqual(preserved.rows, [{ cache_state: 'retired' }]);
+    } finally {
+        await db.close();
+    }
+});
+
+for (const aiAuditStatus of [null, 'skipped', 'rejected']) {
+    test(`formal challenge creation rejects type-1 cache rows with ai_audit_status=${aiAuditStatus}`, async () => {
+        const db = await createDatabase();
+        try {
+            await insertFormalWords(db);
+            await insertFormalCacheRows(db, aiAuditStatus);
+
+            await assert.rejects(
+                db.query(
+                    'select public.create_formal_quiz_challenge($1::uuid, $2, $3, $4::jsonb, $5::timestamptz)',
+                    [USER_ID, `real-formal-${aiAuditStatus || 'null'}`, 'middle', JSON.stringify(formalChallengeQuestions()), FORMAL_NOW]
+                ),
+                /FORMAL_CHALLENGE_CACHE_AI_AUDIT_REQUIRED/
+            );
+
+            const challengeCount = await db.query('select count(*)::integer as count from public.quiz_challenges');
+            assert.equal(challengeCount.rows[0].count, 0);
+        } finally {
+            await db.close();
+        }
+    });
+}
+
+test('formal challenge creation accepts approved type-1 cache rows', async () => {
+    const db = await createDatabase();
+    try {
+        await insertFormalWords(db);
+        await insertFormalCacheRows(db, 'approved');
+
+        const created = await db.query(
+            'select public.create_formal_quiz_challenge($1::uuid, $2, $3, $4::jsonb, $5::timestamptz) as result',
+            [USER_ID, 'real-formal-approved', 'middle', JSON.stringify(formalChallengeQuestions()), FORMAL_NOW]
+        );
+
+        assert.equal(created.rows[0].result.question_count, 10);
+        const challengeCount = await db.query('select count(*)::integer as count from public.quiz_challenges');
+        assert.equal(challengeCount.rows[0].count, 1);
+    } finally {
+        await db.close();
+    }
+});
+
+for (const aiAuditStatus of [null, 'skipped', 'rejected']) {
+    test(`formal question replacement rejects type-1 cache rows with ai_audit_status=${aiAuditStatus}`, async () => {
+        const db = await createDatabase();
+        try {
+            const oldQuestion = await createApprovedFormalChallenge(db);
+            const replacementCacheId = formalCacheId('9999', 1);
+            await insertFormalCacheRow(db, { index: 1, cacheQuestionId: replacementCacheId, aiAuditStatus });
+
+            await assert.rejects(
+                db.query(
+                    'select public.replace_formal_quiz_question($1::uuid, $2, $3::uuid, $4::uuid, $5, $6, $7::jsonb, $8::timestamptz)',
+                    [
+                        USER_ID,
+                        'real-approved-formal',
+                        oldQuestion.id,
+                        replacementCacheId,
+                        'Formal sentence 1 with ___.',
+                        `formal-fingerprint-1-${replacementCacheId}`,
+                        JSON.stringify(formalQuestionSnapshot(1, replacementCacheId)),
+                        FORMAL_NOW,
+                    ]
+                ),
+                /FORMAL_REPLACEMENT_CACHE_AI_AUDIT_REQUIRED/
+            );
+        } finally {
+            await db.close();
+        }
+    });
+}
+
+test('formal question replacement accepts approved type-1 cache rows', async () => {
+    const db = await createDatabase();
+    try {
+        const oldQuestion = await createApprovedFormalChallenge(db);
+        const replacementCacheId = formalCacheId('9999', 1);
+        await insertFormalCacheRow(db, { index: 1, cacheQuestionId: replacementCacheId, aiAuditStatus: 'approved' });
+
+        const replaced = await db.query(
+            'select public.replace_formal_quiz_question($1::uuid, $2, $3::uuid, $4::uuid, $5, $6, $7::jsonb, $8::timestamptz) as result',
+            [
+                USER_ID,
+                'real-approved-formal',
+                oldQuestion.id,
+                replacementCacheId,
+                'Formal sentence 1 with ___.',
+                `formal-fingerprint-1-${replacementCacheId}`,
+                JSON.stringify(formalQuestionSnapshot(1, replacementCacheId)),
+                FORMAL_NOW,
+            ]
+        );
+
+        assert.equal(replaced.rows[0].result.replaced, true);
+        assert.equal(replaced.rows[0].result.cache_question_id, replacementCacheId);
     } finally {
         await db.close();
     }
