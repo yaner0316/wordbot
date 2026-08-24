@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { generateQuizWithDataSource } = require('../quiz-adapter');
+const { generateQuizWithDataSource, toFeishuCacheRow } = require('../quiz-adapter');
 
 const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 const WORDS = ['repair', 'resilient', 'attic', 'distant', 'draggy', 'straight', 'attitude', 'careful', 'formal', 'ordinary', 'steady', 'patient'];
@@ -50,6 +50,15 @@ function cacheRow(index, variantSlot = 1) {
         generated_at: new Date(2026, 1, index).toISOString(),
     };
 }
+
+test('Supabase cache projection preserves approved AI audit status', () => {
+    const projected = toFeishuCacheRow({
+        ...cacheRow(1),
+        ai_audit_status: 'approved',
+    }, { username: 'qiuqiu' });
+
+    assert.equal(projected.fields.ai_audit_status, 'approved');
+});
 
 test('meaning fallback uses a concise Chinese sense when the stored meaning is too long', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1, {
