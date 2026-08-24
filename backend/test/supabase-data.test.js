@@ -962,6 +962,10 @@ test('question cache status summarizes Supabase rows by level', async () => {
     assert.equal(status.total, 1);
     assert.equal(status.ready, 1);
     assert.equal(status.byLevel[MIDDLE].ready, 1);
+    const cacheRead = client.readOperations.find(operation =>
+        operation.table === 'question_cache' && operation.operation === 'select'
+    );
+    assert.match(cacheRead.selectColumns, /(?:^|,\s*)ai_audit_status(?:\s*,|$)/);
 });
 
 test('learning settings checks only the selected level cache without scanning quiz history', async () => {

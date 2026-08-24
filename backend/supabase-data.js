@@ -854,7 +854,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         fetchAllRows(
             () => client
                 .from('question_cache')
-                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
+                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, ai_audit_status, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
                 .eq('user_id', user.id)
                 .order('generated_at', { ascending: true })
                 .order('id', { ascending: true }),
