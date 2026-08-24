@@ -33,7 +33,8 @@ function isAvailableCache(row) {
 function isReadyPrimaryCache(row) {
     return isAvailableCache(row)
         && text(row?.round_type) === 'primary'
-        && text(row?.question_type) === '1';
+        && text(row?.question_type) === '1'
+        && text(row?.ai_audit_status).toLowerCase() === 'approved';
 }
 
 function cachePairState(rows) {

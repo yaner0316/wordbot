@@ -151,6 +151,7 @@ function createApp({
     getRuntimeHealth,
     onUserLogin,
     onParentLogin,
+    requireUserSession,
     corsEnvironment = process.env,
 }) {
     if (typeof submitAnswers !== 'function') {
@@ -196,6 +197,10 @@ function createApp({
                 res.status(400).json({ error: error.message });
             }
         });
+    }
+
+    if (typeof requireUserSession === 'function') {
+        app.use(['/api/quiz/session', '/api/submit', '/api/reviews'], requireUserSession);
     }
 
     if (typeof setParentCredentials === 'function') {

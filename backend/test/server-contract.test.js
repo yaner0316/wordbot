@@ -25,9 +25,29 @@ function clearBackendModules() {
     }
 }
 
+async function withEnv(patch, run) {
+    const keys = Object.keys(patch);
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    try {
+        for (const [key, value] of Object.entries(patch)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+        return await run();
+    } finally {
+        for (const key of keys) {
+            if (previous[key] === undefined) delete process.env[key];
+            else process.env[key] = previous[key];
+        }
+        clearBackendModules();
+    }
+}
+
 function loadServerWithFeishu(fakeFeishu) {
     clearBackendModules();
     Object.assign(process.env, {
+        NODE_ENV: 'test',
+        WORDBOT_AUTH_TEST_BYPASS: '1',
         DATA_SOURCE: 'feishu',
         FEISHU_APP_ID: 'test-app-id',
         FEISHU_APP_SECRET: 'test-app-secret',
@@ -215,6 +235,234 @@ test('submit endpoint starts wrong-question cache prebuild in the background', a
             },
         }]);
     });
+});
+
+test('production server rejects missing session on createApp private routes before data adapters run', async () => {
+    const calls = [];
+    await withEnv({
+        NODE_ENV: 'test',
+        WORDBOT_SESSION_SECRET: 'contract-session-secret',
+    }, async () => {
+        const app = loadServerWithFeishu(createFakeFeishu({
+            submitAnswers: async () => {
+                calls.push('submitAnswers');
+                return {};
+            },
+            getActiveFormalQuizChallenge: async () => {
+                calls.push('getActiveFormalQuizChallenge');
+                return null;
+            },
+            updateQuizSessionProgress: async () => {
+                calls.push('updateQuizSessionProgress');
+                return {};
+            },
+            createReviewRound: async () => {
+                calls.push('createReviewRound');
+                return {};
+            },
+            getActiveReviewRound: async () => {
+                calls.push('getActiveReviewRound');
+                return {};
+            },
+            submitReviewRound: async () => {
+                calls.push('submitReviewRound');
+                return {};
+            },
+            deferReviewRound: async () => {
+                calls.push('deferReviewRound');
+                return {};
+            },
+            getReviewSummary: async () => {
+                calls.push('getReviewSummary');
+                return {};
+            },
+        }));
+        process.env.NODE_ENV = 'production';
+
+        await withServer(app, async baseUrl => {
+            const responses = await Promise.all([
+                fetch(`${baseUrl}/api/quiz/session?user=student`),
+                fetch(`${baseUrl}/api/quiz/session/progress`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'student', testId: 'real-1', answers: [] }),
+                }),
+                fetch(`${baseUrl}/api/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'student', testId: 'real-1', answers: [] }),
+                }),
+                fetch(`${baseUrl}/api/reviews`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'student', sourceTestId: 'real-1' }),
+                }),
+                fetch(`${baseUrl}/api/reviews/active?user=student&sourceTestId=real-1`),
+                fetch(`${baseUrl}/api/reviews/real-review-r1/submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'student', answers: [] }),
+                }),
+                fetch(`${baseUrl}/api/reviews/real-review-r1/defer`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user: 'student' }),
+                }),
+                fetch(`${baseUrl}/api/reviews/summary?user=student&sourceTestId=real-1`),
+            ]);
+
+            assert.deepEqual(responses.map(response => response.status), Array(8).fill(401));
+        });
+    });
+
+    assert.deepEqual(calls, []);
+});
+
+test('production server rejects anonymous game state access before business adapters run', async () => {
+    await withEnv({
+        NODE_ENV: 'test',
+        WORDBOT_SESSION_SECRET: 'contract-session-secret',
+    }, async () => {
+        const app = loadServerWithFeishu(createFakeFeishu());
+        process.env.NODE_ENV = 'production';
+        await withServer(app, async baseUrl => {
+            const read = await fetch(`${baseUrl}/api/game/state/student`);
+            const write = await fetch(`${baseUrl}/api/game/state/student`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ state: {} }),
+            });
+            assert.equal(read.status, 401);
+            assert.equal(write.status, 401);
+        });
+    });
+});
+
+test('authenticated user can read and save their own game state', async () => {
+    const calls = [];
+    await withEnv({
+        NODE_ENV: 'test',
+        WORDBOT_SESSION_SECRET: 'contract-session-secret',
+    }, async () => {
+        const app = loadServerWithFeishu(createFakeFeishu({
+            loginUser: async input => ({ success: true, user: input.username }),
+            getGameState: async user => {
+                calls.push(['get', user]);
+                return { minutes: 3 };
+            },
+            saveGameState: async (user, state) => {
+                calls.push(['save', user, state]);
+                return state;
+            },
+        }));
+        process.env.NODE_ENV = 'production';
+
+        await withServer(app, async baseUrl => {
+            const login = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: 'student', password: 'secret' }),
+            });
+            const cookie = login.headers.get('set-cookie');
+            const read = await fetch(`${baseUrl}/api/game/state/student`, { headers: { Cookie: cookie } });
+            const write = await fetch(`${baseUrl}/api/game/state/student`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', Cookie: cookie },
+                body: JSON.stringify({ minutes: 4 }),
+            });
+            assert.equal(read.status, 200);
+            assert.equal(write.status, 200);
+        });
+    });
+    assert.deepEqual(calls, [['get', 'student'], ['save', 'student', { minutes: 4 }]]);
+});
+
+test('production server keeps health and auth login public without a session', async () => {
+    const calls = [];
+    await withEnv({
+        NODE_ENV: 'test',
+        WORDBOT_SESSION_SECRET: 'contract-session-secret',
+    }, async () => {
+        const app = loadServerWithFeishu(createFakeFeishu({
+            loginUser: async input => {
+                calls.push(['loginUser', input]);
+                return { success: true, user: input.username };
+            },
+            verifyParentLogin: async input => {
+                calls.push(['verifyParentLogin', input]);
+                return { success: true, user: input.user };
+            },
+        }));
+        process.env.NODE_ENV = 'production';
+
+        await withServer(app, async baseUrl => {
+            const health = await fetch(`${baseUrl}/api/health`);
+            assert.equal(health.status, 200);
+
+            const login = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: 'student', password: 'secret' }),
+            });
+            assert.equal(login.status, 200);
+
+            const parentLogin = await fetch(`${baseUrl}/api/auth/parent/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student', parentUsername: 'parent', password: 'secret' }),
+            });
+            assert.equal(parentLogin.status, 200);
+        });
+    });
+
+    assert.deepEqual(calls, [
+        ['loginUser', { username: 'student', password: 'secret' }],
+        ['verifyParentLogin', { user: 'student', parentUsername: 'parent', password: 'secret' }],
+    ]);
+});
+
+test('production cleanup accepts the authenticated user and rejects cross-user cleanup', async () => {
+    const calls = [];
+    await withEnv({
+        NODE_ENV: 'test',
+        WORDBOT_SESSION_SECRET: 'contract-session-secret',
+        WORDBOT_ADMIN_TOKEN: 'contract-admin-token',
+    }, async () => {
+        const app = loadServerWithFeishu(createFakeFeishu({
+            loginUser: async input => ({ success: true, user: input.username }),
+            deleteUserTestData: async (user, days) => {
+                calls.push([user, days]);
+                return { success: true, deleted: 0 };
+            },
+        }));
+        process.env.NODE_ENV = 'production';
+
+        await withServer(app, async baseUrl => {
+            const login = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: 'student', password: 'secret' }),
+            });
+            const cookie = login.headers.get('set-cookie');
+            assert.ok(cookie);
+
+            const ownCleanup = await fetch(`${baseUrl}/api/admin/cleanup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Cookie: cookie },
+                body: JSON.stringify({ user: 'student', days: 3 }),
+            });
+            assert.equal(ownCleanup.status, 200);
+
+            const crossUserCleanup = await fetch(`${baseUrl}/api/admin/cleanup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Cookie: cookie },
+                body: JSON.stringify({ user: 'other-student', days: 3 }),
+            });
+            assert.equal(crossUserCleanup.status, 403);
+        });
+    });
+
+    assert.deepEqual(calls, [['student', 3]]);
 });
 test('parent addWords endpoint preserves payload contract', async () => {
     const calls = [];

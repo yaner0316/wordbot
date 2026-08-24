@@ -82,6 +82,98 @@ test('session progress endpoint is registered when the progress adapter is suppl
     }]);
 });
 
+test('session guard blocks createApp private routes before business adapters run', async () => {
+    const calls = [];
+    const requireUserSession = (req, res) => {
+        calls.push(['guard', req.method, String(req.originalUrl || '').split('?')[0]]);
+        res.status(401).json({ error: 'Unauthorized' });
+    };
+    const app = createApp({
+        requireUserSession,
+        submitAnswers: async () => {
+            calls.push(['submitAnswers']);
+            return {};
+        },
+        getActiveFormalQuizChallenge: async () => {
+            calls.push(['getActiveFormalQuizChallenge']);
+            return null;
+        },
+        updateQuizSessionProgress: async () => {
+            calls.push(['updateQuizSessionProgress']);
+            return {};
+        },
+        createReviewRound: async () => {
+            calls.push(['createReviewRound']);
+            return {};
+        },
+        getActiveReviewRound: async () => {
+            calls.push(['getActiveReviewRound']);
+            return {};
+        },
+        submitReviewRound: async () => {
+            calls.push(['submitReviewRound']);
+            return {};
+        },
+        deferReviewRound: async () => {
+            calls.push(['deferReviewRound']);
+            return {};
+        },
+        getReviewSummary: async () => {
+            calls.push(['getReviewSummary']);
+            return {};
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        const requests = [
+            fetch(`${baseUrl}/api/quiz/session?user=student`),
+            fetch(`${baseUrl}/api/quiz/session/progress`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student', testId: 'real-1', answers: [] }),
+            }),
+            fetch(`${baseUrl}/api/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student', testId: 'real-1', answers: [] }),
+            }),
+            fetch(`${baseUrl}/api/reviews`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student', sourceTestId: 'real-1' }),
+            }),
+            fetch(`${baseUrl}/api/reviews/active?user=student&sourceTestId=real-1`),
+            fetch(`${baseUrl}/api/reviews/real-review-r1/submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student', answers: [] }),
+            }),
+            fetch(`${baseUrl}/api/reviews/real-review-r1/defer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: 'student' }),
+            }),
+            fetch(`${baseUrl}/api/reviews/summary?user=student&sourceTestId=real-1`),
+        ];
+        const responses = await Promise.all(requests);
+        assert.deepEqual(responses.map(response => response.status), Array(8).fill(401));
+    });
+
+    const sortCalls = items => items
+        .slice()
+        .sort((left, right) => `${left[1]} ${left[2]}`.localeCompare(`${right[1]} ${right[2]}`));
+    assert.deepEqual(sortCalls(calls), sortCalls([
+        ['guard', 'GET', '/api/quiz/session'],
+        ['guard', 'POST', '/api/quiz/session/progress'],
+        ['guard', 'POST', '/api/submit'],
+        ['guard', 'POST', '/api/reviews'],
+        ['guard', 'GET', '/api/reviews/active'],
+        ['guard', 'POST', '/api/reviews/real-review-r1/submit'],
+        ['guard', 'POST', '/api/reviews/real-review-r1/defer'],
+        ['guard', 'GET', '/api/reviews/summary'],
+    ]));
+});
+
 test('parent auth endpoint verifies the parent account in child context', async () => {
     const calls = [];
     const app = createApp({

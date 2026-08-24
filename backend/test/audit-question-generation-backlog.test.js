@@ -106,10 +106,28 @@ function cache(id, wordId, cacheState, overrides = {}) {
         quality_status: 'ready',
         cache_state: cacheState,
         question_type: '1',
+        ai_audit_status: 'approved',
         variant_slot: cacheState === 'active' ? 1 : 2,
         ...overrides,
     };
 }
+
+test('coverage excludes cache pairs that are not AI approved', () => {
+    const report = auditQuestionGenerationBacklog({
+        users: [{ id: 'user-1', username: 'yusi' }],
+        words: [word('approved'), word('skipped')],
+        cacheRows: [
+            cache('approved-a', 'approved', 'active'),
+            cache('approved-r', 'approved', 'reserved_next_day'),
+            cache('skipped-a', 'skipped', 'active', { ai_audit_status: 'skipped' }),
+            cache('skipped-r', 'skipped', 'reserved_next_day', { ai_audit_status: 'skipped' }),
+        ],
+        jobs: [],
+    });
+
+    assert.equal(report.byUser.yusi.completeWords, 1);
+    assert.equal(report.byUser.yusi.coverageGaps, 1);
+});
 
 function job(id, wordId, status, overrides = {}) {
     return {
@@ -306,6 +324,7 @@ test('collector uses stable id keyset pages and never exposes write methods or r
     assert.match(selects.words, /question_generation_version/);
     assert.match(selects.question_generation_jobs, /word_version/);
     assert.match(selects.question_generation_jobs, /lease_expires_at/);
+    assert.match(selects.question_cache, /ai_audit_status/);
     assert.doesNotMatch(selects.question_cache, /question_text|options|answer/);
 });
 

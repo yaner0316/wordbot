@@ -985,6 +985,7 @@ test('learning settings checks only the selected level cache without scanning qu
             level: index === 11 ? String.fromCharCode(0x9ad8, 0x4e2d) : MIDDLE,
             quality_status: 'ready',
             cache_state: 'active',
+            ai_audit_status: 'approved',
         })),
     });
     const adapter = createSupabaseDataAdapter(client);
@@ -993,6 +994,11 @@ test('learning settings checks only the selected level cache without scanning qu
 
     assert.equal(settings.questionCacheStatus, 'ready');
     assert.deepEqual(client.queries, ['users', 'question_cache']);
+    const cacheRead = client.readOperations.find(operation => operation.table === 'question_cache');
+    assert.deepEqual(
+        cacheRead.filters.find(filter => filter.column === 'ai_audit_status'),
+        { type: 'eq', column: 'ai_audit_status', value: 'approved' },
+    );
 });
 
 test('question cache status reports formal eligible meanings by level', async () => {
@@ -1015,6 +1021,7 @@ test('question cache status reports formal eligible meanings by level', async ()
             level,
             round_type: 'primary',
             quality_status: 'ready',
+            ai_audit_status: 'approved',
             cache_state: 'active',
             variant_slot: Number(id.slice(-1)),
             question_fingerprint: `fp-${id}`,

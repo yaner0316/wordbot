@@ -1,11 +1,10 @@
 require('./startup-env');
 
 const express = require('express');
-const crypto = require('crypto');
 const path = require('path');
-const { createSessionStore, normalizeUser } = require('./session-auth');
+const { normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
 const {
@@ -119,29 +118,11 @@ function requestedUser(req) {
     return normalizeUser(req.body?.userId || req.body?.targetUser || req.query?.userId || req.query?.user || '');
 }
 
-const ADMIN_TOKEN_PROTECTED_PATHS = new Set(['/users', '/stats', '/questionCache/rebuildAll', '/questionCache/rebuildAll/status', '/questionCache/diagnostics', '/reviewWords', '/reviewWords/mark', '/reviewWords/clear', '/cleanup', '/backfill', '/backfill/status']);
-function tokensMatch(left, right) {
-    const a = Buffer.from(String(left || ''));
-    const b = Buffer.from(String(right || ''));
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-function requireServerAdminToken(req, res, next) {
-    const configured = String(process.env.WORDBOT_ADMIN_TOKEN || '');
-    if (!configured && process.env.NODE_ENV !== 'production') return next();
-    if (!configured) return res.status(503).json({ error: 'Admin token is not configured' });
-    if (!tokensMatch(configured, req.get('x-wordbot-admin-token'))) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    return next();
-}
-
 function assessmentDiagnosticField(row, key) {
     return row?.[key] !== undefined ? row[key] : row?.fields?.[key];
 }
 
 // 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
-// 保留此处的 tokensMatch 函数用于兼容性
 const questionGenerationServerStates = new WeakMap();
 const QUESTION_GENERATION_HEALTH_PAGE_SIZE = 1000;
 const CLAIMABLE_JOB_STATUSES = new Set(['pending', 'retry_wait']);
@@ -374,6 +355,7 @@ const app = createApp({
     getRuntimeHealth: () => getServerRuntimeHealth(),
     onUserLogin: ({ res, result }) => setSessionCookie(res, result, 'user'),
     onParentLogin: ({ res, result }) => setSessionCookie(res, result, 'parent'),
+    requireUserSession,
 });
 
 // 应用统一的安全中间件
@@ -383,8 +365,13 @@ const SESSION_ONLY_ADMIN_PATHS = new Set([
     '/questionCache/rebuild',  // 重建缓存（前端自动触发）
     '/questionCache/status',   // 缓存状态查询
     '/validateWords',          // 验证单词
+    '/addWord',                // 添加单个单词释义
     '/addWords',               // 添加单词
     '/words',                  // 词库列表
+    '/cleanup',                // 清理当前用户的测试模式记录
+    '/reviewWords',            // 当前用户的待复习词
+    '/reviewWords/mark',       // 标记当前用户复习词
+    '/reviewWords/clear',      // 清除当前用户复习词标记
 ]);
 app.use('/api/admin', (req, res, next) => {
     if (SESSION_ONLY_ADMIN_PATHS.has(req.path)) {
@@ -399,6 +386,7 @@ app.use('/api/submit', requireUserSession);
 app.use('/api/stats', requireUserSession);
 app.use('/api/history', requireUserSession);
 app.use('/api/reviews', requireUserSession);
+app.use('/api/game/state', requireUserSession);
 
 // 提供前端静态文件（Expo Web 构建产物）
 const publicDir = path.join(__dirname, '..');
@@ -642,7 +630,7 @@ app.get('/api/admin/questionCache/diagnostics', async (req, res) => {
     }
 });
 
-app.get('/api/admin/history/diagnostics', requireServerAdminToken, async (req, res) => {
+app.get('/api/admin/history/diagnostics', async (req, res) => {
     try {
         const userId = String(req.query.userId || '').trim();
         if (!userId) return res.status(400).json({ error: 'Missing userId' });

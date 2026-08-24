@@ -27,7 +27,7 @@ async function collectQuestionGenerationBacklogAudit(client) {
     const [users, words, cacheRows, jobs] = await Promise.all([
         readAll(client, 'users', 'id,username'),
         readAll(client, 'words', 'id,user_id,word,mastery_status,question_generation_version'),
-        readAll(client, 'question_cache', 'id,user_id,word_id,round_type,quality_status,cache_state,question_type,variant_slot'),
+        readAll(client, 'question_cache', 'id,user_id,word_id,round_type,quality_status,cache_state,question_type,variant_slot,ai_audit_status'),
         readAll(client, 'question_generation_jobs', 'id,user_id,word_id,word_version,status,reason,attempt_count,next_attempt_at,lease_expires_at,last_error_code'),
     ]);
     return auditQuestionGenerationBacklog({ users, words, cacheRows, jobs });

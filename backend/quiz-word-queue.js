@@ -287,9 +287,11 @@ function countEligibleReadyMeaningsByLevel({
             minAgeMs,
         });
         const queuedRecordIds = new Set(queue);
-        const validPairRows = filterRowsInValidReadyPrimaryPairs(
-            normalizeSelectableCacheRows(cacheRows, { userId, level, roundType, now, requireAvailable: false })
-        );
+        const approvedRows = normalizeSelectableCacheRows(
+            cacheRows,
+            { userId, level, roundType, now, requireAvailable: false }
+        ).filter(row => String(row.aiAuditStatus || '').trim().toLowerCase() === 'approved');
+        const validPairRows = filterRowsInValidReadyPrimaryPairs(approvedRows);
         const recentQuestionTextsByWord = buildActiveDisplayStemsByMeaning(displayEvents, { userId, now });
         counts[level] = new Set(validPairRows
             .filter(row => isCacheRowAvailable(row, now))

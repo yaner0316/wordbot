@@ -40,6 +40,7 @@ function cache(index, overrides = {}) {
             level: LEVEL,
             round_type: 'primary',
             quality_status: 'ready',
+            ai_audit_status: 'approved',
             question_type: 1,
             question_text: `A clear sentence for word-${index}.`,
             context_cn: `\u8fd9\u662fword-${index}\u5bf9\u5e94\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
@@ -153,6 +154,27 @@ test('cached question selection carries approved AI audit status into the quiz q
     });
 
     assert.equal(selected[0]?.aiAuditStatus, 'approved');
+});
+
+test('eligible ready meaning counts exclude cache pairs without approved AI audit', () => {
+    const now = Date.now();
+    const wordRecords = [word(1), word(2)];
+    const cacheRows = [
+        cacheVariant(1, 1, { ai_audit_status: 'approved' }),
+        cacheVariant(1, 2, { ai_audit_status: 'approved' }),
+        cacheVariant(2, 1, { ai_audit_status: 'skipped' }),
+        cacheVariant(2, 2, { ai_audit_status: 'skipped' }),
+    ];
+    const counts = countEligibleReadyMeaningsByLevel({
+        cacheRows,
+        wordRecords,
+        assessmentRecords: [],
+        displayEvents: [],
+        userId: 'student',
+        levels: ['middle'],
+        now,
+    });
+    assert.equal(counts.middle, 1);
 });
 
 test('cached question selection tracks recent variants by word record ID', () => {

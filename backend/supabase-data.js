@@ -922,6 +922,7 @@ async function getReadyQuestionCacheCountForLevelWithClient(client, userId, leve
         .eq('user_id', userId)
         .eq('level', normalizeLearningLevel(level))
         .eq('quality_status', 'ready')
+        .eq('ai_audit_status', 'approved')
         .in('cache_state', ['active', 'reserved_next_day'])
         .limit(10);
     ensureNoError(error, 'getUserLearningSettings.questionCache');

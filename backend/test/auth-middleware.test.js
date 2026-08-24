@@ -5,8 +5,6 @@ const {
     requireUserSession,
     setSessionCookie,
     sessionStore,
-    ADMIN_TOKEN_PROTECTED_PATHS,
-    USER_SESSION_PROTECTED_PATHS,
 } = require('../auth-middleware');
 
 // Mock Express request/response
@@ -41,38 +39,37 @@ function createMockRes() {
     return res;
 }
 
-test('ADMIN_TOKEN_PROTECTED_PATHS contains expected paths', () => {
-    assert.ok(ADMIN_TOKEN_PROTECTED_PATHS.has('/api/admin/backfill'));
-    assert.ok(ADMIN_TOKEN_PROTECTED_PATHS.has('/api/admin/cache/rebuild'));
-    assert.ok(ADMIN_TOKEN_PROTECTED_PATHS.has('/api/admin/cache/status'));
-});
+function setTestEnv(t, patch) {
+    const previous = Object.fromEntries(Object.keys(patch).map(key => [key, process.env[key]]));
+    for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    }
+    t.after(() => {
+        for (const [key, value] of Object.entries(previous)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+    });
+}
 
-test('USER_SESSION_PROTECTED_PATHS contains expected paths', () => {
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/quiz'));
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/submit'));
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/stats'));
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/history'));
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/word'));
-    assert.ok(USER_SESSION_PROTECTED_PATHS.has('/api/reviews'));
-});
+test('requireAdminToken: rejects a missing token whenever the middleware is invoked', t => {
+    setTestEnv(t, { WORDBOT_ADMIN_TOKEN: 'valid-token' });
 
-test('requireAdminToken: allows unprotected paths', () => {
-    const req = createMockReq({ path: '/api/public' });
+    const req = createMockReq({ path: '/users' });
     const res = createMockRes();
     let nextCalled = false;
     
     requireAdminToken(req, res, () => { nextCalled = true; });
     
-    assert.strictEqual(nextCalled, true);
-    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body.code, 'UNAUTHORIZED');
+
 });
 
-test('requireAdminToken: rejects missing token in production', () => {
-    const originalEnv = process.env.NODE_ENV;
-    const originalToken = process.env.WORDBOT_ADMIN_TOKEN;
-    
-    process.env.NODE_ENV = 'production';
-    delete process.env.WORDBOT_ADMIN_TOKEN;
+test('requireAdminToken: rejects missing configured token regardless of NODE_ENV', t => {
+    setTestEnv(t, { NODE_ENV: undefined, WORDBOT_ADMIN_TOKEN: undefined });
     
     const req = createMockReq({ path: '/api/admin/backfill' });
     const res = createMockRes();
@@ -84,13 +81,10 @@ test('requireAdminToken: rejects missing token in production', () => {
     assert.strictEqual(res.statusCode, 503);
     assert.strictEqual(res.body.code, 'ADMIN_TOKEN_NOT_CONFIGURED');
     
-    process.env.NODE_ENV = originalEnv;
-    process.env.WORDBOT_ADMIN_TOKEN = originalToken;
 });
 
-test('requireAdminToken: rejects invalid token', () => {
-    const originalToken = process.env.WORDBOT_ADMIN_TOKEN;
-    process.env.WORDBOT_ADMIN_TOKEN = 'valid-token';
+test('requireAdminToken: rejects invalid token', t => {
+    setTestEnv(t, { WORDBOT_ADMIN_TOKEN: 'valid-token' });
     
     const req = createMockReq({ 
         path: '/api/admin/backfill',
@@ -105,12 +99,10 @@ test('requireAdminToken: rejects invalid token', () => {
     assert.strictEqual(res.statusCode, 401);
     assert.strictEqual(res.body.code, 'UNAUTHORIZED');
     
-    process.env.WORDBOT_ADMIN_TOKEN = originalToken;
 });
 
-test('requireAdminToken: allows valid token', () => {
-    const originalToken = process.env.WORDBOT_ADMIN_TOKEN;
-    process.env.WORDBOT_ADMIN_TOKEN = 'valid-token';
+test('requireAdminToken: allows valid token', t => {
+    setTestEnv(t, { WORDBOT_ADMIN_TOKEN: 'valid-token' });
     
     const req = createMockReq({ 
         path: '/api/admin/backfill',
@@ -124,12 +116,10 @@ test('requireAdminToken: allows valid token', () => {
     assert.strictEqual(nextCalled, true);
     assert.strictEqual(res.statusCode, 200);
     
-    process.env.WORDBOT_ADMIN_TOKEN = originalToken;
 });
 
-test('requireUserSession: allows non-production', () => {
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'development';
+test('requireUserSession: fails closed when NODE_ENV is missing', t => {
+    setTestEnv(t, { NODE_ENV: undefined });
     
     const req = createMockReq({ path: '/api/quiz' });
     const res = createMockRes();
@@ -137,15 +127,14 @@ test('requireUserSession: allows non-production', () => {
     
     requireUserSession(req, res, () => { nextCalled = true; });
     
-    assert.strictEqual(nextCalled, true);
-    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body.code, 'UNAUTHORIZED');
     
-    process.env.NODE_ENV = originalEnv;
 });
 
-test('requireUserSession: allows missing session in production', () => {
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
+test('requireUserSession: rejects missing session in production', t => {
+    setTestEnv(t, { NODE_ENV: 'production' });
     
     const req = createMockReq({ path: '/api/quiz' });
     const res = createMockRes();
@@ -153,15 +142,32 @@ test('requireUserSession: allows missing session in production', () => {
     
     requireUserSession(req, res, () => { nextCalled = true; });
     
-    assert.strictEqual(nextCalled, true);
-    assert.strictEqual(res.statusCode, 200);
-    
-    process.env.NODE_ENV = originalEnv;
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body.code, 'UNAUTHORIZED');
+
 });
 
-test('requireUserSession: rejects mismatched user', () => {
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
+test('requireUserSession: rejects invalid session in production', t => {
+    setTestEnv(t, { NODE_ENV: 'production' });
+
+    const req = createMockReq({
+        path: '/api/quiz',
+        headers: { cookie: 'wordbot_session=invalid-session' },
+    });
+    const res = createMockRes();
+    let nextCalled = false;
+
+    requireUserSession(req, res, () => { nextCalled = true; });
+
+    assert.strictEqual(nextCalled, false);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body.code, 'UNAUTHORIZED');
+    
+});
+
+test('requireUserSession: rejects mismatched user', t => {
+    setTestEnv(t, { NODE_ENV: 'production' });
     
     // Create a session for user1
     const token = sessionStore.issue('user1', 'user');
@@ -180,12 +186,38 @@ test('requireUserSession: rejects mismatched user', () => {
     assert.strictEqual(res.statusCode, 403);
     assert.strictEqual(res.body.code, 'FORBIDDEN');
     
-    process.env.NODE_ENV = originalEnv;
 });
 
-test('requireUserSession: allows matching user', () => {
-    const originalEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
+test('requireUserSession: rejects cross-user targets from body, query, and params', async (t) => {
+    setTestEnv(t, { NODE_ENV: 'production' });
+
+    const token = sessionStore.issue('user1', 'user');
+    const targetLocations = ['body', 'query', 'params'];
+    const targetKeys = ['user', 'userId', 'targetUser', 'owner'];
+
+    for (const location of targetLocations) {
+        for (const key of targetKeys) {
+            await t.test(`${location}.${key}`, () => {
+                const req = createMockReq({
+                    path: '/api/quiz',
+                    headers: { cookie: `wordbot_session=${token}` },
+                    [location]: { [key]: 'user2' },
+                });
+                const res = createMockRes();
+                let nextCalled = false;
+
+                requireUserSession(req, res, () => { nextCalled = true; });
+
+                assert.strictEqual(nextCalled, false);
+                assert.strictEqual(res.statusCode, 403);
+                assert.strictEqual(res.body.code, 'FORBIDDEN');
+            });
+        }
+    }
+});
+
+test('requireUserSession: allows matching user', t => {
+    setTestEnv(t, { NODE_ENV: 'production' });
     
     // Create a session for user1
     const token = sessionStore.issue('user1', 'user');
@@ -205,10 +237,10 @@ test('requireUserSession: allows matching user', () => {
     assert.ok(req.wordbotSession);
     assert.strictEqual(req.wordbotSession.user, 'user1');
     
-    process.env.NODE_ENV = originalEnv;
 });
 
-test('setSessionCookie: sets cookie with correct attributes', () => {
+test('setSessionCookie: sets cross-site production cookie attributes', t => {
+    setTestEnv(t, { NODE_ENV: 'production' });
     const res = createMockRes();
     const result = { user: 'testuser' };
     
@@ -219,5 +251,7 @@ test('setSessionCookie: sets cookie with correct attributes', () => {
     assert.ok(cookie.includes('wordbot_session='));
     assert.ok(cookie.includes('Path=/'));
     assert.ok(cookie.includes('HttpOnly'));
-    assert.ok(cookie.includes('SameSite=Lax'));
+    assert.ok(cookie.includes('SameSite=None'));
+    assert.ok(cookie.includes('Secure'));
+    assert.ok(cookie.includes('Partitioned'));
 });

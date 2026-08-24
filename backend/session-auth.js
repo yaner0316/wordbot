@@ -65,8 +65,9 @@ function createSessionStore({ ttlMs = SESSION_TTL_MS, secret } = {}) {
         }
     }
     function cookie(token) {
-        const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-        return SESSION_COOKIE + '=' + encodeURIComponent(token) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + Math.floor(ttlMs / 1000) + secure;
+        const production = process.env.NODE_ENV === 'production';
+        const crossSite = production ? '; SameSite=None; Secure; Partitioned' : '; SameSite=Lax';
+        return SESSION_COOKIE + '=' + encodeURIComponent(token) + '; Path=/; HttpOnly; Max-Age=' + Math.floor(ttlMs / 1000) + crossSite;
     }
     return { issue, read, cookie };
 }
