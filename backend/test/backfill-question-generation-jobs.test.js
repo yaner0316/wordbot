@@ -628,6 +628,7 @@ test('loads question_cache using only physical database columns', async () => {
     await createSupabaseDependencies(client).loadQuestionCache();
 
     assert.match(selectedColumns, /context_zh/);
+    assert.match(selectedColumns, /ai_audit_status/);
     assert.doesNotMatch(selectedColumns, /(?:^|,)word(?:,|$)/);
     assert.doesNotMatch(selectedColumns, /context_cn/);
 });
