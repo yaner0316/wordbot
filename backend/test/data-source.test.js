@@ -745,24 +745,23 @@ test('DATA_SOURCE=supabase routes addWords to supabase adapter instead of Feishu
     assert.deepEqual(result.args, ['qiuqiu', [{ word: 'apple', meaning: 'fruit' }], { skipDuplicateWords: true }]);
 });
 
-test('DATA_SOURCE=feishu routes high-level quiz and submit functions to feishu.js', async () => {
+test('DATA_SOURCE=feishu no longer changes the production/default data-source adapter', () => {
     const dataSource = loadDataSource({ envValue: 'feishu' });
 
-    assert.equal(dataSource.name, 'feishu');
-    assert.deepEqual(await dataSource.generateQuiz('qiuqiu', 'middle', 'real'), {
-        source: 'feishu-generate',
-        args: ['qiuqiu', 'middle', 'real'],
-    });
-    assert.deepEqual(await dataSource.submitAnswers('qiuqiu', 'test-1', [{ option: 0 }]), {
-        source: 'feishu-submit',
-        args: ['qiuqiu', 'test-1', [{ option: 0 }]],
-    });
+    assert.equal(dataSource.name, 'supabase');
+    assert.equal(dataSource.DATA_SOURCE, 'supabase');
 });
 
-test('production refuses to start with DATA_SOURCE=feishu', () => {
+test('production source policy rejects DATA_SOURCE=feishu before data-source loading', () => {
+    const { assertProductionRuntimeEnvironment } = require('../startup-env');
     assert.throws(
-        () => loadDataSource({ envValue: 'feishu', nodeEnv: 'production' }),
-        /FEISHU_DATA_SOURCE_DISABLED_IN_PRODUCTION/
+        () => assertProductionRuntimeEnvironment({
+            NODE_ENV: 'production',
+            DATA_SOURCE: 'feishu',
+            SUPABASE_URL: 'https://wordbot.invalid',
+            SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+        }),
+        /DATA_SOURCE=feishu is not supported in production/
     );
 });
 

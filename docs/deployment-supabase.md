@@ -1,13 +1,12 @@
 # Supabase Render Deployment
 
-This prepares WordBot to run with Supabase as the primary backend data source. Do not remove the Feishu environment variables yet if you want rollback and legacy admin/review endpoints to keep working.
+This prepares WordBot to run with Supabase as the only production backend data source. Feishu files and migration utilities remain offline-only and are not part of the production runtime.
 
 ## Render Environment Variables
 
 Add these variables in the Render service environment:
 
 ```bash
-DATA_SOURCE=supabase
 SUPABASE_URL=https://...
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 DATABASE_URL=postgresql://...
@@ -24,13 +23,7 @@ Keep `SUPABASE_SERVICE_ROLE_KEY` server-side only. Do not expose it in frontend 
 
 ## Rollback Plan
 
-Set this Render environment variable and redeploy:
-
-```bash
-DATA_SOURCE=feishu
-```
-
-Leave the existing Feishu variables configured in Render so the rollback path can read Bitable data immediately.
+Rollback means restoring the previous Supabase-backed application build. Feishu is not a production rollback target. Keep migration evidence and offline tools separately if historical recovery is required.
 
 ## Post-Deployment Smoke Test
 

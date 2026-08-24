@@ -1,4 +1,5 @@
-require('./startup-env');
+const { assertProductionRuntimeEnvironment } = require('./startup-env');
+assertProductionRuntimeEnvironment();
 
 const express = require('express');
 const path = require('path');
@@ -239,9 +240,7 @@ async function getServerRuntimeHealth(state) {
         ? runtime.worker.getObservability()
         : {};
     const workerHealth = getQuestionGenerationWorkerHealth({
-        configured: state
-            ? state.workerConfigured
-            : String(process.env.DATA_SOURCE || 'supabase').toLowerCase() !== 'feishu',
+        configured: state ? state.workerConfigured : false,
         running: Boolean(runtime?.worker?.isRunning()),
         lastError: state?.workerLastError || '',
         startedAt: observed.startedAt || state?.workerStartedAt,
@@ -869,8 +868,7 @@ function createServerApp(state) {
 }
 
 function startServer(port = PORT, options = {}) {
-    const enableQuestionGenerationWorker = options.enableQuestionGenerationWorker
-        ?? String(process.env.DATA_SOURCE || 'supabase').trim().toLowerCase() !== 'feishu';
+    const enableQuestionGenerationWorker = options.enableQuestionGenerationWorker ?? true;
     const runtimeFactory = options.runtimeFactory || createDefaultQuestionGenerationRuntime;
     const state = {
         workerConfigured: enableQuestionGenerationWorker,

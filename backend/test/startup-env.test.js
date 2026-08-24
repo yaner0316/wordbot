@@ -7,6 +7,59 @@ const { spawnSync } = require('node:child_process');
 
 const BACKEND_DIR = path.join(__dirname, '..');
 
+test('production startup rejects missing Supabase credentials before listen', () => {
+  const { assertProductionRuntimeEnvironment } = require('../startup-env');
+
+  assert.throws(
+    () => assertProductionRuntimeEnvironment({
+      NODE_ENV: 'production',
+      DATA_SOURCE: 'supabase',
+    }),
+    /SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production/
+  );
+});
+
+test('production startup rejects retired Feishu and compare source flags', () => {
+  const { assertProductionRuntimeEnvironment } = require('../startup-env');
+  const base = {
+    NODE_ENV: 'production',
+    SUPABASE_URL: 'https://wordbot.invalid',
+    SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+  };
+
+  for (const [name, value] of [
+    ['DATA_SOURCE', 'feishu'],
+    ['WORDBOT_DATA_SOURCE', 'feishu'],
+    ['WORDBOT_CACHE_SOURCE', 'feishu'],
+    ['WORDBOT_CACHE_SOURCE', 'compare'],
+  ]) {
+    assert.throws(
+      () => assertProductionRuntimeEnvironment({ ...base, [name]: value }),
+      new RegExp(`${name}.*${value}.*not supported in production`, 'i')
+    );
+  }
+});
+
+test('production startup rejects every unknown data-source selector', () => {
+  const { assertProductionRuntimeEnvironment } = require('../startup-env');
+  const base = {
+    NODE_ENV: 'production',
+    SUPABASE_URL: 'https://wordbot.invalid',
+    SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+  };
+
+  for (const [name, value] of [
+    ['DATA_SOURCE', 'typo'],
+    ['WORDBOT_DATA_SOURCE', 'legacy'],
+    ['WORDBOT_CACHE_SOURCE', 'unknown'],
+  ]) {
+    assert.throws(
+      () => assertProductionRuntimeEnvironment({ ...base, [name]: value }),
+      new RegExp(`${name}.*${value}.*not supported in production`, 'i')
+    );
+  }
+});
+
 test('Supabase client loads without credentials and validates on first from or rpc call', () => {
   const startupPath = require.resolve('../startup-env');
   const clientPath = require.resolve('../supabase-client');

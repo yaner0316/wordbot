@@ -10,21 +10,14 @@ node --version
 
 ## 1. Environment
 
-Create `backend/.env` from `backend/.env.example` and fill the required Feishu values:
+Create `backend/.env` from `backend/.env.example` and fill the required Supabase values:
 
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `FEISHU_WORD_APP_TOKEN`
-- `FEISHU_WORD_TABLE_ID`
-- `FEISHU_TEST_APP_TOKEN`
-- `FEISHU_TEST_TABLE_ID`
-- `FEISHU_STATS_APP_TOKEN`
-- `FEISHU_STATS_TABLE_ID`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `DATABASE_URL`
 
 Optional:
 
-- `FEISHU_DIST_APP_TOKEN`
-- `FEISHU_DIST_TABLE_ID`
 - `MINIMAX_API_KEY`
 - `WORDBOT_GAME_REWARD_EXCELLENT_MINUTES`
 - `WORDBOT_GAME_REWARD_PERFECT_MINUTES`
@@ -38,25 +31,9 @@ npm.cmd run check:env
 
 The command exits with code `1` and prints `missing` when required values are absent.
 
-## 2. Feishu Schema
+## 2. Supabase migrations
 
-Run the review-field setup once before release:
-
-```powershell
-cd D:\Projects\04-Wordbot-开发任务\app\backend
-npm.cmd run setup:review-fields
-```
-
-Expected result on a configured table:
-
-```text
-已存在: assessment_kind
-已存在: source_test_id
-已存在: parent_review_id
-已存在: review_round
-已存在: review_status
-已存在: source_question_id
-```
+The root `prestart` command applies and verifies the fixed Supabase migration chain before the server listens. Feishu field setup scripts are historical offline tools and are not part of a production release.
 
 ## 3. Automated Verification
 
@@ -68,7 +45,6 @@ npm.cmd test
 node --check scripts/backfill-question-generation-jobs.js
 node --check server.js
 node --check http-app.js
-node --check feishu.js
 node --check runtime-health.js
 node --check game-reward.js
 ```
@@ -197,7 +173,7 @@ If release has to be rolled back:
 - Confirm that only the intended worker acquires new leases after rollback.
 - Confirm stale jobs are reclaimed only after lease expiry and stale owners cannot publish or complete cache changes.
 - Confirm ready cache counts did not decrease during rollback.
-- Do not delete Feishu review fields; they are additive and harmless to older code.
+- Do not drop historical source and reconciliation columns during rollback; they remain migration evidence.
 - Test-mode rows can be removed with the admin cleanup action.
 
 Release remains blocked if `/api/health` reports a worker error, lease ownership is ambiguous, apply reported failures, or cache readiness decreased unexpectedly.
