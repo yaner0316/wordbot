@@ -78,3 +78,21 @@ test('word translation stops after two malformed responses with the typed error'
 
     assert.equal(calls, 2);
 });
+
+test('sentence translation retries one invalid provider envelope before succeeding', async () => {
+    let calls = 0;
+    const translated = await translateSupabaseContext('I ate an apple after lunch.', {
+        request: async () => {
+            calls += 1;
+            if (calls === 1) {
+                const error = new Error('missing response content');
+                error.code = 'TRANSLATION_RESPONSE_INVALID';
+                throw error;
+            }
+            return '我午饭后吃了一个苹果。';
+        },
+    });
+
+    assert.equal(translated, '我午饭后吃了一个苹果。');
+    assert.equal(calls, 2);
+});

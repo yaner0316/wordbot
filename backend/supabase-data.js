@@ -1257,7 +1257,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, requireSemanticAudit = false }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -1313,6 +1313,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     let context = firstContext;
     for (let candidateIndex = 0; candidateIndex < 4 && approvedRows.length < 2; candidateIndex++) {
         if (candidateIndex > 0) {
+            if (typeof renewLease === 'function') await renewLease();
             const previousContext = context;
             context = '';
             for (let attempt = 0; attempt < 3 && !context; attempt++) {
