@@ -377,6 +377,7 @@ function createQuestionGenerationRuntime({
             attempt,
             requiredCount,
             existingFingerprints,
+            renewLease: () => jobStore.renew(job, { workerId }),
         }),
         beforePublish: async ({ job }) => jobStore.renew(job, { workerId }),
         publishReadyVariants,

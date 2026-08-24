@@ -613,7 +613,7 @@ test('cache generation persists a translated target meaning without overwriting 
         generateContext: async (wordText, meaning, level, previous) => previous
             ? `After lunch, the student shared a ${wordText} with a friend.`
             : `The student ate a ${wordText} after lunch.`,
-        semanticAudit: async () => ({ approved: true }),
+        semanticAudit: async question => ({ approved: true, status: 'approved', validLetters: [question.answer] }),
     });
 
     await build(untranslated);
@@ -2794,13 +2794,108 @@ test('new cache generation records approved semantic audit before ready publicat
         words: [word], assessments: [], question_cache: rebuildCoverageInvalidPair(word),
     });
     const result = await createRebuildCoverageAdapter(client, {
-        semanticAudit: async () => ({ approved: true, status: 'approved', validLetters: ['A'] }),
+        semanticAudit: async question => ({ approved: true, status: 'approved', validLetters: [question.answer] }),
     }).rebuildQuestionCacheForUser('qiuqiu');
     const published = client.db.question_cache.filter(row => row.source_version === 'supabase-contextual-variant-v3');
 
     assert.equal(result.count, 2);
     assert.equal(published.length, 2);
     assert.equal(published.every(row => row.ai_audit_status === 'approved' && row.quality_status === 'ready'), true);
+});
+
+test('cache generation retains approved candidates while replacing a rejected sibling', async () => {
+    const generatedContexts = [
+        'He felt lucky when he found his missing book.',
+        'They were lucky to catch the final bus home.',
+        'I was lucky to receive help before the deadline.',
+    ];
+    let auditCalls = 0;
+    let renewals = 0;
+    const rows = await buildCacheQuestionRowsForWord({
+        user: { id: 'user-1' },
+        word: {
+            id: 'word-context-retry',
+            user_id: 'user-1',
+            word: 'lucky',
+            meaning_zh: '幸运的',
+            context_en: 'She felt lucky before the game.',
+        },
+        level: MIDDLE,
+        generateContext: async () => generatedContexts.shift() || '',
+        generateDistractors: contextualDistractorsForTest,
+        translateWords: async words => Object.fromEntries(words.map(word => [word, {
+            alpha: '甲项', bravo: '乙项', charlie: '丙项',
+            delta: '丁项', echo: '戊项', foxtrot: '己项',
+        }[word]])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        semanticAudit: async question => {
+            auditCalls += 1;
+            const approved = auditCalls !== 2;
+            return {
+                approved,
+                status: approved ? 'approved' : 'rejected',
+                validLetters: approved ? [question.answer] : ['A', 'B'],
+            };
+        },
+        renewLease: async () => { renewals += 1; },
+        requireSemanticAudit: true,
+    });
+
+    assert.equal(auditCalls, 3);
+    assert.equal(renewals, 2);
+    assert.equal(rows.length, 2);
+    assert.match(rows[0].question_text, /before the game/);
+    assert.equal(rows.every(row => row.ai_audit_status === 'approved'), true);
+    assert.equal(new Set(rows.map(row => row.question_fingerprint)).size, 2);
+});
+
+test('cache generation publishes zero rows when only one of four candidates is approved', async () => {
+    let auditCalls = 0;
+    const contexts = [
+        'He felt lucky when he found his missing book.',
+        'They were lucky to catch the final bus home.',
+        'I was lucky to receive help before the deadline.',
+    ];
+    const rows = await buildCacheQuestionRowsForWord({
+        user: { id: 'user-1' },
+        word: {
+            id: 'word-partial-approval', user_id: 'user-1', word: 'lucky',
+            meaning_zh: '幸运的', context_en: 'She felt lucky before the game.',
+        },
+        level: MIDDLE,
+        generateContext: async () => contexts.shift() || '',
+        generateDistractors: contextualDistractorsForTest,
+        translateWords: async words => Object.fromEntries(words.map(word => [word, {
+            alpha: '甲项', bravo: '乙项', charlie: '丙项',
+            delta: '丁项', echo: '戊项', foxtrot: '己项',
+        }[word]])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        semanticAudit: async question => {
+            auditCalls += 1;
+            const approved = auditCalls === 1;
+            return { approved, status: approved ? 'approved' : 'rejected', validLetters: approved ? [question.answer] : [] };
+        },
+        requireSemanticAudit: true,
+    });
+
+    assert.deepEqual(rows, []);
+    assert.equal(auditCalls, 4);
+});
+
+test('cache generation rejects an inconsistent semantic approval response', async () => {
+    const rows = await buildCacheQuestionRowsForWord({
+        user: { id: 'user-1' },
+        word: rebuildCoverageWord('semantic-inconsistent', 'lucky'),
+        level: MIDDLE,
+        generateContext: async () => 'The second lucky sentence is ready.',
+        generateDistractors: contextualDistractorsForTest,
+        translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['甲项', '乙项', '丙项', '丁项'][index]])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        semanticAudit: async () => ({ approved: true, status: 'unavailable', validLetters: [] }),
+        requireSemanticAudit: true,
+    });
+
+    assert.deepEqual(rows, []);
 });
 
 test('rebuildQuestionCacheForUser covers every unmastered meaning beyond the formal quiz seed size', async () => {

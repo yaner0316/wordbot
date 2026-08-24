@@ -1223,7 +1223,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         answer,
         optionMeanings,
     });
-    if (audit?.approved !== true) return null;
+    const validLetters = Array.isArray(audit?.validLetters)
+        ? [...new Set(audit.validLetters.map(value => String(value || '').trim().toUpperCase()))]
+        : [];
+    if (audit?.approved !== true || audit?.status !== 'approved'
+        || validLetters.length !== 1 || validLetters[0] !== answer) return null;
     row.ai_audit_status = 'approved';
     row.source_version = 'supabase-contextual-variant-v3';
     return getCacheQuestionReadinessIssues(
@@ -1253,7 +1257,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, requireSemanticAudit = false }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -1269,26 +1273,11 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     let firstContext = level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '';
-    let generatedFirstContext = false;
     if (!hasWholeWord(firstContext, wordText) && typeof generateContext === 'function') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
-        generatedFirstContext = hasWholeWord(firstContext, wordText);
     }
     if (!hasWholeWord(firstContext, wordText)) return [];
-    const shouldGenerateSecondContext = typeof generateContext === 'function';
-    let secondContext = firstContext;
-    if (shouldGenerateSecondContext) {
-        const firstContextKey = normalizeQuestionStem(firstContext);
-        secondContext = '';
-        for (let attempt = 0; attempt < 3 && !secondContext; attempt++) {
-            const candidate = await generateContext(wordText, meaning, level, firstContext).catch(() => '');
-            const candidateKey = normalizeQuestionStem(candidate);
-            if (hasWholeWord(candidate, wordText) && candidateKey !== firstContextKey) secondContext = candidate;
-        }
-    }
-    const duplicateGeneratedContext = shouldGenerateSecondContext && normalizeQuestionStem(secondContext) === normalizeQuestionStem(firstContext);
-    if (!hasWholeWord(secondContext, wordText) || duplicateGeneratedContext) return [];
-    if (!shouldGenerateSecondContext) return [];
+    if (typeof generateContext !== 'function') return [];
 
     const levelReferenceDistractors = level === ELEMENTARY_LEVEL
         ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
@@ -1318,15 +1307,46 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         return null;
     };
 
-    const firstDistractors = await generateForContext(firstContext);
-    if (!firstDistractors) return [];
-    const secondDistractors = await generateForContext(secondContext, firstDistractors);
-    if (!secondDistractors) return [];
+    const approvedRows = [];
+    const approvedDistractors = [];
+    const attemptedContexts = new Set();
+    let context = firstContext;
+    for (let candidateIndex = 0; candidateIndex < 4 && approvedRows.length < 2; candidateIndex++) {
+        if (candidateIndex > 0) {
+            if (typeof renewLease === 'function') await renewLease();
+            const previousContext = context;
+            context = '';
+            for (let attempt = 0; attempt < 3 && !context; attempt++) {
+                const candidate = await generateContext(wordText, meaning, level, previousContext).catch(() => '');
+                const candidateKey = normalizeQuestionStem(candidate);
+                if (hasWholeWord(candidate, wordText) && !attemptedContexts.has(candidateKey)) context = candidate;
+            }
+        }
+        if (!hasWholeWord(context, wordText)) break;
+        const contextKey = normalizeQuestionStem(context);
+        if (attemptedContexts.has(contextKey)) continue;
+        attemptedContexts.add(contextKey);
 
-    const first = await buildType1CacheRow({ user, word: cacheWord, level, context: firstContext, distractors: firstDistractors, slot: 1, now, translateWords, translateContext, semanticAudit, requireSemanticAudit });
-    const second = await buildType1CacheRow({ user, word: cacheWord, level, context: secondContext, distractors: secondDistractors, slot: 2, now, translateWords, translateContext, semanticAudit, requireSemanticAudit });
-    if (!first) return [];
-    return second ? [first, second] : [];
+        const distractors = await generateForContext(context, approvedDistractors[0] || []);
+        if (!distractors) continue;
+        const row = await buildType1CacheRow({
+            user,
+            word: cacheWord,
+            level,
+            context,
+            distractors,
+            slot: approvedRows.length + 1,
+            now,
+            translateWords,
+            translateContext,
+            semanticAudit,
+            requireSemanticAudit,
+        });
+        if (!row) continue;
+        approvedRows.push(row);
+        approvedDistractors.push(distractors);
+    }
+    return approvedRows.length === 2 ? approvedRows : [];
 }
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
     const user = await getUserByUsernameWithClient(client, username);

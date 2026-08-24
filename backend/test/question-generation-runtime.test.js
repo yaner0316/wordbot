@@ -637,6 +637,35 @@ test('runtime does not write cache rows when its lease expired before publish', 
     assert.equal(fake.state.question_generation_jobs[0].status, 'generating');
 });
 
+test('runtime gives the candidate builder a lease-renewal callback', async () => {
+    const active = generationJob();
+    const fake = createFakeSupabase({
+        jobs: [active],
+        words: [{ id: active.word_id, user_id: active.user_id, word: 'bank', meaning_zh: '银行', level: 'middle' }],
+    });
+    const runtime = createQuestionGenerationRuntime({
+        client: fake.client,
+        workerId: 'worker-a',
+        now: () => new Date(NOW),
+        buildCandidates: async ({ renewLease }) => {
+            assert.equal(typeof renewLease, 'function');
+            await renewLease();
+            return [
+                candidate('She deposited her savings at the bank.'),
+                candidate('The bank approved the loan yesterday.', ['branch', 'coin', 'road']),
+            ];
+        },
+        runImmediately: false,
+    });
+
+    await runtime.generationService.process(active);
+
+    const renewCalls = fake.calls.filter(call =>
+        call.type === 'rpc' && call.name === 'renew_question_generation_job'
+    );
+    assert.equal(renewCalls.length, 2);
+});
+
 test('runtime returns its worker and independently testable persistence components', () => {
     const fake = createFakeSupabase();
     const runtime = createQuestionGenerationRuntime({
