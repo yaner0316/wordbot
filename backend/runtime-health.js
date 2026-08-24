@@ -1,15 +1,5 @@
-const FEISHU_REQUIRED_ENV = [
-    'FEISHU_APP_ID',
-    'FEISHU_APP_SECRET',
-    'FEISHU_WORD_APP_TOKEN',
-    'FEISHU_WORD_TABLE_ID',
-    'FEISHU_TEST_APP_TOKEN',
-    'FEISHU_TEST_TABLE_ID',
-    'FEISHU_STATS_APP_TOKEN',
-    'FEISHU_STATS_TABLE_ID',
-];
 const SUPABASE_REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
-const REQUIRED_ENV = FEISHU_REQUIRED_ENV;
+const REQUIRED_ENV = SUPABASE_REQUIRED_ENV;
 
 const DEFAULT_WORKER_STALL_AFTER_MS = 15 * 60_000;
 
@@ -94,19 +84,11 @@ function getRuntimeHealth({
     version = '1.0.0',
     now = () => new Date().toISOString(),
 } = {}) {
-    const dataSource = String(env.DATA_SOURCE || 'supabase').trim().toLowerCase() === 'feishu'
-        ? 'feishu'
-        : 'supabase';
-    const requiredEnv = dataSource === 'feishu' ? FEISHU_REQUIRED_ENV : SUPABASE_REQUIRED_ENV;
+    const dataSource = 'supabase';
+    const requiredEnv = SUPABASE_REQUIRED_ENV;
     const envStatus = Object.fromEntries(requiredEnv.map(name => [name, Boolean(env[name])]));
     const missing = requiredEnv.filter(name => !envStatus[name]);
-    const questionCache = dataSource === 'feishu'
-        ? {
-            configured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN && env.FEISHU_QUESTION_CACHE_TABLE_ID),
-            appTokenConfigured: Boolean(env.FEISHU_QUESTION_CACHE_APP_TOKEN),
-            tableIdConfigured: Boolean(env.FEISHU_QUESTION_CACHE_TABLE_ID),
-        }
-        : { configured: missing.length === 0, source: 'supabase' };
+    const questionCache = { configured: missing.length === 0, source: 'supabase' };
     const session = {
         sharedSecretConfigured: Boolean(env.WORDBOT_SESSION_SECRET || env.WORDBOT_ADMIN_TOKEN),
     };
@@ -115,7 +97,7 @@ function getRuntimeHealth({
         service: 'wordbot-backend',
         version,
         time: now(),
-        dataSource: env.DATA_SOURCE || 'supabase',
+        dataSource,
         env: envStatus,
         questionCache,
         session,
@@ -125,7 +107,6 @@ function getRuntimeHealth({
 
 module.exports = {
     DEFAULT_WORKER_STALL_AFTER_MS,
-    FEISHU_REQUIRED_ENV,
     REQUIRED_ENV,
     SUPABASE_REQUIRED_ENV,
     getQuestionGenerationWorkerHealth,

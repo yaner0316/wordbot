@@ -14,10 +14,6 @@ const {
 
 const { getAssessmentMode, isRealAssessment } = require('./assessment-mode');
 const { normalizeCacheRow, isCacheQuestionReady } = require('./question-cache');
-const DATA_SOURCE = normalizeDataSource(process.env.DATA_SOURCE || 'supabase');
-if (process.env.NODE_ENV === 'production' && DATA_SOURCE === 'feishu') {
-    throw new Error('FEISHU_DATA_SOURCE_DISABLED_IN_PRODUCTION');
-}
 const quizQuestionsByTestId = new Map();
 const quizSubmitLocks = new Map();
 let lastQuizSessionCleanupAt = 0;
@@ -95,11 +91,6 @@ function assertFormalQuizIsCompleteAndCacheOnly(testId, questions) {
     if (!isRealAssessment(testId)) return;
     assertFormalQuizQuestions(questions);
 }
-function normalizeDataSource(value) {
-    const normalized = String(value || '').trim().toLowerCase();
-    return normalized === 'feishu' ? 'feishu' : 'supabase';
-}
-
 function getFieldVal(value) {
     if (!value) return '';
     if (typeof value === 'object') {
@@ -115,101 +106,9 @@ function normalizeUserKey(value) {
     return String(getFieldVal(value) || '').trim().toLowerCase();
 }
 
-function sameUser(left, right) {
-    const a = normalizeUserKey(left);
-    const b = normalizeUserKey(right);
-    return Boolean(a && b && a === b);
-}
-
 function isTable(table, key) {
     return table?.dataSourceTable === key || table?.tableName === key;
 }
-
-function loadFeishuDataSource() {
-    const feishu = require('./feishu');
-    const {
-        WORD_TABLE,
-        TEST_TABLE,
-        QUESTION_CACHE_TABLE,
-        OPTION_IDS,
-    } = require('./config');
-
-    async function getUserByUsername(username) {
-        const rows = await feishu.getRecords(require('./config').STATS_TABLE);
-        const record = rows.find(row => sameUser(row.fields?.user || row.fields?.User || row.fields?.username, username));
-        return record ? { ...record, username } : null;
-    }
-
-    async function getWordsForUser(username, level) {
-        const rows = await feishu.getRecords(WORD_TABLE);
-        return rows.filter(row =>
-            sameUser(row.fields?.user, username) &&
-            (!level || String(getFieldVal(row.fields?.Level)).trim() === String(level).trim())
-        );
-    }
-
-    async function getAssessmentsForUser(username) {
-        const rows = await feishu.getRecords(TEST_TABLE);
-        return rows.filter(row => sameUser(row.fields?.user, username));
-    }
-
-    async function getQuestionCache(username, level, roundType) {
-        if (!QUESTION_CACHE_TABLE) return [];
-        const rows = await feishu.getRecords(QUESTION_CACHE_TABLE);
-        return rows.filter(row =>
-            sameUser(row.fields?.user, username) &&
-            (!level || String(getFieldVal(row.fields?.level)).trim() === String(level).trim()) &&
-            (!roundType || String(getFieldVal(row.fields?.round_type || 'primary')).trim() === String(roundType).trim())
-        );
-    }
-
-    async function updateWordMastery(username, word, newMasteryStatus, options = {}) {
-        const status = newMasteryStatus === 'mastered' ? 'Mastered' : 'Pending';
-        return feishu.updateWord(username, word, {
-            recordId: options.sourceWordRecordId || options.wordRecordId,
-            status,
-        });
-    }
-
-    async function addWord(...args) {
-        if (args.length === 1 && args[0] && typeof args[0] === 'object') {
-            const input = args[0];
-            return feishu.addWord(input.username, {
-                Word: input.word,
-                Meaning: input.meaning,
-                CN_Meaning: input.meaningZh || input.cnMeaning,
-                POS: input.partsOfSpeech || input.pos || input.POS,
-                Context: input.context || input.contextEn,
-                Level: input.level,
-            });
-        }
-        return feishu.addWord(...args);
-    }
-
-    return {
-        ...feishu,
-        DATA_SOURCE: 'feishu',
-        name: 'feishu',
-        WORD_TABLE,
-        TEST_TABLE,
-        QUESTION_CACHE_TABLE,
-        OPTION_IDS,
-        getUserByUsername,
-        getWordsForUser,
-        getAssessmentsForUser,
-        getQuestionCache,
-        submitAssessment: async () => {
-            throw new Error('submitAssessment is not supported by the Feishu rollback adapter');
-        },
-        updateWordMastery,
-        incrementCacheUsedCount: async cacheId => {
-            if (!QUESTION_CACHE_TABLE || typeof feishu.updateRecord !== 'function') return null;
-            return feishu.updateRecord(QUESTION_CACHE_TABLE, cacheId, {});
-        },
-        addWord,
-    };
-}
-
 function loadSupabaseDataSource() {
     const supabaseData = require('./supabase-data');
     const requiredAuthMethods = [
@@ -759,6 +658,4 @@ function maybeCleanupExpiredQuizSessions(supabaseData, now = Date.now()) {
     }
 }
 
-module.exports = DATA_SOURCE === 'feishu'
-    ? loadFeishuDataSource()
-    : loadSupabaseDataSource();
+module.exports = loadSupabaseDataSource();

@@ -29,13 +29,10 @@ The root build installs the locked backend dependencies with `npm --prefix backe
 
 ## Required Render environment variables
 
-Set the Supabase service credentials and the Feishu/AI credentials used by this deployment. At minimum, verify:
+Set the Supabase service credentials and the AI credentials used by this deployment. At minimum, verify:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- the configured Feishu app tokens and table IDs
 - `MINIMAX_API_KEY` when AI context generation is enabled
 
 For the question-generation worker, use a unique worker ID per instance and explicitly review:

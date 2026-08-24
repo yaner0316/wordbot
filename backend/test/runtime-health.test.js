@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 
 const {
     DEFAULT_WORKER_STALL_AFTER_MS,
-    FEISHU_REQUIRED_ENV,
     REQUIRED_ENV,
     SUPABASE_REQUIRED_ENV,
     getRuntimeHealth,
@@ -26,10 +25,7 @@ test('worker default stall window allows a bounded AI generation batch', () => {
 
 test('runtime health marks missing required environment variables', () => {
     const health = getRuntimeHealth({
-        env: {
-            DATA_SOURCE: 'feishu',
-            FEISHU_APP_ID: 'app-id',
-        },
+        env: { DATA_SOURCE: 'feishu' },
         version: 'test-version',
         now: () => '2026-06-13T00:00:00.000Z',
     });
@@ -37,9 +33,9 @@ test('runtime health marks missing required environment variables', () => {
     assert.equal(health.ok, false);
     assert.equal(health.version, 'test-version');
     assert.equal(health.time, '2026-06-13T00:00:00.000Z');
-    assert.equal(health.env.FEISHU_APP_ID, true);
-    assert.equal(health.env.FEISHU_APP_SECRET, false);
-    assert.ok(health.missing.includes('FEISHU_APP_SECRET'));
+    assert.equal(health.dataSource, 'supabase');
+    assert.equal(Object.hasOwn(health.env, 'FEISHU_APP_ID'), false);
+    assert.deepEqual(health.missing, SUPABASE_REQUIRED_ENV);
 });
 
 test('runtime health is ok when all required variables are present', () => {
@@ -56,19 +52,16 @@ test('runtime health is ok when all required variables are present', () => {
 
 test('runtime health reports question cache configuration booleans without secrets', () => {
     const env = {
-        DATA_SOURCE: 'feishu',
-        ...Object.fromEntries(FEISHU_REQUIRED_ENV.map(name => [name, 'set'])),
-        FEISHU_QUESTION_CACHE_APP_TOKEN: 'secret-app-token',
-        FEISHU_QUESTION_CACHE_TABLE_ID: 'secret-table-id',
+        DATA_SOURCE: 'supabase',
+        SUPABASE_URL: 'https://wordbot.invalid',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-key',
+        FEISHU_QUESTION_CACHE_APP_TOKEN: 'legacy-app-token',
+        FEISHU_QUESTION_CACHE_TABLE_ID: 'legacy-table-id',
     };
     const health = getRuntimeHealth({ env });
 
-    assert.deepEqual(health.questionCache, {
-        configured: true,
-        appTokenConfigured: true,
-        tableIdConfigured: true,
-    });
-    assert.doesNotMatch(JSON.stringify(health), /secret-app-token|secret-table-id/);
+    assert.deepEqual(health.questionCache, { configured: true, source: 'supabase' });
+    assert.doesNotMatch(JSON.stringify(health), /legacy-app-token|legacy-table-id/);
 });
 
 test('runtime health reports DATA_SOURCE used by runtime data-source module', () => {

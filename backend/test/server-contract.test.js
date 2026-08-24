@@ -4,6 +4,9 @@ const path = require('node:path');
 
 const BACKEND_DIR = path.join(__dirname, '..');
 const SERVER_PATH = path.join(BACKEND_DIR, 'server.js');
+const DATA_SOURCE_PATH = path.join(BACKEND_DIR, 'data-source.js');
+const SUPABASE_CLIENT_PATH = path.join(BACKEND_DIR, 'supabase-client.js');
+const QUESTION_GENERATION_BOOTSTRAP_PATH = path.join(BACKEND_DIR, 'question-generation-bootstrap.js');
 const FEISHU_PATH = path.join(BACKEND_DIR, 'feishu.js');
 
 async function withServer(app, run) {
@@ -48,21 +51,53 @@ function loadServerWithFeishu(fakeFeishu) {
     Object.assign(process.env, {
         NODE_ENV: 'test',
         WORDBOT_AUTH_TEST_BYPASS: '1',
-        DATA_SOURCE: 'feishu',
-        FEISHU_APP_ID: 'test-app-id',
-        FEISHU_APP_SECRET: 'test-app-secret',
-        FEISHU_WORD_APP_TOKEN: 'word-app',
-        FEISHU_WORD_TABLE_ID: 'word-table',
-        FEISHU_TEST_APP_TOKEN: 'test-app',
-        FEISHU_TEST_TABLE_ID: 'test-table',
-        FEISHU_STATS_APP_TOKEN: 'stats-app',
-        FEISHU_STATS_TABLE_ID: 'stats-table',
+        DATA_SOURCE: 'supabase',
+        WORDBOT_CACHE_SOURCE: 'db',
+        SUPABASE_URL: 'https://wordbot.invalid',
+        SUPABASE_SERVICE_ROLE_KEY: 'test-key',
     });
-    require.cache[FEISHU_PATH] = {
-        id: FEISHU_PATH,
-        filename: FEISHU_PATH,
+    require.cache[DATA_SOURCE_PATH] = {
+        id: DATA_SOURCE_PATH,
+        filename: DATA_SOURCE_PATH,
         loaded: true,
-        exports: fakeFeishu,
+        exports: {
+            ...fakeFeishu,
+            DATA_SOURCE: 'supabase',
+            name: 'supabase',
+            WORD_TABLE: { dataSourceTable: 'words', tableId: 'word-table' },
+            TEST_TABLE: { dataSourceTable: 'assessments', tableId: 'test-table' },
+            OPTION_IDS: { IS_CORRECT: 'optHGT7gYf', IS_WRONG: 'optbe4bsQk' },
+        },
+    };
+    const query = {
+        select() { return this; },
+        limit() { return Promise.resolve({ data: [], error: null }); },
+    };
+    require.cache[SUPABASE_CLIENT_PATH] = {
+        id: SUPABASE_CLIENT_PATH,
+        filename: SUPABASE_CLIENT_PATH,
+        loaded: true,
+        exports: {
+            from() { return query; },
+            rpc() { return Promise.resolve({ data: null, error: null }); },
+        },
+    };
+    require.cache[QUESTION_GENERATION_BOOTSTRAP_PATH] = {
+        id: QUESTION_GENERATION_BOOTSTRAP_PATH,
+        filename: QUESTION_GENERATION_BOOTSTRAP_PATH,
+        loaded: true,
+        exports: {
+            createDefaultQuestionGenerationRuntime() {
+                return {
+                    worker: {
+                        start() { return true; },
+                        stop() { return Promise.resolve(); },
+                        isRunning() { return true; },
+                        getObservability() { return { startedAt: new Date().toISOString() }; },
+                    },
+                };
+            },
+        },
     };
     return require(SERVER_PATH).app;
 }
@@ -156,7 +191,7 @@ test('protected route manifest stays explicit during data-layer migration', () =
 
 test('server initializes dotenv before loading data-source or question-generation worker dependencies', () => {
     const serverSource = require('node:fs').readFileSync(SERVER_PATH, 'utf8');
-    const envBootstrap = serverSource.indexOf("require('./startup-env');");
+    const envBootstrap = serverSource.indexOf("require('./startup-env')");
     const dataSource = serverSource.indexOf("require('./data-source');");
     const workerBootstrap = serverSource.indexOf("require('./question-generation-bootstrap')");
 
@@ -688,6 +723,10 @@ test('admin history diagnostics reports only aggregate adapter counts', async ()
     const previousAdminToken = process.env.WORDBOT_ADMIN_TOKEN;
     process.env.WORDBOT_ADMIN_TOKEN = 'history-diagnostic-test-token';
     const app = loadServerWithFeishu(createFakeFeishu({
+        getAssessmentsForUser: async () => [
+            { fields: { user: 'student', test_id: 'real-diagnostic-1', is_correct: 'correct' } },
+            { fields: { user: 'student', test_id: 'test-diagnostic-1', is_correct: 'wrong' } },
+        ],
         getRecords: async table => table.tableId === 'test-table' ? [
             { fields: { user: 'student', test_id: 'real-diagnostic-1', is_correct: 'correct' } },
             { fields: { user: 'student', test_id: 'test-diagnostic-1', is_correct: 'wrong' } },
