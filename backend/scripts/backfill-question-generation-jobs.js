@@ -113,7 +113,7 @@ function readyFingerprintCounts(cacheRows) {
             ...row,
             word_record_id: row?.word_record_id || row?.source_word_record_id || wordId,
         };
-        if (!isCacheQuestionReady(formalRow)) continue;
+        if (!isCacheQuestionReady(formalRow, { requireAiAudit: true })) continue;
         const key = identityKey(userId, wordId);
         if (!readinessByMeaning.has(key)) {
             readinessByMeaning.set(key, { rows: [] });
@@ -172,11 +172,10 @@ function planQuestionGenerationJobBackfill({ words = [], assessments = [], cache
             continue;
         }
         const existingStatus = existingJobs.get(key);
-        if (existingStatus && !['ready', 'needs_manual_review'].includes(existingStatus)) {
+        if (existingStatus && existingStatus !== 'ready') {
             summary.alreadyQueued += 1;
             continue;
         }
-        if (existingStatus === 'needs_manual_review') summary.requeuedManualReview += 1;
         if (existingStatus === 'ready') summary.requeuedReady += 1;
         plannedJobs.push({
             user_id: userId,

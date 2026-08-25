@@ -76,9 +76,20 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260819_mandatory_ai_question_audit.sql',
       '20260824_formal_ai_audit_gate.sql',
       '20260824_game_states.sql',
+      '20260825_enqueue_strict_ai_coverage.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
+});
+
+test('strict enqueue coverage migration requires approved AI audit rows and preserves manual review', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '20260825_enqueue_strict_ai_coverage.sql'),
+    'utf8'
+  );
+
+  assert.match(migration, /lower\(btrim\(ai_audit_status\)\) = 'approved'/);
+  assert.doesNotMatch(migration, /status in \('ready', 'needs_manual_review'\)/);
 });
 
 test('the backend service start command runs migrations before starting the server', () => {

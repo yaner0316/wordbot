@@ -39,6 +39,7 @@ function cache(overrides = {}) {
         options: ['A. bank', 'B. river', 'C. school', 'D. garden'],
         option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u82b1\u56ed'],
         answer: 'A',
+        ai_audit_status: 'approved',
         correct_meaning: '\u94f6\u884c',
         ...overrides,
     };
@@ -231,6 +232,21 @@ test('does not treat English option meanings as a formally ready cache pair', ()
     assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
 });
 
+test('does not treat an approved and a skipped cache row as a complete pair', () => {
+    const plan = planQuestionGenerationJobBackfill({
+        words: [word()],
+        assessments: [],
+        cacheRows: [
+            cache({ question_fingerprint: 'fingerprint-1', ai_audit_status: 'approved' }),
+            distinctSecondVariant({ question_fingerprint: 'fingerprint-2', ai_audit_status: 'skipped' }),
+        ],
+        jobs: [],
+    });
+
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
+    assert.equal(plan.summary.alreadyReady, 0);
+});
+
 test('requeues a completed job when its cache pair is no longer complete', () => {
     const plan = planQuestionGenerationJobBackfill({
         words: [word()],
@@ -253,7 +269,7 @@ test('keeps active jobs out of duplicate backfill', () => {
     }
 });
 
-test('requeues a manual-review job only through the reviewed backfill plan', () => {
+test('leaves a manual-review job untouched when its cache pair is incomplete', () => {
     const plan = planQuestionGenerationJobBackfill({
         words: [word()],
         assessments: [],
@@ -261,8 +277,9 @@ test('requeues a manual-review job only through the reviewed backfill plan', () 
         jobs: [{ user_id: 'user-1', word_id: 'word-1', status: 'needs_manual_review' }],
     });
 
-    assert.deepEqual(plan.jobs.map(job => job.word_id), ['word-1']);
-    assert.equal(plan.summary.requeuedManualReview, 1);
+    assert.deepEqual(plan.jobs, []);
+    assert.equal(plan.summary.alreadyQueued, 1);
+    assert.equal(plan.summary.requeuedManualReview, 0);
 });
 
 test('treats same spelling meanings as independent user_id + word_id identities', () => {
