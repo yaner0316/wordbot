@@ -304,6 +304,11 @@ select
   (select public_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_public_execute,
   (select anon_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_anon_execute,
   (select authenticated_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_authenticated_execute,
+  coalesce((
+    select proc.prosrc like '%lower(btrim(ai_audit_status)) = ''approved''%'
+    from pg_catalog.pg_proc as proc
+    where proc.oid = (select oid from rpc_proc where name = 'enqueue_question_generation_job_if_needed')
+  ), false) as rpc_enqueue_job_if_needed_strict_ai_audit_contract,
   (select service_role_execute from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_service_role_execute,
   (select signature from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_signature,
   (select security_definer from rpc_state where name = 'fence_word_question_generation') as rpc_fence_word_question_generation_security_definer,
@@ -451,6 +456,7 @@ const EXPECTED_STATE = Object.freeze({
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   rpc_publish_question_generation_variants_ai_audit_contract: true,
+  rpc_enqueue_job_if_needed_strict_ai_audit_contract: true,
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
