@@ -376,6 +376,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260819_mandatory_ai_question_audit.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260824_formal_ai_audit_gate.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260824_game_states.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260825_enqueue_strict_ai_coverage.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
