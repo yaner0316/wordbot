@@ -167,6 +167,7 @@ const COMPLETE_STATE = Object.freeze({
   quiz_session_updated_at_trigger: true,
   rpc_reconcile_word_mastery_status_safe_search_path: true,
   rpc_publish_question_generation_variants_ai_audit_contract: true,
+  rpc_enqueue_job_if_needed_strict_ai_audit_contract: true,
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   backfill_hardening_revision: true,
@@ -245,6 +246,11 @@ const FORMAL_AI_AUDIT_MISSING_STATE = Object.freeze({
   ...COMPLETE_STATE,
   rpc_create_formal_quiz_challenge_ai_audit_contract: false,
   rpc_replace_formal_quiz_question_ai_audit_contract: false,
+});
+
+const STRICT_ENQUEUE_AI_AUDIT_MISSING_STATE = Object.freeze({
+  ...COMPLETE_STATE,
+  rpc_enqueue_job_if_needed_strict_ai_audit_contract: false,
 });
 
 function createDatabaseHarness({ states, failSql } = {}) {
@@ -477,6 +483,26 @@ test('a database missing only the formal AI-audit contracts replays the fixed ch
   assert.deepEqual(result.verification, COMPLETE_STATE);
 });
 
+test('a database missing only the strict enqueue AI-audit contract replays the fixed chain', async () => {
+  const harness = createDatabaseHarness({
+    states: [STRICT_ENQUEUE_AI_AUDIT_MISSING_STATE, COMPLETE_STATE],
+  });
+  const readPaths = [];
+
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async filePath => {
+      readPaths.push(filePath);
+      return `-- ${path.basename(filePath)}`;
+    },
+  });
+
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, MIGRATION_PATHS);
+  assert.deepEqual(result.verification, COMPLETE_STATE);
+});
+
 test('a migration SQL failure rejects and always closes the database client', async () => {
   const harness = createDatabaseHarness({ states: [INCOMPLETE_STATE], failSql: '-- migration claim rpc' });
 
@@ -634,6 +660,7 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /quiz_session_updated_at_trigger/);
   assert.match(VERIFICATION_SQL, /rpc_reconcile_word_mastery_status_safe_search_path/);
   assert.match(VERIFICATION_SQL, /rpc_publish_question_generation_variants_ai_audit_contract/);
+  assert.match(VERIFICATION_SQL, /rpc_enqueue_job_if_needed_strict_ai_audit_contract/);
   assert.match(VERIFICATION_SQL, /rpc_create_formal_quiz_challenge_ai_audit_contract/);
   assert.match(VERIFICATION_SQL, /rpc_replace_formal_quiz_question_ai_audit_contract/);
 });
