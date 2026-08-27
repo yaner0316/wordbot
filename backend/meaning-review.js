@@ -38,6 +38,8 @@ function isMeaningAnswerCorrect(answer, expectedMeaning) {
     if (!normalizedAnswer) return false;
     const normalizedExpected = normalizeMeaningText(expectedMeaning);
     if (!normalizedExpected) return false;
+    if (normalizedAnswer === normalizedExpected) return true;
+    if (normalizedAnswer.length < 2) return false;
     if (
         normalizedAnswer.includes(normalizedExpected) ||
         normalizedExpected.includes(normalizedAnswer)
