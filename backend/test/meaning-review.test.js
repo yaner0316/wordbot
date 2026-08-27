@@ -18,6 +18,14 @@ test('rejects an unrelated Chinese answer', () => {
     assert.equal(isMeaningAnswerCorrect('苹果', '晋升；提升'), false);
 });
 
+test('rejects a single-character fragment of a longer Chinese meaning', () => {
+    assert.equal(isMeaningAnswerCorrect('小', '学生，尤指小学生。'), false);
+});
+
+test('accepts an exact one-character Chinese meaning', () => {
+    assert.equal(isMeaningAnswerCorrect('光', '光'), true);
+});
+
 test('accepts a concise canonical Chinese translation for a long explanatory meaning', () => {
     assert.equal(
         isMeaningAnswerCorrect(
