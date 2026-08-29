@@ -558,6 +558,33 @@ async function applyQuestionGenerationMigrations({
   }
 }
 
+async function verifyQuestionGenerationSchema({
+  env = process.env,
+  Client: DatabaseClient = Client,
+} = {}) {
+  if (!env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required for question-generation migrations');
+  }
+
+  const client = new DatabaseClient({
+    connectionString: normalizeDatabaseUrl(env.DATABASE_URL),
+    ssl: { rejectUnauthorized: false },
+  });
+
+  try {
+    await client.connect();
+    const verification = await inspectMigrationState(client);
+    const failures = verificationFailures(verification);
+    return {
+      status: failures.length === 0 ? 'ok' : 'failed',
+      failures,
+      verification,
+    };
+  } finally {
+    await client.end();
+  }
+}
+
 function publicFailureMessage(error) {
   const message = String(error?.message || '');
   const safePrefixes = [
@@ -595,5 +622,9 @@ module.exports = {
   RPC_VERIFICATION_ALIASES,
   VERIFICATION_SQL,
   applyQuestionGenerationMigrations,
+  inspectMigrationState,
   normalizeDatabaseUrl,
+  publicFailureMessage,
+  verificationFailures,
+  verifyQuestionGenerationSchema,
 };

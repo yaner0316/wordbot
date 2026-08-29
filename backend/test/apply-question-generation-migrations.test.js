@@ -9,6 +9,7 @@ const {
   MIGRATION_PATHS,
   RPC_VERIFICATION_ALIASES,
   applyQuestionGenerationMigrations,
+  verifyQuestionGenerationSchema,
   normalizeDatabaseUrl,
   VERIFICATION_SQL,
 } = require('../scripts/apply-question-generation-migrations');
@@ -92,9 +93,37 @@ test('strict enqueue coverage migration requires approved AI audit rows and pres
   assert.doesNotMatch(migration, /status in \('ready', 'needs_manual_review'\)/);
 });
 
-test('the backend service start command runs migrations before starting the server', () => {
+test('service startup scripts do not run question-generation migrations', () => {
   const backendPackage = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  assert.equal(backendPackage.scripts.prestart, 'node scripts/apply-question-generation-migrations.js');
+  const rootPackage = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')
+  );
+
+  assert.equal(backendPackage.scripts.start, 'node server.js');
+  assert.equal(rootPackage.scripts.start, 'node backend/server.js');
+  for (const scripts of [backendPackage.scripts, rootPackage.scripts]) {
+    for (const [name, command] of Object.entries(scripts)) {
+      if (/^(pre|post)?start$/.test(name)) {
+        assert.doesNotMatch(command, /apply-question-generation-migrations/);
+      }
+    }
+  }
+  assert.equal(
+    backendPackage.scripts['migrate:question-generation'],
+    'node scripts/apply-question-generation-migrations.js'
+  );
+  assert.equal(
+    backendPackage.scripts['verify:question-generation-schema'],
+    'node scripts/verify-question-generation-schema.js'
+  );
+  assert.equal(
+    rootPackage.scripts['migrate:question-generation'],
+    'npm --prefix backend run migrate:question-generation'
+  );
+  assert.equal(
+    rootPackage.scripts['verify:question-generation-schema'],
+    'npm --prefix backend run verify:question-generation-schema'
+  );
 });
 
 test('missing DATABASE_URL fails before a database client is constructed', async () => {
@@ -289,6 +318,75 @@ function createDatabaseHarness({ states, failSql } = {}) {
 
   return { Client: FakeClient, events, instances };
 }
+
+test('read-only question-generation schema verification reports ok without reading migration files', async () => {
+  assert.equal(typeof verifyQuestionGenerationSchema, 'function');
+  const harness = createDatabaseHarness({ states: [COMPLETE_STATE] });
+
+  const result = await verifyQuestionGenerationSchema({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+  });
+
+  assert.deepEqual(result, {
+    status: 'ok',
+    failures: [],
+    verification: COMPLETE_STATE,
+  });
+  assert.deepEqual(harness.events, [
+    'connect',
+    'query:BEGIN READ ONLY',
+    `query:${VERIFICATION_SQL.trim()}`,
+    'query:COMMIT',
+    'end',
+  ]);
+});
+
+test('read-only question-generation schema verification reports missing contract keys', async () => {
+  assert.equal(typeof verifyQuestionGenerationSchema, 'function');
+  const harness = createDatabaseHarness({ states: [QUALITY_GATE_MISSING_STATE] });
+
+  const result = await verifyQuestionGenerationSchema({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(result.failures, [
+    'formal_quality_function',
+    'formal_quality_function_security_invoker',
+    'formal_quality_function_safe_search_path',
+    'formal_quality_translation_contract',
+    'formal_quality_function_public_execute',
+    'formal_quality_trigger',
+  ]);
+  assert.deepEqual(harness.events, [
+    'connect',
+    'query:BEGIN READ ONLY',
+    `query:${VERIFICATION_SQL.trim()}`,
+    'query:COMMIT',
+    'end',
+  ]);
+  assert.equal(harness.instances[0].ended, true);
+});
+
+test('the real read-only schema verifier exits nonzero without DATABASE_URL', () => {
+  const env = { ...process.env };
+  delete env.DATABASE_URL;
+  const scriptPath = path.resolve(__dirname, '..', 'scripts', 'verify-question-generation-schema.js');
+
+  assert.equal(fs.existsSync(scriptPath), true);
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: path.resolve(__dirname, '..', '..'),
+    env,
+    encoding: 'utf8',
+  });
+
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /DATABASE_URL is required/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /postgresql:\/\/|test-key|service-role/i);
+});
 
 test('an already complete database is only inspected in a read-only transaction', async () => {
   const harness = createDatabaseHarness({ states: [COMPLETE_STATE] });
@@ -813,13 +911,21 @@ test('manual schema defines assessment option meanings for fresh databases', () 
   assert.match(assessments[1], /option_meanings jsonb not null default '\[\]'::jsonb/i);
 });
 
-test('root prestart runs only the fixed migration runner before the original server command', () => {
+test('root package exposes startup and explicit question-generation migration commands separately', () => {
   const rootPackage = JSON.parse(
     fs.readFileSync(path.resolve(__dirname, '..', '..', 'package.json'), 'utf8')
   );
 
-  assert.equal(rootPackage.scripts.prestart, 'node backend/scripts/apply-question-generation-migrations.js');
+  assert.equal(rootPackage.scripts.prestart, undefined);
   assert.equal(rootPackage.scripts.start, 'node backend/server.js');
+  assert.equal(
+    rootPackage.scripts['migrate:question-generation'],
+    'npm --prefix backend run migrate:question-generation'
+  );
+  assert.equal(
+    rootPackage.scripts['verify:question-generation-schema'],
+    'npm --prefix backend run verify:question-generation-schema'
+  );
 });
 
 test('assessment parent review migration preserves RLS and ACL while adding the nullable text column and partial index', async () => {
