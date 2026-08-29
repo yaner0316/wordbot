@@ -1,6 +1,7 @@
-name: Deploy backend to Render
+name: Backend CI and Render deploy
 
 on:
+  pull_request:
   push:
     branches:
       - codex/reliability-engineering
@@ -8,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,6 +48,13 @@ jobs:
           WORDBOT_WEB_APP_PATH: ${{ github.workspace }}/web-contract/src/app.js
         working-directory: backend
 
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
       - name: Trigger Render deploy hook
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
