@@ -3529,6 +3529,7 @@ test('rebuildQuestionCacheForUser requeues a manual-review job before continuing
 test('requestQuestionCacheRebuildForUser persists jobs without changing cache rows', async () => {
     const word = rebuildCoverageWord('durable-request', 'lucky');
     const cacheRows = rebuildCoverageInvalidPair(word);
+    const cacheRowsBeforeRequest = structuredClone(cacheRows);
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [word],
@@ -3540,7 +3541,7 @@ test('requestQuestionCacheRebuildForUser persists jobs without changing cache ro
     const result = await createSupabaseDataAdapter(client).requestQuestionCacheRebuildForUser('qiuqiu');
 
     assert.deepEqual(result, { accepted: true, userId: 'qiuqiu', requested: 1 });
-    assert.deepEqual(client.db.question_cache, cacheRows);
+    assert.deepEqual(client.db.question_cache, cacheRowsBeforeRequest);
     assert.equal(client.db.question_generation_jobs.length, 1);
     assert.equal(client.db.question_generation_jobs[0].status, 'pending');
 });
