@@ -30,6 +30,7 @@ const { createSupabaseAuthAdapter } = require('./supabase-auth');
 const { createSupabaseMaintenanceAdapter } = require('./supabase-maintenance');
 const { fingerprintQuestion } = require('./question-generation-service');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
+const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { countEligibleReadyMeaningsByLevel } = require('./quiz-word-queue');
 const {
@@ -905,13 +906,20 @@ async function getQuestionCacheStatusWithClient(client, username) {
         'getQuestionCacheStatus.jobs'
     );
     const generation = summarizeQuestionGenerationJobs(jobRows);
+    const eligibleReadyMeanings = Number(
+        eligibleReadyMeaningsByLevel[normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL)] || 0
+    );
 
     return {
         configured: true,
         ...summarizeCacheStatus(statusRows),
-        eligibleReadyMeanings: Number(eligibleReadyMeaningsByLevel[normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL)] || 0),
+        eligibleReadyMeanings,
         eligibleReadyMeaningsByLevel,
         generation,
+        readiness: summarizeUserQuestionReadiness({
+            readyCount: eligibleReadyMeanings,
+            jobs: jobRows,
+        }),
     };
 }
 

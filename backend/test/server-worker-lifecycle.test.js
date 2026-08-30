@@ -99,6 +99,45 @@ test('server health reports injected due backlog as stalled when polling makes n
     assert.equal(health.questionGenerationWorker.stalled, true);
 });
 
+test('server health exposes a safe global queue summary', async t => {
+    const { startServer } = require('../server');
+    let hooks;
+    const server = startServer(0, {
+        runtimeFactory: options => {
+            hooks = options;
+            return {
+            worker: {
+                start() { return true; },
+                async stop() {},
+                isRunning() { return true; },
+            },
+        };
+        },
+        enableQuestionGenerationWorker: true,
+        getQuestionGenerationEligibleDueCount: async () => 1,
+        getQuestionGenerationQueueSummary: async () => ({
+            counts: { pending: 1, running: 2, retrying: 3, failed: 4 },
+            oldestPendingAgeMs: 31 * 60_000,
+            lastErrorCode: 'QUESTION_GENERATION_FAILED',
+        }),
+    });
+    await new Promise(resolve => server.once('listening', resolve));
+    hooks.onSuccess({ claimed: 0, completed: 0, failed: 0 });
+    t.after(async () => {
+        if (server.listening) await new Promise(resolve => server.close(resolve));
+    });
+
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+    const health = await response.json();
+
+    assert.ok([200, 503].includes(response.status));
+    assert.deepEqual(health.questionGenerationQueue, {
+        counts: { pending: 1, running: 2, retrying: 3, failed: 4 },
+        oldestPendingAgeMs: 31 * 60_000,
+        lastErrorCode: 'QUESTION_GENERATION_FAILED',
+    });
+});
+
 test('production server health counts only jobs eligible under claim rules without an injected counter', async t => {
     const { startServer } = require('../server');
     let currentTime = '2026-08-14T00:20:00.000Z';

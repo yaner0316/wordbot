@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeQuestionGenerationErrorCode } = require('./question-generation-observability');
+
 const JOB_STATUS = Object.freeze({
     PENDING: 'pending',
     GENERATING: 'generating',
@@ -289,7 +291,7 @@ function summarizeQuestionGenerationJobs(rows) {
                 wordId: String(row.word_id || ''),
                 status,
                 attemptCount: Math.max(0, Number(row.attempt_count) || 0),
-                lastErrorCode: String(row.last_error_code || ''),
+                lastErrorCode: safeQuestionGenerationErrorCode(row.last_error_code),
                 nextAttemptAt: row.next_attempt_at || null,
             });
         }
