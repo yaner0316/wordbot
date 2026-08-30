@@ -5,8 +5,9 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "prestart": "node scripts/apply-question-generation-migrations.js",
     "start": "node server.js",
+    "migrate:question-generation": "node scripts/apply-question-generation-migrations.js",
+    "verify:question-generation-schema": "node scripts/verify-question-generation-schema.js",
     "test": "node --test --test-concurrency=1 --test-isolation=none \"test/**/*.test.js\"",
     "setup:review-fields": "node setup-review-fields.js",
     "check:env": "node check-env.js"
