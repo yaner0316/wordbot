@@ -5,7 +5,7 @@ const express = require('express');
 const path = require('path');
 const { normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
 const {
@@ -16,6 +16,13 @@ const {
 } = require('./assessment-mode');
 const { parseStoredAnswer } = require('./mastery-evidence');
 const supabase = require('./supabase-client');
+
+function queueQuestionCacheRebuild(userId) {
+    if (typeof requestQuestionCacheRebuildForUser === 'function') {
+        return requestQuestionCacheRebuildForUser(userId);
+    }
+    return Promise.resolve(startQuestionCacheRebuild(userId));
+}
 
 function createDefaultQuestionGenerationRuntime(options) {
     return require('./question-generation-bootstrap').createDefaultQuestionGenerationRuntime(options);
@@ -539,7 +546,7 @@ app.put('/api/admin/userSettings', async (req, res) => {
                 const cacheStatus = await getQuestionCacheStatus(canonicalUserId);
                 shouldRebuild = Boolean(cacheStatus?.configured) && getCacheReadyCountForLevel(cacheStatus, selectedLevel) < 10;
             }
-            if (shouldRebuild) startQuestionCacheRebuild(canonicalUserId);
+            if (shouldRebuild) await queueQuestionCacheRebuild(canonicalUserId);
         }
         res.json(result);
     } catch (e) {
@@ -583,7 +590,7 @@ app.post('/api/admin/questionCache/rebuild', async (req, res) => {
         if (flush) {
             flushed = await deleteQuestionCacheRows(userId, type != null ? Number(type) : null);
         }
-        const result = startQuestionCacheRebuild(userId);
+        const result = await queueQuestionCacheRebuild(userId);
         res.status(202).json({ ...result, flushed });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -600,7 +607,7 @@ app.post('/api/admin/questionCache/rebuildAll', async (req, res) => {
             if (flush) {
                 flushed = await deleteQuestionCacheRows(userId, null);
             }
-            const result = startQuestionCacheRebuild(userId);
+            const result = await queueQuestionCacheRebuild(userId);
             results.push({ ...result, userId, flushed });
         }
         res.status(202).json({ total: users.length, results });

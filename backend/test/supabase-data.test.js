@@ -3526,6 +3526,25 @@ test('rebuildQuestionCacheForUser requeues a manual-review job before continuing
     assert.equal(client.db.question_generation_jobs[0].attempt_count, 0);
 });
 
+test('requestQuestionCacheRebuildForUser persists jobs without changing cache rows', async () => {
+    const word = rebuildCoverageWord('durable-request', 'lucky');
+    const cacheRows = rebuildCoverageInvalidPair(word);
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [word],
+        assessments: [],
+        question_cache: cacheRows,
+        question_generation_jobs: [],
+    });
+
+    const result = await createSupabaseDataAdapter(client).requestQuestionCacheRebuildForUser('qiuqiu');
+
+    assert.deepEqual(result, { accepted: true, userId: 'qiuqiu', requested: 1 });
+    assert.deepEqual(client.db.question_cache, cacheRows);
+    assert.equal(client.db.question_generation_jobs.length, 1);
+    assert.equal(client.db.question_generation_jobs[0].status, 'pending');
+});
+
 test('rebuildQuestionCacheForUser creates a pending job when conditional enqueue returns no row', async () => {
     const word = rebuildCoverageWord('durable-missing', 'lucky');
     const client = createFakeSupabase({

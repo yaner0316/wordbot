@@ -877,6 +877,33 @@ test('question cache rebuild endpoint starts background job without waiting for 
     });
 });
 
+test('question cache rebuild endpoint persists the request without invoking the legacy rebuilder', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        requestQuestionCacheRebuildForUser: async userId => {
+            calls.push(['request', userId]);
+            return { accepted: true, userId, requested: 2 };
+        },
+        rebuildQuestionCacheForUser: async () => {
+            calls.push(['legacy-rebuild']);
+            throw new Error('legacy rebuild must not run from the request path');
+        },
+    }));
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(`${baseUrl}/api/admin/questionCache/rebuild`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: 'Draggy' }),
+        });
+        const body = await response.json();
+
+        assert.equal(response.status, 202);
+        assert.deepEqual(body, { accepted: true, userId: 'Draggy', requested: 2, flushed: null });
+        assert.deepEqual(calls, [['request', 'Draggy']]);
+    });
+});
+
 test('question cache rebuild endpoint can flush selected cache type before rebuilding', async () => {
     const calls = [];
     let resolveRebuild;

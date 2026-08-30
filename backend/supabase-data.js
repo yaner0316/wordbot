@@ -1434,6 +1434,23 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
         throw new Error(`rebuildQuestionCache.enqueueJob: durable job was not confirmed for word ${wordId}`);
     }
 }
+
+async function requestQuestionCacheRebuildForUserWithClient(client, username) {
+    const user = await requireUserByUsername(client, username);
+    const words = await getWordsForUserWithClient(client, username);
+    const eligibleWords = words.filter(word => String(word?.mastery_status || '').trim().toLowerCase() !== 'mastered');
+
+    for (const word of eligibleWords) {
+        await enqueueQuestionGenerationJobWithConfirmation(client, {
+            userId: user.id,
+            wordId: word.id,
+            reason: 'cache_backfill',
+        });
+    }
+
+    return { accepted: true, userId: user.username, requested: eligibleWords.length };
+}
+
 async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null, semanticAuditor = null, requireSemanticAudit = false) {
     const user = await requireUserByUsername(client, username);
     const level = normalizeOptionalLearningLevel(user.learning_level) || normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL);
@@ -3186,6 +3203,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
         getQuestionCacheDiagnostics: username => getQuestionCacheDiagnosticsWithClient(client, username),
         deleteQuestionCacheRows: (username, type) => deleteQuestionCacheRowsWithClient(client, username, type),
+        requestQuestionCacheRebuildForUser: username => requestQuestionCacheRebuildForUserWithClient(client, username),
         rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit, requireSemanticAudit),
         addWord: input => addWordWithClient(client, input),
         addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
@@ -3274,6 +3292,7 @@ module.exports = {
     saveGameState: defaultAdapter.saveGameState,
     getQuestionCacheDiagnostics: defaultAdapter.getQuestionCacheDiagnostics,
     deleteQuestionCacheRows: defaultAdapter.deleteQuestionCacheRows,
+    requestQuestionCacheRebuildForUser: defaultAdapter.requestQuestionCacheRebuildForUser,
     rebuildQuestionCacheForUser: defaultAdapter.rebuildQuestionCacheForUser,
     addWord: defaultAdapter.addWord,
     addWords: defaultAdapter.addWords,
