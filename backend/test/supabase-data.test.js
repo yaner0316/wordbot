@@ -968,6 +968,43 @@ test('question cache status summarizes Supabase rows by level', async () => {
     assert.match(cacheRead.selectColumns, /(?:^|,\s*)ai_audit_status(?:\s*,|$)/);
 });
 
+test('question cache status exposes safe per-user formal readiness', async () => {
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [],
+        assessments: [],
+        quiz_display_events: [],
+        question_cache: [],
+        question_generation_jobs: [{
+            id: 'job-1',
+            user_id: 'user-1',
+            status: 'needs_manual_review',
+            created_at: '2026-08-30T11:20:00.000Z',
+            last_error_code: 'provider error secret=must-not-leak',
+        }],
+    });
+
+    const status = await createSupabaseDataAdapter(client).getQuestionCacheStatus('qiuqiu');
+
+    assert.deepEqual(status.readiness, {
+        canStartFormalQuiz: false,
+        status: 'needs_attention',
+        alerts: {
+            belowReadyThreshold: true,
+            oldestPendingOverThreshold: false,
+        },
+        queue: {
+            pendingCount: 0,
+            runningCount: 0,
+            retryingCount: 0,
+            failedCount: 1,
+            oldestPendingAgeMs: null,
+            lastErrorCode: 'QUESTION_GENERATION_FAILED',
+        },
+    });
+    assert.doesNotMatch(JSON.stringify(status), /must-not-leak/);
+});
+
 test('learning settings checks only the selected level cache without scanning quiz history', async () => {
     const client = createFakeSupabase({
         users: [{

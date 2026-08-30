@@ -8,6 +8,7 @@ const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } 
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
+const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -218,6 +219,23 @@ function createQuestionGenerationEligibleDueCounter({ client = supabase, now = (
     };
 }
 
+function createQuestionGenerationQueueSummaryReader({ client = supabase, now = () => new Date().toISOString() } = {}) {
+    return async function getQuestionGenerationQueueSummary() {
+        const rows = await loadHealthRowsById(() => client
+            .from('question_generation_jobs')
+            .select('id,status,created_at,updated_at,last_error_code'));
+        return summarizeQuestionGenerationQueue(rows, { now: now() });
+    };
+}
+
+function unknownQuestionGenerationQueueSummary() {
+    return {
+        counts: { pending: 'unknown', running: 'unknown', retrying: 'unknown', failed: 'unknown' },
+        oldestPendingAgeMs: null,
+        lastErrorCode: null,
+    };
+}
+
 async function getServerRuntimeHealth(state) {
     const health = getRuntimeHealth();
     const runtime = state?.runtime || null;
@@ -243,6 +261,14 @@ async function getServerRuntimeHealth(state) {
             eligibleDueCount = 'unknown';
         }
     }
+    let questionGenerationQueue = unknownQuestionGenerationQueueSummary();
+    if (state?.workerConfigured && typeof state.getQuestionGenerationQueueSummary === 'function') {
+        try {
+            questionGenerationQueue = await state.getQuestionGenerationQueueSummary();
+        } catch (_) {
+            questionGenerationQueue = unknownQuestionGenerationQueueSummary();
+        }
+    }
     const observed = typeof runtime?.worker?.getObservability === 'function'
         ? runtime.worker.getObservability()
         : {};
@@ -264,6 +290,7 @@ async function getServerRuntimeHealth(state) {
         ok: health.ok && database.ok && workerHealth.ok,
         database,
         questionGenerationWorker: workerHealth,
+        questionGenerationQueue,
     };
 }
 
@@ -889,11 +916,17 @@ function startServer(port = PORT, options = {}) {
         workerHealthNow: options.workerHealthNow || (() => new Date().toISOString()),
         workerStallAfterMs: options.workerStallAfterMs,
         getQuestionGenerationEligibleDueCount: null,
+        getQuestionGenerationQueueSummary: null,
         stopPromise: null,
         originalClose: null,
     };
     state.getQuestionGenerationEligibleDueCount = options.getQuestionGenerationEligibleDueCount
         || createQuestionGenerationEligibleDueCounter({
+            client: options.questionGenerationHealthClient || supabase,
+            now: state.workerHealthNow,
+        });
+    state.getQuestionGenerationQueueSummary = options.getQuestionGenerationQueueSummary
+        || createQuestionGenerationQueueSummaryReader({
             client: options.questionGenerationHealthClient || supabase,
             now: state.workerHealthNow,
         });
