@@ -68,3 +68,15 @@ test('pull request tests cannot invoke the Render deployment hook', () => {
     assert.match(workflow, /^  test:$/m);
     assert.match(workflow, /^  deploy:\n    needs: test\n    if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m);
 });
+
+test('main deployment verifies the public backend release SHA after the deploy hook', () => {
+    const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+    assert.match(workflow, /name: Check out deployment verification source/);
+    assert.match(workflow, /name: Use Node\.js 24 for deployment verification/);
+    assert.match(workflow, /verify-public-health-release\.js/);
+    assert.match(workflow, /--health-url\s+https:\/\/wordbot-1-w9il\.onrender\.com\/api\/health/);
+    assert.match(workflow, /--expected-commit\s+\$\{\{ github\.sha \}\}/);
+    assert.match(workflow, /--attempts\s+40/);
+    assert.match(workflow, /--interval-ms\s+15000/);
+});

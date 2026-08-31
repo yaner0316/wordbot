@@ -82,7 +82,9 @@ Use the same `--user-id <USER_UUID>` on both commands when scoping a plan. A cha
 
 In Render, copy the backend service Deploy Hook URL. In GitHub, create repository secret `RENDER_DEPLOY_HOOK_URL` with that URL.
 
-The workflow checks out the reviewed source, selects Node 22, runs `npm ci` and the safe `npm test` command in `backend`, and only then calls the Render hook. Never replace the scoped backend test command with bare `node --test`, because that can collect operational scripts outside `backend/test/**/*.test.js`.
+The workflow checks out the reviewed source, selects Node 24, runs `npm ci` and the safe `npm test` command in `backend`, and only then calls the Render hook. Never replace the scoped backend test command with bare `node --test`, because that can collect operational scripts outside `backend/test/**/*.test.js`.
+
+After a `main` deployment, GitHub Actions polls the public `GET /api/health` endpoint for up to ten minutes. The release is successful only when that endpoint is healthy and reports the exact GitHub commit SHA that triggered the deployment. This verification uses no credentials and makes no application, database, cache, or migration request.
 
 ## Rollback and lease checks
 
