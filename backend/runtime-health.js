@@ -1,5 +1,6 @@
 const SUPABASE_REQUIRED_ENV = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
 const REQUIRED_ENV = SUPABASE_REQUIRED_ENV;
+const { getReleaseInfo } = require('./release-info');
 
 const DEFAULT_WORKER_STALL_AFTER_MS = 15 * 60_000;
 
@@ -96,6 +97,7 @@ function getRuntimeHealth({
         ok: missing.length === 0,
         service: 'wordbot-backend',
         version,
+        release: getReleaseInfo(env),
         time: now(),
         dataSource,
         env: envStatus,

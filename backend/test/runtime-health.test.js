@@ -49,6 +49,19 @@ test('runtime health is ok when all required variables are present', () => {
     assert.deepEqual(health.missing, []);
 });
 
+test('runtime health exposes a sanitized Render release commit', () => {
+    const health = getRuntimeHealth({
+        env: {
+            RENDER_GIT_COMMIT: 'A1B478611653E7715C99B1FD4929836249C57831',
+        },
+    });
+
+    assert.deepEqual(health.release, {
+        commit: 'a1b478611653e7715c99b1fd4929836249c57831',
+        source: 'render',
+    });
+});
+
 
 test('runtime health reports question cache configuration booleans without secrets', () => {
     const env = {
