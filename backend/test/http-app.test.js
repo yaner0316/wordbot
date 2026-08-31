@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createApp } = require('../http-app');
+const { ACCOUNT_FAILURE_LIMIT, createAuthRateLimiter } = require('../auth-rate-limit');
 
 async function withServer(app, run) {
     const server = app.listen(0, '127.0.0.1');
@@ -41,6 +42,101 @@ test('auth endpoints call the server-side account service', async () => {
             ['login', { username: 'Draggy', password: 'secret1' }],
         ]);
     });
+});
+
+test('child login rate limit returns a generic 429 before the account adapter is called', async () => {
+    const calls = [];
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        authRateLimiter: createAuthRateLimiter({ now: () => 0 }),
+        loginUser: async input => {
+            calls.push(input);
+            throw new Error('username/password error');
+        },
+    });
+
+    await withServer(app, async baseUrl => {
+        for (let attempt = 0; attempt < ACCOUNT_FAILURE_LIMIT; attempt += 1) {
+            const response = await fetch(`${baseUrl}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.20' },
+                body: JSON.stringify({ username: 'student', password: 'wrong-password' }),
+            });
+            assert.equal(response.status, 400);
+        }
+
+        const blocked = await fetch(`${baseUrl}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.20' },
+            body: JSON.stringify({ username: 'student', password: 'wrong-password' }),
+        });
+
+        assert.equal(blocked.status, 429);
+        assert.equal(blocked.headers.get('retry-after'), '900');
+        assert.deepEqual(await blocked.json(), {
+            error: 'Too many attempts. Try again later.',
+            code: 'AUTH_RATE_LIMITED',
+        });
+    });
+
+    assert.equal(calls.length, ACCOUNT_FAILURE_LIMIT);
+});
+
+test('all protected auth routes are checked before their account adapters', async () => {
+    const checks = [];
+    const adapterCalls = [];
+    const authRateLimiter = {
+        consume(request) {
+            checks.push(request);
+            return { allowed: false, retryAfterSeconds: 60 };
+        },
+        recordFailure() {},
+        recordSuccess() {},
+    };
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        authRateLimiter,
+        registerUser: async () => adapterCalls.push('register'),
+        loginUser: async () => adapterCalls.push('login'),
+        verifyParentLogin: async () => adapterCalls.push('parent-login'),
+        setParentCredentials: async () => adapterCalls.push('parent-setup'),
+        resetChildPassword: async () => adapterCalls.push('parent-reset'),
+    });
+
+    await withServer(app, async baseUrl => {
+        const requests = [
+            ['/api/auth/register', { username: 'student', password: 'pass' }],
+            ['/api/auth/login', { username: 'student', password: 'pass' }],
+            ['/api/auth/parent/login', { user: 'student', parentUsername: 'parent', password: 'pass' }],
+            ['/api/auth/parent/setup', { user: 'student', childPassword: 'pass', parentUsername: 'parent', parentPassword: 'pass' }],
+            ['/api/auth/parent/reset-child-password', { user: 'student', parentUsername: 'parent', parentPassword: 'pass', newPassword: 'next-pass' }],
+        ];
+        for (const [path, body] of requests) {
+            const response = await fetch(baseUrl + path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.21' },
+                body: JSON.stringify(body),
+            });
+            assert.equal(response.status, 429);
+            assert.equal(response.headers.get('retry-after'), '60');
+        }
+    });
+
+    assert.deepEqual(adapterCalls, []);
+    assert.deepEqual(checks.map(check => check.route), [
+        'register',
+        'child-login',
+        'parent-login',
+        'parent-setup',
+        'parent-reset',
+    ]);
+    assert.deepEqual(checks.map(check => check.account), [
+        'student',
+        'student',
+        'student:parent',
+        'student:parent',
+        'student:parent',
+    ]);
 });
 
 test('session progress endpoint is registered when the progress adapter is supplied', async () => {

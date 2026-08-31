@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const { createAuthRateLimiter } = require('./auth-rate-limit');
 const {
     FORMAL_QUIZ_REQUIRED_COUNT,
     isResumableQuizSession,
@@ -133,6 +134,37 @@ function startWrongQuestionCachePrebuild({ prebuildWrongQuestionCache, user, tes
         console.warn('wrong-question cache prebuild failed:', error.message);
     }
 }
+
+function authRateLimitRequest(req, route, account) {
+    return {
+        route,
+        account: String(account || '').trim(),
+        ip: String(req.ip || req.socket?.remoteAddress || '').trim(),
+    };
+}
+
+function rejectRateLimitedAuth(res, outcome) {
+    res.set('Retry-After', String(Math.max(1, Number(outcome?.retryAfterSeconds) || 1)));
+    return res.status(429).json({
+        error: 'Too many attempts. Try again later.',
+        code: 'AUTH_RATE_LIMITED',
+    });
+}
+
+async function runProtectedAuth({ req, res, limiter, route, account, recordCredentialFailure = false, action }) {
+    const request = authRateLimitRequest(req, route, account);
+    const outcome = limiter.consume(request);
+    if (!outcome?.allowed) return rejectRateLimitedAuth(res, outcome);
+    try {
+        const result = await action();
+        limiter.recordSuccess(request);
+        return res.json(result);
+    } catch (error) {
+        if (recordCredentialFailure) limiter.recordFailure(request);
+        return res.status(400).json({ error: error.message });
+    }
+}
+
 function createApp({
     submitAnswers,
     registerUser,
@@ -153,49 +185,68 @@ function createApp({
     onParentLogin,
     requireUserSession,
     corsEnvironment = process.env,
+    authRateLimiter = createAuthRateLimiter(),
+    trustedProxyHops = 1,
 }) {
     if (typeof submitAnswers !== 'function') {
         throw new Error('createApp requires submitAnswers');
     }
 
     const app = express();
+    app.set('trust proxy', trustedProxyHops);
     app.use(cors(createCorsOptions(corsEnvironment)));
     app.use(express.json());
     app.use(addErrorContract);
 
     if (typeof registerUser === 'function') {
         app.post('/api/auth/register', async (req, res) => {
-            try {
-                const { username, password } = req.body;
-                res.json(await registerUser({ username, password }));
-            } catch (error) {
-                res.status(400).json({ error: error.message });
-            }
+            const { username, password } = req.body;
+            await runProtectedAuth({
+                req,
+                res,
+                limiter: authRateLimiter,
+                route: 'register',
+                account: username,
+                action: () => registerUser({ username, password }),
+            });
         });
     }
 
     if (typeof loginUser === 'function') {
         app.post('/api/auth/login', async (req, res) => {
-            try {
-                const { identifier, username, password } = req.body;
-                const result = await loginUser({ username: identifier || username, password });
-                if (typeof onUserLogin === 'function') await onUserLogin({ req, res, result });
-                res.json(result);
-            } catch (error) {
-                res.status(400).json({ error: error.message });
-            }
+            const { identifier, username, password } = req.body;
+            const account = identifier || username;
+            await runProtectedAuth({
+                req,
+                res,
+                limiter: authRateLimiter,
+                route: 'child-login',
+                account,
+                recordCredentialFailure: true,
+                action: async () => {
+                    const result = await loginUser({ username: account, password });
+                    if (typeof onUserLogin === 'function') await onUserLogin({ req, res, result });
+                    return result;
+                },
+            });
         });
     }
     if (typeof verifyParentLogin === 'function') {
         app.post('/api/auth/parent/login', async (req, res) => {
-            try {
-                const { user, parentUsername, password } = req.body;
-                const result = await verifyParentLogin({ user, parentUsername, password });
-                if (typeof onParentLogin === 'function') await onParentLogin({ req, res, result });
-                res.json(result);
-            } catch (error) {
-                res.status(400).json({ error: error.message });
-            }
+            const { user, parentUsername, password } = req.body;
+            await runProtectedAuth({
+                req,
+                res,
+                limiter: authRateLimiter,
+                route: 'parent-login',
+                account: `${user || ''}:${parentUsername || ''}`,
+                recordCredentialFailure: true,
+                action: async () => {
+                    const result = await verifyParentLogin({ user, parentUsername, password });
+                    if (typeof onParentLogin === 'function') await onParentLogin({ req, res, result });
+                    return result;
+                },
+            });
         });
     }
 
@@ -205,23 +256,31 @@ function createApp({
 
     if (typeof setParentCredentials === 'function') {
         app.post('/api/auth/parent/setup', async (req, res) => {
-            try {
-                const { user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword } = req.body;
-                res.json(await setParentCredentials({ user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword }));
-            } catch (error) {
-                res.status(400).json({ error: error.message });
-            }
+            const { user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword } = req.body;
+            await runProtectedAuth({
+                req,
+                res,
+                limiter: authRateLimiter,
+                route: 'parent-setup',
+                account: `${user || ''}:${parentUsername || ''}`,
+                recordCredentialFailure: true,
+                action: () => setParentCredentials({ user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword }),
+            });
         });
     }
 
     if (typeof resetChildPassword === 'function') {
         app.post('/api/auth/parent/reset-child-password', async (req, res) => {
-            try {
-                const { user, parentUsername, parentPassword, newPassword } = req.body;
-                res.json(await resetChildPassword({ user, parentUsername, parentPassword, newPassword }));
-            } catch (error) {
-                res.status(400).json({ error: error.message });
-            }
+            const { user, parentUsername, parentPassword, newPassword } = req.body;
+            await runProtectedAuth({
+                req,
+                res,
+                limiter: authRateLimiter,
+                route: 'parent-reset',
+                account: `${user || ''}:${parentUsername || ''}`,
+                recordCredentialFailure: true,
+                action: () => resetChildPassword({ user, parentUsername, parentPassword, newPassword }),
+            });
         });
     }
 
