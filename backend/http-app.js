@@ -180,6 +180,7 @@ function createApp({
     submitReviewRound,
     deferReviewRound,
     getReviewSummary,
+    lookupDictionarySenses,
     getRuntimeHealth,
     onUserLogin,
     onParentLogin,
@@ -251,7 +252,7 @@ function createApp({
     }
 
     if (typeof requireUserSession === 'function') {
-        app.use(['/api/quiz/session', '/api/submit', '/api/reviews'], requireUserSession);
+        app.use(['/api/quiz/session', '/api/submit', '/api/reviews', '/api/word-senses'], requireUserSession);
     }
 
     if (typeof setParentCredentials === 'function') {
@@ -338,6 +339,19 @@ function createApp({
             : { ok: true, service: 'wordbot-backend' };
         res.status(health.ok ? 200 : 503).json(health);
     });
+
+    if (typeof lookupDictionarySenses === 'function') {
+        app.get('/api/word-senses', async (req, res) => {
+            try {
+                const word = String(req.query.word || '').trim();
+                if (!word) return res.status(400).json({ error: '缺少单词' });
+                res.json({ word, senses: await lookupDictionarySenses(word) });
+            } catch (error) {
+                const status = isClientError(error) || error.message === 'DICTIONARY_WORD_REQUIRED' ? 400 : 502;
+                res.status(status).json({ error: error.message });
+            }
+        });
+    }
 
     app.post('/api/submit', async (req, res) => {
         try {

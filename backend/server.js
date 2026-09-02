@@ -7,6 +7,7 @@ const { normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
+const { lookupDictionarySenses } = require('./dictionary-senses');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
 const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
 const {
@@ -385,6 +386,7 @@ const app = createApp({
     submitReviewRound,
     deferReviewRound,
     getReviewSummary,
+    lookupDictionarySenses,
     getRuntimeHealth: () => getServerRuntimeHealth(),
     onUserLogin: ({ res, result }) => setSessionCookie(res, result, 'user'),
     onParentLogin: ({ res, result }) => setSessionCookie(res, result, 'parent'),

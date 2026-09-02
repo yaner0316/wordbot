@@ -15,6 +15,23 @@ async function withServer(app, run) {
     }
 }
 
+test('word-sense lookup is session-protected and returns only the injected selectable senses', async () => {
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        requireUserSession: (req, res, next) => next(),
+        lookupDictionarySenses: async word => [{ partOfSpeech: 'noun', definition: word + ' definition' }],
+    });
+
+    await withServer(app, async baseUrl => {
+        const response = await fetch(baseUrl + '/api/word-senses?word=bank');
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            word: 'bank',
+            senses: [{ partOfSpeech: 'noun', definition: 'bank definition' }],
+        });
+    });
+});
+
 test('auth endpoints call the server-side account service', async () => {
     const calls = [];
     const app = createApp({
