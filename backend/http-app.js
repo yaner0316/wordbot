@@ -91,7 +91,7 @@ function hasWrongAnswers(result) {
 }
 
 function startReviewPrebuild({ createReviewRound, user, testId, result }) {
-    if (typeof createReviewRound !== 'function' || !hasWrongAnswers(result)) return;
+    if (typeof createReviewRound !== 'function') return;
     try {
         Promise.resolve(createReviewRound({
             userId: user,

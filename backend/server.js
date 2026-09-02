@@ -725,14 +725,16 @@ app.post('/api/admin/validateWords', async (req, res) => {
 
 app.post('/api/admin/addWords', async (req, res) => {
     try {
-        const { targetUser, words, confirmNewMeanings = false, skipDuplicateWords = false } = req.body;
+        const { targetUser, words, confirmNewMeanings = false, skipDuplicateWords = false, selectedSenseFlow = false } = req.body;
         if (!targetUser || !words || !Array.isArray(words) || words.length === 0) {
             return res.status(400).json({ error: '缺少参数' });
         }
-        const result = await addWords(targetUser, words, {
+        const options = {
             confirmNewMeanings: Boolean(confirmNewMeanings),
             skipDuplicateWords: Boolean(skipDuplicateWords),
-        });
+        };
+        if (selectedSenseFlow) options.selectedSenseFlow = true;
+        const result = await addWords(targetUser, words, options);
         const needsConfirmation = result?.code === 'DUPLICATE_WORD_CONFIRMATION_REQUIRED' ||
             result?.code === 'NEW_MEANING_REQUIRES_MEANING';
         const statusCode = needsConfirmation ? 409 : (result?.success === false ? 422 : 200);

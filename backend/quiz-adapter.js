@@ -17,6 +17,7 @@ const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable,
 const { generateElementaryTemplateContext } = require('./elementary-context');
 const { normalizeSubmittedAnswer } = require('./mastery-evidence');
 const { evaluateMeaning } = require('./mastery-service');
+const { getSelectedSenseContextStage, hasSelectedSenseFlowFlag } = require('./selected-sense-flow');
 
 const ANSWER_LETTERS = ['A', 'B', 'C', 'D'];
 
@@ -69,6 +70,7 @@ function toFeishuWordRecord(row, { username }) {
             Level: normalizeOptionalLevel(row.level),
             Status: row.mastery_status || '',
             Error_Count: row.error_count ?? 0,
+            Quality_Flags: Array.isArray(row.quality_flags) ? row.quality_flags.join(',') : row.quality_flags || '',
             record_time: recordTime,
             remember_time: toMillis(row.remembered_at) || '',
         },
@@ -343,6 +345,7 @@ async function generateQuizWithDataSource({
         sourceRecordIdByWordId,
     }));
     const questionCacheRows = cacheRows.map((row) => toFeishuCacheRow(row, { username: canonicalUsername }));
+    const wordRowsBySourceId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
 
     const queue = buildQuizWordQueue({
         wordRecords,
@@ -373,6 +376,7 @@ async function generateQuizWithDataSource({
         ...question,
         source: 'question_cache',
         correctAnswer: question.answer,
+        selectedSenseFlow: hasSelectedSenseFlowFlag(wordRowsBySourceId.get(String(question.record_id || question.wordRecordId || '').trim())),
     }));
 
     const testId = createAssessmentId(mode, createId);
@@ -567,6 +571,7 @@ async function submitQuizWithDataSource({
     let baseAssessmentRows = [];
     let sourceRecordIdByWordId = new Map();
     let wordRecords = [];
+    let wordRowsByRecordId = new Map();
     if (shouldUpdateMastery) {
         wordRows = typeof dataSource.getWordsForUser === 'function'
             ? await dataSource.getWordsForUser(username)
@@ -578,6 +583,7 @@ async function submitQuizWithDataSource({
             ? await dataSource.getMasteryAssessmentsForWords(username, sourceWordRecordIds)
             : await dataSource.getAssessmentsForUser(username);
         sourceRecordIdByWordId = buildWordSourceIdMap(wordRows);
+        wordRowsByRecordId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
         wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username }));
     }
 
@@ -673,6 +679,10 @@ async function submitQuizWithDataSource({
             correctAnswer,
             contextZh: question.contextCN || question.context_cn || question.contextTranslation || '',
             optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
+            assessmentKind: getSelectedSenseContextStage(
+                wordRowsByRecordId.get(sourceWordRecordId),
+                baseAssessmentRows.filter(row => String(row.source_word_record_id || '').trim() === sourceWordRecordId)
+            ) || undefined,
         };
         pendingSubmissions.push({ question, sourceWordRecordId, isCorrect, input });
         results.push({

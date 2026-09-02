@@ -1,6 +1,7 @@
 const { assessmentTimestamp, evaluateWordMastery, isFormalAssessment, isSubmittedFormalQuiz } = require('./mastery-evidence');
 const { getTypePolicy, isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
 const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
+const { hasSelectedSenseFlowFlag, getSelectedSenseContextStage } = require('./selected-sense-flow');
 
 function fieldValue(value) {
     if (value === undefined || value === null) return '';
@@ -253,6 +254,7 @@ function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [
         .filter(record => userKey(record.fields?.user) === targetUser)
         .filter(record => !level || !fieldValue(record.fields?.Level).trim() || fieldValue(record.fields?.Level).trim() === level || readyCacheRecordIds.has(record.record_id))
         .filter(record => isPastCooldown(record, { now, minAgeMs, latestFormalDisplayAt: formalDisplayByRecordId.get(record.record_id) || 0 }))
+        .filter(record => !hasSelectedSenseFlowFlag(record) || getSelectedSenseContextStage(record, assessmentRecords) !== null)
         .filter(record => !masteryByRecordId.get(record.record_id)?.mastered);
     const oldWrong = eligible.filter(record => assessmentSummary.get(record.record_id)?.lastWrongAt)
         .sort((left, right) => assessmentSummary.get(left.record_id).lastWrongAt - assessmentSummary.get(right.record_id).lastWrongAt || recordTimestamp(left) - recordTimestamp(right));
