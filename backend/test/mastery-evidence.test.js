@@ -13,7 +13,7 @@ const {
 } = require('../mastery-evidence');
 
 // Helper to create a mock record
-function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorrect, yourAnswer = '1|sure', questionType = 1 }) {
+function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorrect, yourAnswer = '1|sure', questionType = 1, assessmentKind = '' }) {
     return {
         fields: {
             record_id: recordId,
@@ -22,6 +22,7 @@ function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorre
             is_correct: isCorrect,
             your_answer: yourAnswer,
             question_type: questionType,
+            assessment_kind: assessmentKind,
         },
     };
 }
@@ -71,6 +72,20 @@ test('evaluateMeaningMastery: no attempts returns unseen', () => {
     assert.strictEqual(result.stage, 'unseen');
     assert.strictEqual(result.mastered, false);
     assert.strictEqual(result.evidenceCount, 0);
+});
+
+test('selected-sense mastery ignores initial context and review, then preserves earlier evidence after a wrong context', () => {
+    const records = [
+        createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1', assessmentKind: 'initial_context' }),
+        createRecord({ testId: 'real-review-a', testTime: getTimestamp(2026, 8, 2), isCorrect: '1', assessmentKind: 'review' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 3), isCorrect: '1', assessmentKind: 'context_evidence' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 4), isCorrect: '0', assessmentKind: 'context_evidence' }),
+        createRecord({ testTime: getTimestamp(2026, 8, 5), isCorrect: '1', assessmentKind: 'context_evidence' }),
+    ];
+    const result = evaluateMeaningMastery(records, value => value === '1');
+    assert.equal(result.mastered, true);
+    assert.equal(result.evidenceCount, 2);
+    assert.equal(result.correctAfterLastWrongCount, 2);
 });
 
 test('evaluateMeaningMastery: single correct attempt returns consolidating', () => {

@@ -93,7 +93,7 @@ function isFormalAssessment(record) {
     const testId = fieldValue(fields.test_id).trim();
     if (!/^real(?:-|$)/.test(testId) || /^real-(?:review|preview|test)/.test(testId)) return false;
     const kind = fieldValue(fields.assessment_kind).trim().toLowerCase();
-    if (['review', 'test', 'preview'].includes(kind)) return false;
+    if (['review', 'test', 'preview', 'initial_context'].includes(kind)) return false;
     const rawFlag = fields.is_real_assessment !== undefined
         ? fields.is_real_assessment
         : record?.is_real_assessment;
@@ -107,6 +107,24 @@ function isSubmittedFormalQuiz(record) {
 
 function evaluateMeaningMastery(records, isCorrectValue) {
     const attempts = records.filter(isSubmittedFormalQuiz).sort((a, b) => assessmentTimestamp(a) - assessmentTimestamp(b));
+    const contextEvidence = attempts.filter(record =>
+        fieldValue(record.fields?.assessment_kind).trim().toLowerCase() === 'context_evidence'
+    );
+    if (contextEvidence.length) {
+        const correctAttempts = contextEvidence.filter(record => isCorrectValue(record.fields?.is_correct));
+        const uncertainCorrect = correctAttempts.filter(record => parseStoredAnswer(fieldValue(record.fields?.your_answer)).confidence === ANSWER_CONFIDENCE.GUESS);
+        const mastered = correctAttempts.length >= 2;
+        return {
+            mastered,
+            stage: mastered ? 'mastered' : correctAttempts.length ? 'consolidating' : 'recognized',
+            evidenceCount: correctAttempts.length,
+            uncertainCorrectCount: uncertainCorrect.length,
+            correctAfterLastWrongCount: correctAttempts.length,
+            latestCorrectIntervalMs: null,
+            distinctDays: new Set(correctAttempts.map(assessmentTimestamp).filter(Boolean).map(learningDay)).size,
+            distinctTypes: new Set(correctAttempts.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)).size,
+        };
+    }
     let lastWrongIndex = -1;
     attempts.forEach((record, index) => { if (!isCorrectValue(record.fields?.is_correct)) lastWrongIndex = index; });
     const correctAttempts = attempts.slice(lastWrongIndex + 1).filter(record => isCorrectValue(record.fields?.is_correct));

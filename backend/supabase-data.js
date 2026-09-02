@@ -40,6 +40,7 @@ const {
     normalizeFormalDisplayEvent,
 } = require('./quiz-adapter');
 const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
+const { SELECTED_SENSE_FLOW_FLAG, hasSelectedSenseFlowFlag, buildMeaningChoiceOptions } = require('./selected-sense-flow');
 const {
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
@@ -1928,7 +1929,7 @@ function buildSupabaseReviewRoundResponse(rows, reviewId) {
             context: row.question_text || '',
             options: Array.isArray(row.options) ? row.options : [],
             answer: Number(row.question_type) === 4 ? undefined : row.correct_answer,
-            answerMode: Number(row.question_type) === 4 ? 'cn_meaning' : undefined,
+            answerMode: Number(row.question_type) === 4 ? (Array.isArray(row.options) && row.options.length === 4 ? 'sense_choice' : 'cn_meaning') : undefined,
             correctMeaning: row.correct_answer || '',
             correctMeanings: null,
         })),
@@ -1945,18 +1946,28 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     const existing = await findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId);
     if (existing) return existing;
 
-    const wrongRows = sourceRows.filter(row => !isCorrectAssessmentRow(row));
-    if (!wrongRows.length) return { sourceTestId, parentReviewId, complete: true, questions: [] };
+    const allWords = await getWordsForUserWithClient(client, userId);
+    const reviewRows = [];
+    for (const row of sourceRows) {
+        const word = await getWordInfoForReview(client, user.id, row);
+        const shouldReviewInitial = !parentReviewId && row.assessment_kind === 'initial_context' && hasSelectedSenseFlowFlag(word);
+        if (!isCorrectAssessmentRow(row) || shouldReviewInitial) reviewRows.push({ row, word, selectedSense: shouldReviewInitial });
+    }
+    if (!reviewRows.length) return { sourceTestId, parentReviewId, complete: true, questions: [] };
 
     const mode = getAssessmentMode(sourceTestId);
     const reviewId = mode + '-review-' + crypto.randomUUID().split('-')[0];
     const round = parentReviewId ? Number(sourceRows[0].review_round || 0) + 1 : 1;
     const assessedAtBase = Date.now();
     const insertRows = [];
-    for (let index = 0; index < wrongRows.length; index++) {
-        const row = wrongRows[index];
-        const word = await getWordInfoForReview(client, user.id, row);
+    for (let index = 0; index < reviewRows.length; index++) {
+        const { row, word, selectedSense } = reviewRows[index];
         const correctMeaning = String(word.meaning_zh || row.correct_answer || word.meaning_en || word.word || '').trim();
+        const choice = selectedSense ? buildMeaningChoiceOptions({
+            correctMeaning,
+            candidateMeanings: allWords.map(item => item.meaning_zh),
+        }) : null;
+        if (selectedSense && !choice) throw new Error('SELECTED_SENSE_REVIEW_OPTIONS_UNAVAILABLE');
         const assessedAt = toIsoString(assessedAtBase + index);
         insertRows.push({
             user_id: user.id,
@@ -1970,8 +1981,8 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
             level: normalizeOptionalLearningLevel(row.level || word.level),
             word_snapshot: String(row.word_snapshot || word.word || '').trim(),
             question_text: '',
-            options: [],
-            correct_answer: correctMeaning,
+            options: choice?.options || [],
+            correct_answer: choice?.answer || correctMeaning,
             submitted_answer: null,
             answer_confidence: null,
             is_correct: null,
@@ -2188,6 +2199,12 @@ async function applyQuizCacheLifecycleWithClient(client, { userId, questions = [
         const cacheId = question?.cacheRecordId;
         if (!cacheId) continue;
         const current = await resolveCacheRow(client, cacheId);
+        if (result?.correct === false && question?.selectedSenseFlow) {
+            const { error: retireError } = await client.from('question_cache').update({ cache_state: 'retired' }).eq('id', current.id);
+            ensureNoError(retireError, 'applyQuizCacheLifecycle.retireSelectedSenseRetry');
+            await enqueueQuestionGenerationJobWithConfirmation(client, { userId: user.id, wordId: current.word_id, reason: 'selected_sense_retry' });
+            continue;
+        }
         if (String(result?.correct) !== 'true') continue;
         const { data: reserved, error: reservedError } = await client
             .from('question_cache')
@@ -2488,15 +2505,22 @@ async function addWordWithClient(client, input) {
     const meaning = String(input.meaning || '').trim();
     if (!word || !meaning) throw new Error('WORD_AND_MEANING_REQUIRED');
 
+    const translatedMeaning = input.selectedSenseFlow && !input.meaningZh && !input.cnMeaning && typeof input.translateMeaning === 'function'
+        ? await input.translateMeaning(meaning)
+        : '';
+    if (input.selectedSenseFlow && !String(input.meaningZh || input.cnMeaning || translatedMeaning || '').trim()) {
+        throw new Error('SELECTED_SENSE_TRANSLATION_REQUIRED');
+    }
     const row = {
         user_id: user.id,
         word,
         meaning_en: meaning,
-        meaning_zh: input.meaningZh || input.cnMeaning || null,
+        meaning_zh: input.meaningZh || input.cnMeaning || translatedMeaning || null,
         context_en: input.context || input.contextEn || null,
         context_zh: input.contextZh || null,
         level: normalizeOptionalLearningLevel(input.level || user.learning_level),
         mastery_status: 'pending',
+        quality_flags: input.selectedSenseFlow ? [SELECTED_SENSE_FLOW_FLAG] : [],
         entered_at: toIsoString(input.recordTime),
     };
     const { data, error } = await client
@@ -2580,6 +2604,11 @@ async function addWordsWithClient(client, targetUser, words, options = {}) {
             await addWordWithClient(client, {
                 username: targetUser,
                 ...entry,
+                selectedSenseFlow: Boolean(options.selectedSenseFlow),
+                translateMeaning: async meaning => {
+                    const translated = await (options.translateWords || translateSupabaseWords)([meaning]);
+                    return String(translated?.[String(meaning).trim().toLowerCase()] || '').trim();
+                },
             });
             count++;
         } catch (error) {
@@ -3214,7 +3243,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         requestQuestionCacheRebuildForUser: username => requestQuestionCacheRebuildForUserWithClient(client, username),
         rebuildQuestionCacheForUser: username => rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator, translator, contextTranslator, generateContext, semanticAudit, requireSemanticAudit),
         addWord: input => addWordWithClient(client, input),
-        addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, options),
+        addWords: (targetUser, words, options) => addWordsWithClient(client, targetUser, words, { ...options, translateWords: translator }),
         saveQuizSession: (username, testId, questions, options) =>
             saveQuizSessionWithClient(client, username, testId, questions, options),
         getQuizSession: (username, testId, options) =>
