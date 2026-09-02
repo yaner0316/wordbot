@@ -17,6 +17,25 @@ test('semantic audit rejects multiple valid synonyms and uncertain results', asy
     assert.equal(uncertain.approved, false);
 });
 
+test('semantic audit instructs the reviewer to reject every plausible alternate completion', async () => {
+    let prompt = '';
+    const result = await auditUniqueAnswer({
+        context: 'After the bell rang, the library was _____ as students opened their books to study.',
+        options: ['A. chaotic', 'B. crowded', 'C. empty', 'D. quiet'],
+        optionMeanings: ['混乱的', '拥挤的', '空荡的', '安静的'],
+        answer: 'D',
+    }, {
+        callModel: async value => {
+            prompt = value;
+            return '{"validLetters":["B","D"],"certain":true,"reason":"both complete the sentence"}';
+        },
+    });
+
+    assert.match(prompt, /plausibly complete the sentence/i);
+    assert.equal(result.approved, false);
+    assert.deepEqual(result.validLetters, ['B', 'D']);
+});
+
 test('semantic audit fails closed when the model is unavailable or malformed', async () => {
     const unavailable = await auditUniqueAnswer(question, { callModel: async () => { throw new Error('offline'); } });
     const malformed = await auditUniqueAnswer(question, { callModel: async () => 'not json' });

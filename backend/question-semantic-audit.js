@@ -32,6 +32,8 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
     const prompt = [
         'Audit this child vocabulary fill-in question for semantic uniqueness.',
         'Judge each option in the exact sentence, not merely its dictionary meaning.',
+        'Reject the question if any other option can plausibly complete the sentence in ordinary child-facing English.',
+        'Do not accept a merely better answer: approve only when every other option is clearly wrong in this exact context.',
         'Return JSON only: {"validLetters":["A"],"certain":true,"reason":"short reason"}.',
         'If more than one option could naturally fit, list all of them. If uncertain, set certain false.',
         JSON.stringify({ context: question?.context, options: question?.options, optionMeanings: question?.optionMeanings, expectedAnswer: answer }),
