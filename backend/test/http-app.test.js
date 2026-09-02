@@ -178,6 +178,34 @@ test('session progress endpoint is registered when the progress adapter is suppl
     }]);
 });
 
+test('quiz session endpoints return readable missing-parameter errors', async () => {
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        getActiveFormalQuizChallenge: async () => null,
+        updateQuizSessionProgress: async () => null,
+    });
+
+    await withServer(app, async baseUrl => {
+        const missingUser = await fetch(`${baseUrl}/api/quiz/session`);
+        assert.equal(missingUser.status, 400);
+        assert.deepEqual(await missingUser.json(), {
+            error: '缺少用户ID',
+            code: 'BAD_REQUEST',
+        });
+
+        const missingProgressParameters = await fetch(`${baseUrl}/api/quiz/session/progress`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'student', testId: 'real-1' }),
+        });
+        assert.equal(missingProgressParameters.status, 400);
+        assert.deepEqual(await missingProgressParameters.json(), {
+            error: '缺少参数',
+            code: 'BAD_REQUEST',
+        });
+    });
+});
+
 test('session guard blocks createApp private routes before business adapters run', async () => {
     const calls = [];
     const requireUserSession = (req, res) => {

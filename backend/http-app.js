@@ -288,7 +288,7 @@ function createApp({
         app.get('/api/quiz/session', async (req, res) => {
             try {
                 const { user } = req.query;
-                if (!user) return res.status(400).json({ error: '缂哄皯鐢ㄦ埛ID' });
+                if (!user) return res.status(400).json({ error: '缺少用户ID' });
                 const session = await getActiveFormalQuizChallenge(user);
                 if (!isCompleteCacheOnlyFormalSession(session)) return res.json({ active: false });
                 const questions = session.questions;
@@ -322,7 +322,7 @@ function createApp({
             try {
                 const { user, testId, currentQuestion, answers } = req.body;
                 if (!user || !testId || !Array.isArray(answers)) {
-                    return res.status(400).json({ error: '缂哄皯鍙傛暟' });
+                    return res.status(400).json({ error: '缺少参数' });
                 }
                 const session = await updateQuizSessionProgress(user, testId, { currentQuestion, answers });
                 res.json({ saved: Boolean(session), testId });
