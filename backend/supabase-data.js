@@ -23,7 +23,7 @@ const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quali
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
-const { auditUniqueAnswer } = require('./question-semantic-audit');
+const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
 const { createSupabaseAdminAdapter } = require('./supabase-admin');
 const { createSupabaseAuthAdapter } = require('./supabase-auth');
@@ -752,6 +752,7 @@ function toQuestionCacheStatusRecord(row, { user, word }) {
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
             ai_audit_status: row.ai_audit_status || '',
+            source_version: row.source_version || '',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),
             question_fingerprint: row.question_fingerprint || '',
@@ -1239,7 +1240,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     if (audit?.approved !== true || audit?.status !== 'approved'
         || validLetters.length !== 1 || validLetters[0] !== answer) return null;
     row.ai_audit_status = 'approved';
-    row.source_version = 'supabase-contextual-variant-v3';
+    row.source_version = buildAttestedQuestionSourceVersion('supabase-contextual-variant-v3');
     return getCacheQuestionReadinessIssues(
         toQuestionCacheStatusRecord(row, { user, word }),
         { requireAiAudit: true }
@@ -2701,6 +2702,7 @@ function assertFormalChallengeQuestionsRenderable(questions) {
                 option_meanings: optionMeanings,
                 correct_meaning: question.correctMeaning || question.correct_meaning || optionMeanings[answerIndex],
                 ai_audit_status: question.aiAuditStatus || question.ai_audit_status || '',
+                source_version: question.sourceVersion || question.source_version || '',
             },
         });
         const formalQualityIssues = readinessIssues.filter(issue => issue !== 'missing_generated_at');

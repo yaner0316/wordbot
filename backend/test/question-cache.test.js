@@ -440,14 +440,17 @@ test('cache status summary counts only questions that are actually selectable', 
     assert.equal(summary.byRoundType.primary.ready, 1);
 });
 
-test('approved-only cache gate rejects skipped AI audits after the rollout flag is enabled', () => {
+test('approved-only cache gate requires the current semantic audit policy after the rollout flag is enabled', () => {
     const skipped = question({ ai_audit_status: 'skipped' });
     const approved = question({ ai_audit_status: 'approved' });
+    const current = question({ ai_audit_status: 'approved', source_version: 'supabase-contextual-variant-v3|unique-answer-v2' });
 
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: false }), true);
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: true }), false);
     assert.ok(getCacheQuestionReadinessIssues(skipped, { requireAiAudit: true }).includes('ai_audit_not_approved'));
-    assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), true);
+    assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), false);
+    assert.ok(getCacheQuestionReadinessIssues(approved, { requireAiAudit: true }).includes('ai_audit_policy_version_required'));
+    assert.equal(isCacheQuestionReady(current, { requireAiAudit: true }), true);
 });
 
 test('strips optional cache fields before retrying older Feishu cache tables', () => {
