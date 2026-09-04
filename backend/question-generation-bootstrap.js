@@ -14,7 +14,7 @@ const { auditUniqueAnswer } = require('./question-semantic-audit');
 const DEFAULT_QUESTION_WORKER_BATCH_SIZE = 1;
 const DEFAULT_QUESTION_WORKER_LEASE_MS = 15 * 60 * 1000;
 const DEFAULT_QUESTION_WORKER_MAX_ATTEMPTS = 20;
-const DEFAULT_QUESTION_GENERATION_ATTEMPTS = 1;
+const DEFAULT_QUESTION_GENERATION_ATTEMPTS = 3;
 
 function createDefaultCandidateBuilderOptions() {
     return {
