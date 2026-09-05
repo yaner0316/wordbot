@@ -13,11 +13,12 @@ const {
 } = require('../mastery-evidence');
 
 // Helper to create a mock record
-function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorrect, yourAnswer = '1|sure', questionType = 1, assessmentKind = '' }) {
+function createRecord({ recordId = 'rec1', testId, testTime, isCorrect, yourAnswer = '1|sure', questionType = 1, assessmentKind = '' }) {
     return {
         fields: {
             record_id: recordId,
-            test_id: testId,
+            test_id: testId || `real-${testTime}`,
+            context: `Synthetic context ${testTime} ____.`,
             test_time: testTime,
             is_correct: isCorrect,
             your_answer: yourAnswer,
@@ -74,7 +75,7 @@ test('evaluateMeaningMastery: no attempts returns unseen', () => {
     assert.strictEqual(result.evidenceCount, 0);
 });
 
-test('selected-sense mastery ignores initial context and review, then preserves earlier evidence after a wrong context', () => {
+test('selected-sense mastery ignores initial context and review, then resets earlier evidence after a wrong context', () => {
     const records = [
         createRecord({ testTime: getTimestamp(2026, 8, 1), isCorrect: '1', assessmentKind: 'initial_context' }),
         createRecord({ testId: 'real-review-a', testTime: getTimestamp(2026, 8, 2), isCorrect: '1', assessmentKind: 'review' }),
@@ -83,9 +84,9 @@ test('selected-sense mastery ignores initial context and review, then preserves 
         createRecord({ testTime: getTimestamp(2026, 8, 5), isCorrect: '1', assessmentKind: 'context_evidence' }),
     ];
     const result = evaluateMeaningMastery(records, value => value === '1');
-    assert.equal(result.mastered, true);
-    assert.equal(result.evidenceCount, 2);
-    assert.equal(result.correctAfterLastWrongCount, 2);
+    assert.equal(result.mastered, false);
+    assert.equal(result.evidenceCount, 1);
+    assert.equal(result.correctAfterLastWrongCount, 1);
 });
 
 test('evaluateMeaningMastery: single correct attempt returns consolidating', () => {
@@ -227,7 +228,7 @@ test('evaluateWordMastery: one meaning not mastered', () => {
     ];
     const result = evaluateWordMastery(['rec1', 'rec2'], records, v => v === '1');
     assert.strictEqual(result.mastered, false);
-    assert.strictEqual(result.stage, 'mastered'); // strongest stage wins
+    assert.strictEqual(result.stage, 'consolidating'); // all meanings must master
 });
 
 test('evaluateWordMastery: empty recordIds returns not mastered', () => {

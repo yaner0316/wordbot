@@ -93,10 +93,10 @@ test('Supabase stats derive progress and quiz metrics from words and assessments
             { id: 'word-4', user_id: 'user-1', word: 'date', mastery_status: 'pending' },
         ],
         assessments: [
-            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
-            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '2', is_correct: 'correct', submitted_answer: 'A|sure' },
-            { id: 'assessment-3', user_id: 'user-1', word_id: 'word-2', source_word_record_id: 'word-2', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'wrong', submitted_answer: 'B|sure' },
-            { id: 'assessment-4', user_id: 'user-1', word_id: 'word-3', source_word_record_id: 'word-3', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '3', is_correct: 'correct', submitted_answer: 'A|guess' },
+            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-1', question_text: 'Distinct synthetic context 1 ____.', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'word-1', test_id: 'real-quiz-2', question_text: 'Distinct synthetic context 2 ____.', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '2', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-3', user_id: 'user-1', word_id: 'word-2', source_word_record_id: 'word-2', test_id: 'real-quiz-1', question_text: 'Distinct synthetic context 1 ____.', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'wrong', submitted_answer: 'B|sure' },
+            { id: 'assessment-4', user_id: 'user-1', word_id: 'word-3', source_word_record_id: 'word-3', test_id: 'real-quiz-2', question_text: 'Distinct synthetic context 2 ____.', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '3', is_correct: 'correct', submitted_answer: 'A|guess' },
             { id: 'assessment-5', user_id: 'user-1', word_id: 'word-4', source_word_record_id: 'word-4', test_id: 'real-review-1', assessment_kind: 'review', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '4', is_correct: 'correct', submitted_answer: 'A|sure' },
         ],
     });
@@ -2155,8 +2155,8 @@ test('rebuildQuestionCacheForUser removes existing cache rows for mastered words
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
         words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', level: MIDDLE, mastery_status: 'mastered' }],
         assessments: [
-            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
-            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-1', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-1', question_text: 'Distinct synthetic context 1 ____.', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'assessment-2', user_id: 'user-1', word_id: 'word-1', source_word_record_id: 'rec-word-1', test_id: 'real-quiz-2', question_text: 'Distinct synthetic context 2 ____.', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
         ],
         question_cache: [{ id: 'cache-1', user_id: 'user-1', word_id: 'word-1', level: MIDDLE, question_type: '1', quality_status: 'ready', cache_state: 'active' }],
     });
@@ -2480,8 +2480,8 @@ test('rebuildQuestionCacheForUser never seeds mastered words when pending words 
             },
         ],
         assessments: [
-            { id: 'mastered-1', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-1', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
-            { id: 'mastered-2', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'mastered-1', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-1', question_text: 'Distinct synthetic context 1 ____.', assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
+            { id: 'mastered-2', user_id: 'user-1', word_id: 'mastered-word', source_word_record_id: 'rec-mastered-word', test_id: 'real-quiz-2', question_text: 'Distinct synthetic context 2 ____.', assessed_at: '2026-07-21T00:00:00.000Z', question_type: '1', is_correct: 'correct', submitted_answer: 'A|sure' },
         ],
         question_cache: [{ id: 'existing-cache' }],
     });
@@ -4169,4 +4169,12 @@ test('readiness selects the audit source version from the database', async () =>
     const reads=client.readOperations.filter(row=>row.table==='question_cache');
     assert.ok(reads.length);
     assert.ok(reads.every(row=>row.selectColumns==='*' || row.selectColumns.includes('source_version')));
+});
+for (const [label,kinds,answers,expected] of [
+ ['wrong resets selected sense', ['context_evidence','context_evidence','context_evidence'],['correct','wrong','correct'],0],
+ ['preparation is not mastery evidence',['initial_context','context_evidence'],['correct','correct'],0],
+ ['distinct evidence masters',['context_evidence','context_evidence'],['correct','correct'],1],
+]) test(`stats use unified mastery: ${label}`,async()=>{
+ const client=createFakeSupabase({users:[{id:'user-1',username:'synthetic',username_key:'synthetic'}],words:[{id:'word-1',user_id:'user-1',word:'apple',mastery_status:'pending'}],assessments:answers.map((answer,i)=>({id:`a-${i}`,user_id:'user-1',word_id:'word-1',source_word_record_id:'word-1',test_id:`real-${i}`,assessment_kind:kinds[i],assessed_at:new Date(Date.UTC(2026,8,i+1)).toISOString(),question_text:`Context ${i} ____.`,is_correct:answer,submitted_answer:'A|sure'}))});
+ assert.equal((await createSupabaseDataAdapter(client).getStats('synthetic')).masteredWords,expected);
 });

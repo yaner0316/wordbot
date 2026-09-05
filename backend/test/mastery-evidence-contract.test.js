@@ -7,6 +7,7 @@ const shanghai = (day, hour = 10) => Date.UTC(2026, 7, day, hour - 8);
 const record = ({ testId, day, correct, kind, submitted = true }) => ({
     fields: {
         test_id: testId,
+        context: `Context for day ${day} ____.`,
         test_time: shanghai(day),
         is_correct: submitted ? correct : null,
         your_answer: submitted ? 'A|sure' : '',

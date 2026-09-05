@@ -86,7 +86,7 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
         ''
     ).trim();
     return {
-        record_id: sourceRecordId(row),
+        record_id: String(row.feishu_record_id || row.id || '').trim(),
         created_time: assessedAt,
         fields: {
             user: row.username || username,
@@ -105,7 +105,7 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
             test_time: assessedAt,
             level: normalizeOptionalLevel(row.level),
             source: row.source || '',
-            is_correct: row.is_correct || '',
+            is_correct: row.is_correct ?? '',
             your_answer: submittedAnswerField(row),
         },
     };

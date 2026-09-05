@@ -3,8 +3,8 @@
 ## Scope
 
 This flow applies only to meanings entered through the selected dictionary-sense
-path. Existing words and their assessment history retain their current behavior.
-No migration, backfill, cache wipe, or mastery rewrite is part of this change.
+path. Mastery evaluation is shared with existing words, as corrected on 2026-09-05.
+The original staged-entry change did not migrate existing data. The 2026-09-05 correction unifies mastery evaluation and reconciles derived word statuses separately; original answer records remain unchanged.
 
 ## Persistent Contract
 
@@ -20,7 +20,7 @@ The existing `assessments.assessment_kind` column records the flow stage:
    mastery evidence and has no generic judgement copy.
 3. `context_evidence`: an independently generated, AI-semantic-audited
    contextual fill-in after the recognition check. Two correct records at this
-   stage are required for mastery.
+   stage must be consecutive, use different stems, and be 18–720 hours apart.
 
 ## Flow
 
@@ -34,14 +34,12 @@ The existing `assessments.assessment_kind` column records the flow stage:
    review result itself cannot change mastery.
 5. Each later contextual question is `context_evidence`. It must come from the
    normal durable generation pipeline, including the mandatory semantic audit.
-   A wrong answer leaves already earned evidence untouched; a later fresh
-   audited context can supply the missing evidence.
-6. Mastery for a marked row requires two correct `context_evidence` records.
+   A wrong formal answer resets the sequence. Two consecutive correct formal answers must use different stored question stems, 18–720 hours apart. Missing stems or duplicate submissions cannot establish mastery.
+6. Mastery for a marked row requires two consecutive correct formal evidence records on different stems.
 
 ## Compatibility And Safety
 
-- Legacy review endpoints and non-selected-sense records retain their current
-  behavior.
+- Entry and recognition-review stages remain source-specific. All formal mastery evidence uses the same evaluator.
 - The implementation only writes new rows for new selected-sense entries and
   their ordinary assessments or review rows.
 - The durable question-generation worker remains the sole producer of new

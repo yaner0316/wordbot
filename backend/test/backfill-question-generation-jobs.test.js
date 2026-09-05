@@ -48,7 +48,8 @@ function cache(overrides = {}) {
 function assessment(overrides = {}) {
     return {
         id: 'assessment-1', user_id: 'user-1', word_id: 'word-1',
-        source_word_record_id: 'word-1', test_id: 'real-quiz-1',
+        source_word_record_id: 'word-1', test_id: `real-${overrides.id || 'quiz-1'}`,
+        question_text: `Synthetic context ${overrides.id || 'first'} ____.`,
         assessed_at: '2026-07-20T00:00:00.000Z', question_type: '1',
         is_correct: 'correct', submitted_answer: 'A|sure', ...overrides,
     };

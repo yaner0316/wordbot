@@ -9,11 +9,12 @@ const {
 } = require('../mastery-service');
 
 // Helper to create a mock record
-function createRecord({ recordId = 'rec1', testId = 'real-t1', testTime, isCorrect, yourAnswer = '1|sure', questionType = 1 }) {
+function createRecord({ recordId = 'rec1', testId, testTime, isCorrect, yourAnswer = '1|sure', questionType = 1 }) {
     return {
         fields: {
             record_id: recordId,
-            test_id: testId,
+            test_id: testId || `real-${testTime}`,
+            context: `Synthetic context ${testTime} ____.`,
             test_time: testTime,
             is_correct: isCorrect,
             your_answer: yourAnswer,

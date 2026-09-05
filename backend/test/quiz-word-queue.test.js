@@ -71,7 +71,7 @@ function cacheVariant(wordIndex, variantSlot, overrides = {}) {
     });
 }
 
-function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct = false, answer = 'B|sure', questionText = '' } = {}) {
+function assessment(recordId, { testId = 'real-old', time = YESTERDAY, correct = false, answer = 'B|sure', questionText = `Synthetic context ${testId} ____.` } = {}) {
     return {
         fields: {
             user: 'student',

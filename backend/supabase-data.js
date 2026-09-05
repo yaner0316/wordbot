@@ -3067,16 +3067,7 @@ async function cleanupExpiredQuizSessionsWithClient(client, options = {}) {
 
 
 function statsAssessmentRow(row) {
-    return {
-        fields: {
-            record_id: row.feishu_record_id || row.id,
-            test_id: row.test_id,
-            test_time: toMillis(row.assessed_at),
-            question_type: row.question_type,
-            is_correct: row.is_correct,
-            your_answer: row.submitted_answer,
-        },
-    };
+    return toFeishuAssessmentRecord(row, { username: '' });
 }
 
 function isCorrectStatsValue(value) {
@@ -3104,7 +3095,7 @@ function summarizeSupabaseWordProgress(words, assessments) {
         });
         const stage = evaluations.every(item => item.mastered)
             ? 'mastered'
-            : evaluations.some(item => item.stage === 'consolidating')
+            : evaluations.some(item => item.mastered || item.stage === 'consolidating')
                 ? 'consolidating'
                 : evaluations.some(item => item.stage === 'recognized')
                     ? 'recognized'
