@@ -348,7 +348,7 @@ function createSupabaseDependencies(client) {
         loadQuestionCache: ({ userId } = {}) => loadAllRows(
             client,
             'question_cache',
-            'id,user_id,word_id,source_word_record_id,level,round_type,quality_status,cache_state,question_type,question_text,context_zh,suffix,options,option_meanings,answer,correct_meaning,question_fingerprint,ai_audit_status',
+            'id,user_id,word_id,source_word_record_id,level,round_type,quality_status,cache_state,question_type,question_text,context_zh,suffix,options,option_meanings,answer,correct_meaning,question_fingerprint,ai_audit_status,source_version',
             userId, 'id'
         ),
         loadJobs: ({ userId } = {}) => loadAllRows(

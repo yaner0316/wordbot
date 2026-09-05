@@ -93,7 +93,17 @@ function setSessionCookie(res, result, role = 'user') {
     res.setHeader('Set-Cookie', sessionStore.cookie(token));
 }
 
+function requireParentSession(req, res, next) {
+    return requireUserSession(req, res, () => {
+        if (process.env.NODE_ENV === 'test' && process.env.WORDBOT_AUTH_TEST_BYPASS === '1') return next();
+        if (req.wordbotSession?.role !== 'parent') {
+            return res.status(403).json({ error: 'Parent session required', code: 'PARENT_SESSION_REQUIRED' });
+        }
+        return next();
+    });
+}
 module.exports = {
+    requireParentSession,
     requireAdminToken,
     requireUserSession,
     setSessionCookie,

@@ -107,10 +107,20 @@ function getRuntimeHealth({
     };
 }
 
+function getLearningSupplyHealth(worker = {}, queue = {}) {
+    let status = 'ready';
+    if (queue.alerts?.oldestPendingOverThreshold === true) status = 'backlog_overdue';
+    else if (!worker.ok) status = 'worker_unavailable';
+    else if (Number(queue.counts?.failed) > 0) status = 'manual_review_required';
+    else if (worker.status === 'never_succeeded' && worker.eligibleDueCount !== 0) status = 'warming_up';
+    else if (worker.eligibleDueCount === 'unknown') status = 'unknown';
+    return { ok: status === 'ready', status };
+}
 module.exports = {
     DEFAULT_WORKER_STALL_AFTER_MS,
     REQUIRED_ENV,
     SUPABASE_REQUIRED_ENV,
     getQuestionGenerationWorkerHealth,
     getRuntimeHealth,
+    getLearningSupplyHealth,
 };

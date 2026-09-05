@@ -440,14 +440,17 @@ test('cache status summary counts only questions that are actually selectable', 
     assert.equal(summary.byRoundType.primary.ready, 1);
 });
 
-test('approved-only cache gate rejects skipped AI audits after the rollout flag is enabled', () => {
+test('approved-only cache gate requires the current semantic audit policy after the rollout flag is enabled', () => {
     const skipped = question({ ai_audit_status: 'skipped' });
     const approved = question({ ai_audit_status: 'approved' });
+    const current = question({ ai_audit_status: 'approved', source_version: 'supabase-contextual-variant-v3|unique-answer-v2' });
 
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: false }), true);
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: true }), false);
     assert.ok(getCacheQuestionReadinessIssues(skipped, { requireAiAudit: true }).includes('ai_audit_not_approved'));
-    assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), true);
+    assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), false);
+    assert.ok(getCacheQuestionReadinessIssues(approved, { requireAiAudit: true }).includes('ai_audit_policy_version_required'));
+    assert.equal(isCacheQuestionReady(current, { requireAiAudit: true }), true);
 });
 
 test('strips optional cache fields before retrying older Feishu cache tables', () => {
@@ -683,4 +686,16 @@ test('does not apply type-one translation requirements to type-four review quest
 
     assert.equal(issues.includes('missing_context_translation'), false);
     assert.equal(issues.includes('context_translation_is_meaning'), false);
+});
+
+test('current audit attestation survives database adapter and question snapshot', () => {
+    const { toFeishuCacheRow } = require('../quiz-adapter');
+    const version = 'supabase-contextual-variant-v3|unique-answer-v2';
+    const row = question({id:'cache-1',source_word_record_id:'rec-1',word_id:'word-1',context_zh:'我吃了一个苹果。',source_version:version,ai_audit_status:'approved'});
+    row.options=JSON.parse(row.options); row.option_meanings=JSON.parse(row.option_meanings);
+    const adapted=toFeishuCacheRow(row,{username:'qiuqiu'});
+    const normalized=normalizeCacheRow(adapted);
+    assert.equal(normalized.sourceVersion,version);
+    assert.equal(normalized.question.sourceVersion,version);
+    assert.deepEqual(getCacheQuestionReadinessIssues(adapted,{requireAiAudit:true}),[]);
 });

@@ -69,7 +69,8 @@ function createSessionStore({ ttlMs = SESSION_TTL_MS, secret } = {}) {
         const crossSite = production ? '; SameSite=None; Secure; Partitioned' : '; SameSite=Lax';
         return SESSION_COOKIE + '=' + encodeURIComponent(token) + '; Path=/; HttpOnly; Max-Age=' + Math.floor(ttlMs / 1000) + crossSite;
     }
-    return { issue, read, cookie };
+    function clearCookie() { return cookie('').replace(/Max-Age=\d+/, 'Max-Age=0'); }
+    return { issue, read, cookie, clearCookie };
 }
 
 module.exports = { createSessionStore, normalizeUser };

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
 const { getContextTranslationIssues } = require('./context-sentence-translation');
+const { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION } = require('./question-semantic-audit');
 
 const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
@@ -110,6 +111,7 @@ function normalizeCacheRow(row) {
         availableFrom: fields.available_from || null,
         usedCount: Number(fields.used_count || 0),
         generatedAt: Number(fields.generated_at || 0),
+        sourceVersion: fields.source_version || '',
         question: {
             meaningId: fields.meaning_id || fields.word_id || row.meaning_id || row.word_id || '',
             record_id: fields.word_record_id || '',
@@ -125,6 +127,7 @@ function normalizeCacheRow(row) {
             correctMeaning: fields.correct_meaning || '',
             questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
             aiAuditStatus: fields.ai_audit_status || '',
+            sourceVersion: fields.source_version || '',
         },
     };
 }
@@ -143,6 +146,10 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
     if (requireAiAudit && Number(question.type) === 1
         && String(normalized.aiAuditStatus || '').trim().toLowerCase() !== 'approved') {
         issues.push('ai_audit_not_approved');
+    }
+    if (requireAiAudit && Number(question.type) === 1
+        && !String(normalized.sourceVersion || '').split('|').includes(CURRENT_SEMANTIC_AUDIT_POLICY_VERSION)) {
+        issues.push('ai_audit_policy_version_required');
     }
     if ([2, 3].includes(Number(question.type))) issues.push('disabled_question_type');
     if (!question.record_id) issues.push('missing_record_id');

@@ -324,6 +324,7 @@ function createSupabaseQuestionGenerationService({
             attempt,
             requiredCount,
             existingFingerprints,
+            allowPartialCandidates: true,
         }),
         publishReadyVariants,
     });
@@ -377,6 +378,7 @@ function createQuestionGenerationRuntime({
             attempt,
             requiredCount,
             existingFingerprints,
+            allowPartialCandidates: true,
             renewLease: () => jobStore.renew(job, { workerId }),
         }),
         beforePublish: async ({ job }) => jobStore.renew(job, { workerId }),
