@@ -105,29 +105,27 @@ function isSubmittedFormalQuiz(record) {
     return isFormalAssessment(record) && fieldValue(fields.is_correct).trim() !== '';
 }
 
+function questionStem(record) {
+    const fields = record?.fields || {};
+    return fieldValue(fields.context || fields.question_text).normalize('NFKC')
+        .toLowerCase().replace(/_+/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 function evaluateMeaningMastery(records, isCorrectValue) {
     const attempts = records.filter(isSubmittedFormalQuiz).sort((a, b) => assessmentTimestamp(a) - assessmentTimestamp(b));
-    const contextEvidence = attempts.filter(record =>
-        fieldValue(record.fields?.assessment_kind).trim().toLowerCase() === 'context_evidence'
-    );
-    if (contextEvidence.length) {
-        const correctAttempts = contextEvidence.filter(record => isCorrectValue(record.fields?.is_correct));
-        const uncertainCorrect = correctAttempts.filter(record => parseStoredAnswer(fieldValue(record.fields?.your_answer)).confidence === ANSWER_CONFIDENCE.GUESS);
-        const mastered = correctAttempts.length >= 2;
-        return {
-            mastered,
-            stage: mastered ? 'mastered' : correctAttempts.length ? 'consolidating' : 'recognized',
-            evidenceCount: correctAttempts.length,
-            uncertainCorrectCount: uncertainCorrect.length,
-            correctAfterLastWrongCount: correctAttempts.length,
-            latestCorrectIntervalMs: null,
-            distinctDays: new Set(correctAttempts.map(assessmentTimestamp).filter(Boolean).map(learningDay)).size,
-            distinctTypes: new Set(correctAttempts.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)).size,
-        };
-    }
     let lastWrongIndex = -1;
     attempts.forEach((record, index) => { if (!isCorrectValue(record.fields?.is_correct)) lastWrongIndex = index; });
-    const correctAttempts = attempts.slice(lastWrongIndex + 1).filter(record => isCorrectValue(record.fields?.is_correct));
+    const seenAssessments = new Set();
+    const seenSessions = new Set();
+    const correctAttempts = attempts.slice(lastWrongIndex + 1).filter(record => {
+        if (!isCorrectValue(record.fields?.is_correct)) return false;
+        const id = fieldValue(record.record_id).trim();
+        const session = fieldValue(record.fields?.test_id).trim();
+        if ((id && seenAssessments.has(id)) || (session && seenSessions.has(session))) return false;
+        if (id) seenAssessments.add(id);
+        if (session) seenSessions.add(session);
+        return true;
+    });
     const uncertainCorrect = correctAttempts.filter(record => parseStoredAnswer(fieldValue(record.fields?.your_answer)).confidence === ANSWER_CONFIDENCE.GUESS);
     const distinctDays = new Set(correctAttempts.map(assessmentTimestamp).filter(Boolean).map(learningDay)).size;
     const distinctTypes = new Set(correctAttempts.map(record => Number(record.fields?.question_type || 0)).filter(Boolean)).size;
@@ -136,7 +134,9 @@ function evaluateMeaningMastery(records, isCorrectValue) {
     const latestCorrectIntervalMs = latestCorrectTimestamps.length === 2 && latestCorrectTimestamps.every(Boolean)
         ? latestCorrectTimestamps[1] - latestCorrectTimestamps[0]
         : null;
-    const mastered = latestCorrectIntervalMs !== null
+    const stems = latestTwoCorrect.map(questionStem);
+    const differentQuestions = stems.length === 2 && stems.every(Boolean) && stems[0] !== stems[1];
+    const mastered = differentQuestions && latestCorrectIntervalMs !== null
         && latestCorrectIntervalMs >= 18 * 60 * 60 * 1000
         && latestCorrectIntervalMs <= 720 * 60 * 60 * 1000;
     const correctAfterLastWrongCount = correctAttempts.length;
@@ -144,7 +144,7 @@ function evaluateMeaningMastery(records, isCorrectValue) {
     return { mastered, stage, evidenceCount: correctAttempts.length, uncertainCorrectCount: uncertainCorrect.length, correctAfterLastWrongCount, latestCorrectIntervalMs, distinctDays, distinctTypes };
 }
 function strongestStage(stages) {
-    if (stages.includes('mastered')) return 'mastered';
+    if (stages.includes('mastered')) return 'consolidating';
     if (stages.includes('consolidating')) return 'consolidating';
     if (stages.includes('recognized')) return 'recognized';
     return 'unseen';

@@ -342,7 +342,7 @@ function createSupabaseDependencies(client) {
         loadAssessments: ({ userId } = {}) => loadAllRows(
             client,
             'assessments',
-            'id,user_id,word_id,source_word_record_id,test_id,assessment_kind,is_real_assessment,assessed_at,created_at,question_type,is_correct,submitted_answer,answer_confidence',
+            'id,user_id,word_id,source_word_record_id,test_id,assessment_kind,is_real_assessment,assessed_at,created_at,question_type,question_text,is_correct,submitted_answer,answer_confidence',
             userId, 'id'
         ),
         loadQuestionCache: ({ userId } = {}) => loadAllRows(

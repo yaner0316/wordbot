@@ -68,7 +68,7 @@ test('Supabase dependencies read only required columns and apply through the ato
     assert.match(selected, /question_type/);
     assert.match(selected, /submitted_answer/);
     assert.match(selected, /answer_confidence/);
-    assert.doesNotMatch(selected, /question_text|correct_answer|options|secret/i);
+    assert.doesNotMatch(selected, /correct_answer|options|secret/i);
 });
 
 test('atomic reconciliation RPC errors fail without a client-side recovery sequence', async () => {
