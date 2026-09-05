@@ -4,11 +4,11 @@ assertProductionRuntimeEnvironment();
 const express = require('express');
 const path = require('path');
 const { normalizeUser } = require('./session-auth');
-const { requireAdminToken, requireUserSession, setSessionCookie, sessionStore } = require('./auth-middleware');
+const { requireAdminToken, requireUserSession, requireParentSession, setSessionCookie, sessionStore } = require('./auth-middleware');
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { lookupDictionarySenses } = require('./dictionary-senses');
-const { getQuestionGenerationWorkerHealth, getRuntimeHealth } = require('./runtime-health');
+const { getQuestionGenerationWorkerHealth, getRuntimeHealth, getLearningSupplyHealth } = require('./runtime-health');
 const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
 const {
     ASSESSMENT_MODE,
@@ -292,6 +292,7 @@ async function getServerRuntimeHealth(state) {
         database,
         questionGenerationWorker: workerHealth,
         questionGenerationQueue,
+        learningSupply: getLearningSupplyHealth(workerHealth, questionGenerationQueue),
     };
 }
 
@@ -409,13 +410,16 @@ const SESSION_ONLY_ADMIN_PATHS = new Set([
     '/reviewWords/clear',      // 清除当前用户复习词标记
 ]);
 app.use('/api/admin', (req, res, next) => {
+    const parentWritePaths = new Set(['/userSettings', '/addWord', '/addWords', '/cleanup', '/reviewWords/mark', '/reviewWords/clear']);
+    if (req.method !== 'GET' && parentWritePaths.has(req.path)) return requireParentSession(req, res, next);
     if (SESSION_ONLY_ADMIN_PATHS.has(req.path)) {
         return requireUserSession(req, res, next);
     }
     // 其他 admin 端点需要 admin token
     return requireAdminToken(req, res, next);
 });
-app.use('/api/word', requireUserSession);
+app.post('/api/auth/logout', (req, res) => { res.setHeader('Set-Cookie', sessionStore.clearCookie()); res.json({ ok: true }); });
+app.use('/api/word', (req, res, next) => ['PUT', 'DELETE'].includes(req.method) ? requireParentSession(req, res, next) : requireUserSession(req, res, next));
 app.use('/api/quiz', requireUserSession);
 app.use('/api/submit', requireUserSession);
 app.use('/api/stats', requireUserSession);

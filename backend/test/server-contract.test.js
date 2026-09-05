@@ -464,7 +464,7 @@ test('production server keeps health and auth login public without a session', a
     ]);
 });
 
-test('production cleanup accepts the authenticated user and rejects cross-user cleanup', async () => {
+test('production cleanup accepts the authenticated parent and rejects cross-user cleanup', async () => {
     const calls = [];
     await withEnv({
         NODE_ENV: 'test',
@@ -472,7 +472,7 @@ test('production cleanup accepts the authenticated user and rejects cross-user c
         WORDBOT_ADMIN_TOKEN: 'contract-admin-token',
     }, async () => {
         const app = loadServerWithFeishu(createFakeFeishu({
-            loginUser: async input => ({ success: true, user: input.username }),
+            verifyParentLogin: async input => ({ success: true, user: input.user }),
             deleteUserTestData: async (user, days) => {
                 calls.push([user, days]);
                 return { success: true, deleted: 0 };
@@ -481,10 +481,10 @@ test('production cleanup accepts the authenticated user and rejects cross-user c
         process.env.NODE_ENV = 'production';
 
         await withServer(app, async baseUrl => {
-            const login = await fetch(`${baseUrl}/api/auth/login`, {
+            const login = await fetch(`${baseUrl}/api/auth/parent/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: 'student', password: 'secret' }),
+                body: JSON.stringify({ user: 'student', parentUsername: 'parent', password: 'secret' }),
             });
             const cookie = login.headers.get('set-cookie');
             assert.ok(cookie);

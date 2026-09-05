@@ -23,7 +23,7 @@ const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quali
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
-const { auditUniqueAnswer } = require('./question-semantic-audit');
+const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
 const { createSupabaseAdminAdapter } = require('./supabase-admin');
 const { createSupabaseAuthAdapter } = require('./supabase-auth');
@@ -752,6 +752,7 @@ function toQuestionCacheStatusRecord(row, { user, word }) {
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
             ai_audit_status: row.ai_audit_status || '',
+            source_version: row.source_version || '',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),
             question_fingerprint: row.question_fingerprint || '',
@@ -856,7 +857,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         fetchAllRows(
             () => client
                 .from('question_cache')
-                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, ai_audit_status, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
+                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, ai_audit_status, source_version, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
                 .eq('user_id', user.id)
                 .order('generated_at', { ascending: true })
                 .order('id', { ascending: true }),
@@ -1239,7 +1240,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     if (audit?.approved !== true || audit?.status !== 'approved'
         || validLetters.length !== 1 || validLetters[0] !== answer) return null;
     row.ai_audit_status = 'approved';
-    row.source_version = 'supabase-contextual-variant-v3';
+    row.source_version = buildAttestedQuestionSourceVersion('supabase-contextual-variant-v3');
     return getCacheQuestionReadinessIssues(
         toQuestionCacheStatusRecord(row, { user, word }),
         { requireAiAudit: true }
@@ -1267,7 +1268,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, allowPartialCandidates = false }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -1356,7 +1357,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         approvedRows.push(row);
         approvedDistractors.push(distractors);
     }
-    return approvedRows.length === 2 ? approvedRows : [];
+    return approvedRows.length === 2 || allowPartialCandidates ? approvedRows : [];
 }
 async function deleteQuestionCacheRowsWithClient(client, username, type = null) {
     const user = await getUserByUsernameWithClient(client, username);
@@ -2080,7 +2081,7 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
         });
         const primary = candidates.find(row => row.round_type === 'primary' && String(row.question_text || '').trim().toLowerCase() !== String(assessment.question_text || '').trim().toLowerCase());
         if (primary) {
-            preparedRows.push({ ...primary, source_version: 'supabase-wrong-recovery-v1', generated_at: toIsoString(Date.now()) });
+            preparedRows.push({ ...primary, generated_at: toIsoString(Date.now()) });
             replacementPairs.push({ assessment, primary });
         }
     }
@@ -2701,6 +2702,7 @@ function assertFormalChallengeQuestionsRenderable(questions) {
                 option_meanings: optionMeanings,
                 correct_meaning: question.correctMeaning || question.correct_meaning || optionMeanings[answerIndex],
                 ai_audit_status: question.aiAuditStatus || question.ai_audit_status || '',
+                source_version: question.sourceVersion || question.source_version || '',
             },
         });
         const formalQualityIssues = readinessIssues.filter(issue => issue !== 'missing_generated_at');

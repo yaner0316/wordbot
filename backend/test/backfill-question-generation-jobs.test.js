@@ -40,6 +40,7 @@ function cache(overrides = {}) {
         option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u82b1\u56ed'],
         answer: 'A',
         ai_audit_status: 'approved',
+        source_version: 'supabase-contextual-variant-v3|unique-answer-v2',
         correct_meaning: '\u94f6\u884c',
         ...overrides,
     };
@@ -646,6 +647,7 @@ test('loads question_cache using only physical database columns', async () => {
 
     assert.match(selectedColumns, /context_zh/);
     assert.match(selectedColumns, /ai_audit_status/);
+    assert.match(selectedColumns, /source_version/);
     assert.doesNotMatch(selectedColumns, /(?:^|,)word(?:,|$)/);
     assert.doesNotMatch(selectedColumns, /context_cn/);
 });

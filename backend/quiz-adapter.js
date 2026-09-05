@@ -157,6 +157,7 @@ function toFeishuCacheRow(row, { username }) {
             round_type: row.round_type || 'primary',
             quality_status: row.quality_status || 'pending',
             ai_audit_status: row.ai_audit_status || '',
+            source_version: row.source_version || '',
             question_fingerprint: row.question_fingerprint || '',
             cache_state: row.cache_state || 'active',
             variant_slot: Number(row.variant_slot || 1),

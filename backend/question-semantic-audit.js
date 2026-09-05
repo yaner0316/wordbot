@@ -1,5 +1,11 @@
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 
+const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
+
+function buildAttestedQuestionSourceVersion(baseVersion) {
+    return `${String(baseVersion || 'v1').trim()}|${CURRENT_SEMANTIC_AUDIT_POLICY_VERSION}`;
+}
+
 function extractJson(text) {
     const match = String(text || '').match(/\{[\s\S]*\}/);
     if (!match) return null;
@@ -44,10 +50,22 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
             ? [...new Set(parsed.validLetters.map(value => String(value).trim().toUpperCase()).filter(value => /^[A-D]$/.test(value)))]
             : [];
         const approved = parsed?.certain === true && validLetters.length === 1 && validLetters[0] === answer;
-        return { approved, status: approved ? 'approved' : 'rejected', validLetters, reason: String(parsed?.reason || '').slice(0, 200) };
+        return {
+            approved,
+            status: approved ? 'approved' : 'rejected',
+            validLetters,
+            reason: String(parsed?.reason || '').slice(0, 200),
+            policyVersion: CURRENT_SEMANTIC_AUDIT_POLICY_VERSION,
+        };
     } catch (error) {
-        return { approved: false, status: 'unavailable', validLetters: [], reason: 'semantic audit unavailable' };
+        return {
+            approved: false,
+            status: 'unavailable',
+            validLetters: [],
+            reason: 'semantic audit unavailable',
+            policyVersion: CURRENT_SEMANTIC_AUDIT_POLICY_VERSION,
+        };
     }
 }
 
-module.exports = { auditUniqueAnswer };
+module.exports = { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION, buildAttestedQuestionSourceVersion, auditUniqueAnswer };
