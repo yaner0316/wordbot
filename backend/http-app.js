@@ -297,6 +297,7 @@ function createApp({
                 res.json({
                     active: true,
                     testId: session.test_id,
+                    level: session.level,
                     source: 'question_cache',
                     mode: 'real',
                     partialFormalChallenge: readyCount < FORMAL_QUIZ_REQUIRED_COUNT,
@@ -321,14 +322,15 @@ function createApp({
     if (typeof updateQuizSessionProgress === 'function') {
         app.post('/api/quiz/session/progress', async (req, res) => {
             try {
-                const { user, testId, currentQuestion, answers } = req.body;
+                const { user, testId, currentQuestion, answers, baseRevision } = req.body;
                 if (!user || !testId || !Array.isArray(answers)) {
                     return res.status(400).json({ error: '缺少参数' });
                 }
-                const session = await updateQuizSessionProgress(user, testId, { currentQuestion, answers });
-                res.json({ saved: Boolean(session), testId });
+                const session = await updateQuizSessionProgress(user, testId, { currentQuestion, answers, ...(baseRevision === undefined ? {} : { baseRevision }) });
+                if (!session) return res.status(409).json({ saved: false, code: 'QUIZ_SESSION_INACTIVE', error: '这份试卷已结束，请刷新进度' });
+                res.json({ saved: true, testId, ...(session.progress ? { progress: session.progress } : {}) });
             } catch (error) {
-                res.status(500).json({ error: error.message });
+                res.status(error.statusCode || 500).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
             }
         });
     }

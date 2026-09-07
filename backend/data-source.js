@@ -499,7 +499,13 @@ function loadSupabaseDataSource() {
         const previous = quizSubmitLocks.get(key) || Promise.resolve();
         const task = previous
             .catch(() => {})
-            .then(() => submitAnswersOnce(user, testId, answers));
+            .then(() => submitAnswersOnce(user, testId, answers))
+            .then(async result => {
+                if (result?.gameReward?.eligible && !result.replacementRequired && typeof supabaseData.creditGameReward === 'function') {
+                    result.gameState = await supabaseData.creditGameReward(user, testId, result.gameReward);
+                }
+                return result;
+            });
         quizSubmitLocks.set(key, task);
         try {
             return await task;

@@ -601,7 +601,7 @@ app.put('/api/game/state/:user', requireUserSession, async (req, res) => {
         if (typeof saveGameState !== 'function') return res.status(503).json({ error: 'Game state storage is unavailable.' });
         res.json({ state: await saveGameState(req.params.user, req.body || {}) });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(e.statusCode || 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
     }
 });
 app.get('/api/admin/questionCache/status', async (req, res) => {
