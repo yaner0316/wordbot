@@ -1532,3 +1532,12 @@ test('formal recovery does not resume legacy real sessions when challenge storag
     assert.equal(quiz.diagnostics.fallbackUsed, false);
     assert.equal(legacySessionReads, 0, 'formal challenge storage failure must not fall through to legacy quiz_sessions');
 });
+test('submission replay also completes server-side game reward credit before returning success',async()=>{
+    const testId='real-reward-replay';
+    const rows=Array.from({length:10},(_,i)=>({id:`answer-${i}`,test_id:testId,source_word_record_id:`meaning-${i}`,word_snapshot:'apple',is_correct:'correct',submitted_answer:'A',question_text:`Context ${i}`,question_type:'1'}));
+    const credits=[];
+    const dataSource=loadDataSource({supabaseExports:{getAssessmentsForTest:async()=>rows,creditGameReward:async(user,id,reward)=>{credits.push({user,id,minutes:reward.minutes});return {minutes:10,revision:'saved'};}}});
+    const result=await dataSource.submitAnswers('qiuqiu',testId,[]);
+    assert.equal(result.gameState.minutes,10);
+    assert.deepEqual(credits,[{user:'qiuqiu',id:testId,minutes:10}]);
+});

@@ -138,12 +138,14 @@ test('Supabase game state persists shared minutes and garden state', async () =>
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
     });
     const adapter = createSupabaseDataAdapter(client);
-    await adapter.saveGameState('qiuqiu', {
+    const savedState = await adapter.saveGameState('qiuqiu', {
+        baseRevision: null,
         minutes: 12,
         claimIds: ['quiz-1'],
         garden: { hearts: 3, feed: 2, outfit: '草帽', visits: 1 },
     });
     assert.deepEqual(await adapter.getGameState('qiuqiu'), {
+        revision: savedState.revision,
         minutes: 12,
         claimIds: ['quiz-1'],
         garden: {
@@ -187,6 +189,7 @@ function createFakeSupabase(seed = {}, options = {}) {
 
     function matches(row, filters) {
         return filters.every(filter => {
+            if (filter.type === 'eq' && filter.column === 'session_state') return JSON.stringify(row.session_state) === filter.value;
             if (filter.type === 'eq') return row[filter.column] === filter.value;
             if (filter.type === 'in') return filter.values.includes(row[filter.column]);
             if (filter.type === 'is') return row[filter.column] === filter.value;
@@ -4017,7 +4020,7 @@ test('formal challenge adapter reads authoritative questions and updates challen
     }]);
 
     const progress = await adapter.updateFormalQuizChallengeProgress('qiuqiu', 'real-challenge-1', {
-        currentQuestion: 3, answers: [{ option: 0 }, { option: 1 }],
+        baseRevision: 0, currentQuestion: 3, answers: [{ option: 0 }, { option: 1 }],
     });
     assert.equal(progress.session_state.currentQuestion, 3);
     assert.deepEqual(baseClient.db.quiz_challenges[0].session_state, progress.session_state);
@@ -4177,4 +4180,36 @@ for (const [label,kinds,answers,expected] of [
 ]) test(`stats use unified mastery: ${label}`,async()=>{
  const client=createFakeSupabase({users:[{id:'user-1',username:'synthetic',username_key:'synthetic'}],words:[{id:'word-1',user_id:'user-1',word:'apple',mastery_status:'pending'}],assessments:answers.map((answer,i)=>({id:`a-${i}`,user_id:'user-1',word_id:'word-1',source_word_record_id:'word-1',test_id:`real-${i}`,assessment_kind:kinds[i],assessed_at:new Date(Date.UTC(2026,8,i+1)).toISOString(),question_text:`Context ${i} ____.`,is_correct:answer,submitted_answer:'A|sure'}))});
  assert.equal((await createSupabaseDataAdapter(client).getStats('synthetic')).masteredWords,expected);
+});
+test('game state rejects stale devices and missing revisions without overwriting the cloud balance', async () => {
+    const client = createFakeSupabase({users:[{id:'user-sync',username:'sync',username_key:'sync'}],game_states:[{user_id:'user-sync',game_time_minutes:10,reward_claim_ids:[],garden_state:{},updated_at:'2026-09-01T00:00:00.000Z'}]});
+    const adapter = createSupabaseDataAdapter(client);
+    const deviceA = await adapter.getGameState('sync');
+    const deviceB = await adapter.getGameState('sync');
+    const saved = await adapter.saveGameState('sync',{...deviceA,minutes:9,baseRevision:deviceA.revision});
+    assert.ok(saved.revision && saved.revision !== deviceA.revision);
+    await assert.rejects(adapter.saveGameState('sync',{...deviceB,minutes:10,baseRevision:deviceB.revision}),{code:'GAME_STATE_CONFLICT'});
+    await assert.rejects(adapter.saveGameState('sync',{minutes:100}),{code:'SYNC_VERSION_REQUIRED'});
+    assert.equal((await adapter.getGameState('sync')).minutes,9);
+});
+
+test('formal rewards and penalties are credited once on the server even when a submission is replayed',async()=>{
+    const client=createFakeSupabase({users:[{id:'user-sync',username:'sync',username_key:'sync'}]});
+    const adapter=createSupabaseDataAdapter(client);
+    const reward={eligible:true,minutes:10};
+    const first=await adapter.creditGameReward('sync','real-perfect',reward);
+    assert.equal(first.minutes,10);
+    assert.equal((await adapter.creditGameReward('sync','real-perfect',reward)).minutes,10);
+    assert.equal((await adapter.creditGameReward('sync','real-penalty',{eligible:true,minutes:-5})).minutes,5);
+    assert.equal((await adapter.creditGameReward('sync','real-penalty',{eligible:true,minutes:-5})).minutes,5);
+});
+
+test('formal progress cannot be overwritten by another device holding an older revision',async()=>{
+    const client=createFakeSupabase({users:[{id:'user-sync',username:'sync',username_key:'sync'}],quiz_challenges:[{id:'challenge',test_id:'real-sync',user_id:'user-sync',status:'active',session_state:{currentQuestion:0,answers:[]}}]});
+    const adapter=createSupabaseDataAdapter(client);
+    const first=await adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:2,answers:[0,1,2],baseRevision:0});
+    assert.equal(first.progress.revision,1);
+    await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0],baseRevision:0}),{code:'QUIZ_PROGRESS_CONFLICT'});
+    await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0]}),{code:'SYNC_VERSION_REQUIRED'});
+    assert.equal(client.db.quiz_challenges[0].session_state.currentQuestion,2);
 });

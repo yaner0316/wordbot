@@ -747,3 +747,10 @@ test('active session DTO rejects sessions that are not resumable formal cache ch
         });
     }
 });
+test('progress conflicts are returned as explicit 409 responses',async()=>{
+    const app=createApp({submitAnswers:async()=>({}),updateQuizSessionProgress:async()=>{const e=new Error('QUIZ_PROGRESS_CONFLICT');e.code='QUIZ_PROGRESS_CONFLICT';e.statusCode=409;throw e;}});
+    await withServer(app,async baseUrl=>{
+        const r=await fetch(baseUrl+'/api/quiz/session/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:'synthetic',testId:'real-sync',currentQuestion:0,answers:[],baseRevision:0})});
+        assert.equal(r.status,409);assert.equal((await r.json()).code,'QUIZ_PROGRESS_CONFLICT');
+    });
+});
