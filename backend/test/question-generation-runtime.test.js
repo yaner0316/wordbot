@@ -804,3 +804,24 @@ test('publish RPC no-op is translated to JOB_LEASE_NOT_OWNED_OR_STALE with zero 
     assert.deepEqual(fake.state.question_cache, [old]);
     assert.equal(fake.calls.some(call => ['cache_upsert', 'cache_update'].includes(call.type)), false);
 });
+
+
+test('runtime preserves builder rejection reasons even when no candidates survive', async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-bank-finance', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'middle' }],
+    });
+    const service = createSupabaseQuestionGenerationService({
+        client: fake.client,
+        workerId: 'worker-a',
+        maxAttempts: 2,
+        buildCandidates: async ({ reportRejection }) => {
+            reportRejection('semantic_audit_unavailable');
+            return [];
+        },
+    });
+    await assert.rejects(service.process(generationJob()), error =>
+        error.code === 'INSUFFICIENT_DISTINCT_READY_VARIANTS'
+        && error.rejectionReasons.semantic_audit_unavailable === 2
+    );
+    assert.equal(fake.calls.some(call => call.type === 'rpc' && call.name === 'publish_question_generation_variants'), false);
+});

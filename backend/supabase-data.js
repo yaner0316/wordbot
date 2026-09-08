@@ -1193,12 +1193,12 @@ function countDistractorOverlap(left, right) {
     const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
     return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
 }
-async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false }) {
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, reportRejection = () => {} }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     const blankedContext = blankWordInContext(context, wordText);
     const approvedDistractors = uniqueWords(distractors || [], wordText).slice(0, 3);
-    if (approvedDistractors.length < 3) return null;
+    if (approvedDistractors.length < 3) { reportRejection('insufficient_distractors'); return null; }
     const optionWords = shuffled([wordText, ...approvedDistractors]);
     const letters = ['A', 'B', 'C', 'D'];
     const answer = letters[optionWords.indexOf(wordText)];
@@ -1209,11 +1209,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         correctMeaning: String(meaning || wordText),
         translateWords,
     });
-    if (!optionMeanings) return null;
+    if (!optionMeanings) { reportRejection('bad_option_meanings'); return null; }
     const contextTranslation = typeof translateContext === 'function'
         ? String(await translateContext(context) || '').trim()
         : '';
-    if (!contextTranslation) return null;
+    if (!contextTranslation) { reportRejection('context_translation_missing'); return null; }
 
     const row = {
         user_id: user.id,
@@ -1239,8 +1239,12 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     };
     row.question_fingerprint = fingerprintQuestion(row, word.id);
     const statusRecord = toQuestionCacheStatusRecord(row, { user, word });
-    if (getCacheQuestionReadinessIssues(statusRecord, { requireAiAudit: false }).length) return null;
-    if (typeof semanticAudit !== 'function') return requireSemanticAudit ? null : row;
+    const localIssues = getCacheQuestionReadinessIssues(statusRecord, { requireAiAudit: false });
+    if (localIssues.length) { localIssues.forEach(reportRejection); return null; }
+    if (typeof semanticAudit !== 'function') {
+        if (requireSemanticAudit) reportRejection('semantic_audit_unavailable');
+        return requireSemanticAudit ? null : row;
+    }
 
     const audit = await semanticAudit({
         type: 1,
@@ -1255,7 +1259,10 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         ? [...new Set(audit.validLetters.map(value => String(value || '').trim().toUpperCase()))]
         : [];
     if (audit?.approved !== true || audit?.status !== 'approved'
-        || validLetters.length !== 1 || validLetters[0] !== answer) return null;
+        || validLetters.length !== 1 || validLetters[0] !== answer) {
+        reportRejection(audit?.status === 'unavailable' ? 'semantic_audit_unavailable' : 'semantic_audit_rejected');
+        return null;
+    }
     row.ai_audit_status = 'approved';
     row.source_version = buildAttestedQuestionSourceVersion('supabase-contextual-variant-v3');
     return getCacheQuestionReadinessIssues(
@@ -1285,7 +1292,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, allowPartialCandidates = false }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, allowPartialCandidates = false, reportRejection = () => {} }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
     let cacheWord = word;
@@ -1304,7 +1311,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     if (!hasWholeWord(firstContext, wordText) && typeof generateContext === 'function') {
         firstContext = await generateContext(wordText, meaning, level, '').catch(() => '');
     }
-    if (!hasWholeWord(firstContext, wordText)) return [];
+    if (!hasWholeWord(firstContext, wordText)) { reportRejection('context_generation_failed'); return []; }
     if (typeof generateContext !== 'function') return [];
 
     const levelReferenceDistractors = level === ELEMENTARY_LEVEL
@@ -1356,7 +1363,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         attemptedContexts.add(contextKey);
 
         const distractors = await generateForContext(context, approvedDistractors[0] || []);
-        if (!distractors) continue;
+        if (!distractors) { reportRejection('distractor_generation_failed'); continue; }
         const row = await buildType1CacheRow({
             user,
             word: cacheWord,
@@ -1364,6 +1371,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             context,
             distractors,
             slot: approvedRows.length + 1,
+            reportRejection,
             now,
             translateWords,
             translateContext,

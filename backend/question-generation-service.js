@@ -89,6 +89,11 @@ function createQuestionGenerationService({
                     attempt,
                     requiredCount: required,
                     existingFingerprints: new Set(variantsByFingerprint.keys()),
+                    reportRejection: code => {
+                        if (/^[a-z][a-z0-9_]{0,79}$/.test(String(code))) {
+                            rejectionReasons[code] = (rejectionReasons[code] || 0) + 1;
+                        }
+                    },
                 });
                 for (const candidate of candidates || []) {
                     const issues = validationIssues(validateCandidate, candidate, word);

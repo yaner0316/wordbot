@@ -314,7 +314,7 @@ function createSupabaseQuestionGenerationService({
         validateCandidate: validate,
         requiredReadyCount,
         maxAttempts,
-        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints }) => builder({
+        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, reportRejection }) => builder({
             ...candidateBuilderOptions,
             client: supabase,
             job,
@@ -325,6 +325,7 @@ function createSupabaseQuestionGenerationService({
             requiredCount,
             existingFingerprints,
             allowPartialCandidates: true,
+            reportRejection,
         }),
         publishReadyVariants,
     });
@@ -368,7 +369,7 @@ function createQuestionGenerationRuntime({
         validateCandidate: validateCandidate || defaultValidateCandidate,
         requiredReadyCount,
         maxAttempts: maxGenerationAttempts,
-        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints }) => builder({
+        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, reportRejection }) => builder({
             ...(candidateBuilderOptions || {}),
             client: supabase,
             job,
@@ -379,6 +380,7 @@ function createQuestionGenerationRuntime({
             requiredCount,
             existingFingerprints,
             allowPartialCandidates: true,
+            reportRejection,
             renewLease: () => jobStore.renew(job, { workerId }),
         }),
         beforePublish: async ({ job }) => jobStore.renew(job, { workerId }),

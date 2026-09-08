@@ -259,6 +259,8 @@ select
       and revision_proc.prosrc like '%20260806-versioned-word-edit%'
   ) as backfill_hardening_revision,
   (select oid is not null from claim_proc) as claim_function,
+  coalesce((select proc.prosrc like '%user_job_rank%' and proc.prosrc like '%last_served_at%'
+    from pg_catalog.pg_proc proc join claim_proc on proc.oid = claim_proc.oid), false) as claim_fair_user_rotation,
   false as claim_public_execute,
   false as claim_anon_execute,
   false as claim_authenticated_execute,
@@ -382,6 +384,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260824_formal_ai_audit_gate.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260824_game_states.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260825_enqueue_strict_ai_coverage.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260908_question_generation_fair_claim.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -423,6 +426,7 @@ const EXPECTED_STATE = Object.freeze({
   enqueue_trigger: true,
   fingerprint_unique_index: true,
   claim_function: true,
+  claim_fair_user_rotation: true,
   claim_public_execute: false,
   claim_anon_execute: false,
   claim_authenticated_execute: false,
@@ -534,7 +538,11 @@ async function applyQuestionGenerationMigrations({
     }
 
     const appliedMigrations = [];
-    for (const migrationPath of MIGRATION_PATHS) {
+    const missing = verificationFailures(verification);
+    const paths = missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20260908_question_generation_fair_claim.sql')
+      : MIGRATION_PATHS;
+    for (const migrationPath of paths) {
       const sql = await readFile(migrationPath, 'utf8');
       if (!String(sql).trim()) throw new Error(`Migration file is empty: ${path.basename(migrationPath)}`);
       try {

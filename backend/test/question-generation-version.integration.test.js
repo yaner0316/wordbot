@@ -896,3 +896,50 @@ test('an old claim cannot publish through a newer lease that reuses the same wor
         await db.close();
     }
 });
+
+
+test('generation claim rotates users instead of draining an older bulk queue first', async () => {
+    const db = await createDatabase();
+    try {
+        const secondUser = '99999999-9999-4999-8999-999999999999';
+        await db.query('insert into public.users (id, username) values ($1, $2)', [secondUser, 'second-user']);
+        for (let index = 1; index <= 4; index++) {
+            const owner = index <= 2 ? USER_ID : secondUser;
+            await db.query(
+                'insert into public.words (id, user_id, word, meaning_en, level) values ($1, $2, $3, $4, $5)',
+                [formalWordId(index), owner, ['apple', 'banana', 'cherry', 'peach'][index - 1], 'fruit', 'middle']
+            );
+        }
+        await db.query('delete from public.question_generation_jobs where word_id = $1', [WORD_ID]);
+        await db.exec(`update public.question_generation_jobs
+            set next_attempt_at = case when user_id = '11111111-1111-4111-8111-111111111111' then now() - interval '8 days' else now() - interval '3 days' end`);
+        const first = (await db.query("select * from public.claim_question_generation_jobs('worker-a', 1, 60000)")).rows[0];
+        assert.equal(first.user_id, USER_ID);
+        const second = (await db.query("select * from public.claim_question_generation_jobs('worker-b', 1, 60000)")).rows[0];
+        assert.equal(second.user_id, secondUser, 'a second user must not wait for the first user entire backlog');
+        assert.notEqual(first.id, second.id);
+        assert.notEqual(first.lease_token, second.lease_token);
+    } finally { await db.close(); }
+});
+
+test('generation claim spreads a batch across users while preserving due and version guards', async () => {
+    const db = await createDatabase();
+    try {
+        const secondUser = '99999999-9999-4999-8999-999999999999';
+        await db.query('insert into public.users (id, username) values ($1, $2)', [secondUser, 'second-user']);
+        for (let index = 1; index <= 4; index++) {
+            await db.query(
+                'insert into public.words (id, user_id, word, meaning_en, level) values ($1, $2, $3, $4, $5)',
+                [formalWordId(index), index <= 2 ? USER_ID : secondUser, ['apple', 'banana', 'cherry', 'peach'][index - 1], 'fruit', 'middle']
+            );
+        }
+        await db.query('delete from public.question_generation_jobs where word_id = $1', [WORD_ID]);
+        await db.exec(`update public.question_generation_jobs
+            set next_attempt_at = case when user_id = '11111111-1111-4111-8111-111111111111' then now() - interval '8 days' else now() - interval '3 days' end`);
+        const claimed = (await db.query("select * from public.claim_question_generation_jobs('worker-a', 2, 60000)")).rows;
+        assert.equal(claimed.length, 2);
+        assert.equal(new Set(claimed.map(row => row.user_id)).size, 2);
+        await db.exec("update public.question_generation_jobs set next_attempt_at = now() + interval '1 day' where status = 'pending'");
+        assert.equal((await db.query("select * from public.claim_question_generation_jobs('worker-b', 10, 60000)")).rows.length, 0);
+    } finally { await db.close(); }
+});
