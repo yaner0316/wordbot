@@ -4132,6 +4132,7 @@ test('formal challenge adapter replaces an invalidated question through the cano
 });
 test('durable candidate generation retains a single approved row for the next attempt', async () => {
     let auditCalls = 0;
+    const rejections = [];
     const contexts = [
         'He felt lucky when he found his missing book.',
         'They were lucky to catch the final bus home.',
@@ -4158,11 +4159,13 @@ test('durable candidate generation retains a single approved row for the next at
         },
         requireSemanticAudit: true,
         allowPartialCandidates: true,
+        reportRejection: code => rejections.push(code),
     });
 
     assert.equal(rows.length, 1);
     assert.equal(rows[0].ai_audit_status, 'approved');
     assert.equal(auditCalls, 4);
+    assert.deepEqual(rejections, ['semantic_audit_rejected', 'semantic_audit_rejected', 'semantic_audit_rejected']);
 });
 
 test('readiness selects the audit source version from the database', async () => {

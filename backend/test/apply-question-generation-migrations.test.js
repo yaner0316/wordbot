@@ -78,6 +78,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260824_formal_ai_audit_gate.sql',
       '20260824_game_states.sql',
       '20260825_enqueue_strict_ai_coverage.sql',
+      '20260908_question_generation_fair_claim.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -142,6 +143,7 @@ test('missing DATABASE_URL fails before a database client is constructed', async
 });
 
 const COMPLETE_STATE = Object.freeze({
+  claim_fair_user_rotation: true,
   jobs_table: true,
   formal_challenges_table: true,
   formal_challenge_questions_table: true,
@@ -1048,4 +1050,17 @@ test('the real runner exits nonzero without DATABASE_URL and does not start the 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /DATABASE_URL is required/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /server.*listen/i);
+});
+
+
+test('a database missing only fair user rotation applies only the new migration', async () => {
+  const harness = createDatabaseHarness({ states: [{ ...COMPLETE_STATE, claim_fair_user_rotation: false }, COMPLETE_STATE] });
+  const readPaths = [];
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' },
+    Client: harness.Client,
+    readFile: async file => { readPaths.push(path.basename(file)); return '-- fair claim migration'; },
+  });
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, ['20260908_question_generation_fair_claim.sql']);
 });
