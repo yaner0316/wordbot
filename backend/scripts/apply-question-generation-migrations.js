@@ -323,7 +323,12 @@ select
   (select anon_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_anon_execute,
   (select authenticated_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_authenticated_execute,
   coalesce((
-    select proc.prosrc like '%lower(btrim(ai_audit_status)) = ''approved''%'
+    select regexp_replace(
+      proc.prosrc,
+      '[a-z_][a-z0-9_]*[.]ai_audit_status',
+      'ai_audit_status',
+      'g'
+    ) like '%lower(btrim(ai_audit_status)) = ''approved''%'
     from pg_catalog.pg_proc as proc
     where proc.oid = (select oid from rpc_proc where name = 'enqueue_question_generation_job_if_needed')
   ), false) as rpc_enqueue_job_if_needed_strict_ai_audit_contract,
