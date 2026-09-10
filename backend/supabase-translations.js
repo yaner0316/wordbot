@@ -126,6 +126,7 @@ async function translateSupabaseContext(sentence, options = {}) {
 }
 
 module.exports = {
+    requestChineseSenses: prompt => callMiniMax(prompt, 20000),
     TranslationError,
     translateSupabaseContext,
     translateSupabaseWords,
