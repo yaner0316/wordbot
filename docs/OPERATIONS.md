@@ -23,8 +23,8 @@ Use a focused `node --test` command while developing, then run the full backend 
 2. Register it in `backend/scripts/apply-question-generation-migrations.js` and extend migration contract/verification tests.
 3. Run the local migration tests, preferably against the project's disposable PGlite fixture where supported.
 4. Review the exact target environment and dry-run/read-only evidence.
-5. Apply only after explicit operator authorization. Do not apply migrations from ordinary server startup.
-6. Run `npm run verify:question-generation-schema` against the same environment and retain its summarized evidence without credentials.
+5. Apply only after explicit operator authorization. For a `main` release, the repository workflow uses the encrypted `DATABASE_URL` secret to apply and verify the ordered migrations before it triggers Render; any migration or verification failure blocks deployment. Do not apply migrations from ordinary server startup.
+6. Retain the workflow's summarized migration and verification evidence without credentials.
 
 Never use startup-time implicit DDL. Never delete caches, rewrite assessments, reset mastery, or run bulk backfills merely because an alert fired.
 

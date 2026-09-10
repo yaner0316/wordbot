@@ -131,6 +131,21 @@ test('service startup scripts do not run question-generation migrations', () => 
   );
 });
 
+test('the main release applies and verifies migrations before triggering Render', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', '.github', 'workflows', 'render-deploy.yml'),
+    'utf8'
+  );
+  const applyIndex = workflow.indexOf('npm run migrate:question-generation');
+  const verifyIndex = workflow.indexOf('npm run verify:question-generation-schema');
+  const deployIndex = workflow.indexOf('curl --fail --request POST "$RENDER_DEPLOY_HOOK_URL"');
+
+  assert.match(workflow, /DATABASE_URL:\s*\$\{\{ secrets\.DATABASE_URL \}\}/);
+  assert.ok(applyIndex >= 0);
+  assert.ok(verifyIndex > applyIndex);
+  assert.ok(deployIndex > verifyIndex);
+});
+
 test('missing DATABASE_URL fails before a database client is constructed', async () => {
   let constructed = false;
   class ForbiddenClient {

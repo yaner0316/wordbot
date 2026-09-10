@@ -65,6 +65,19 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install backend dependencies for database migration
+        run: npm ci
+        working-directory: backend
+
+      - name: Apply and verify production database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          test -n "$DATABASE_URL"
+          npm run migrate:question-generation
+          npm run verify:question-generation-schema
+        working-directory: backend
+
       - name: Trigger Render deploy hook
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
