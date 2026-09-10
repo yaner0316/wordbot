@@ -20,6 +20,7 @@ const RPC_SIGNATURES = Object.freeze({
   publish_question_generation_variants: 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)',
   complete_question_generation_job: 'public.complete_question_generation_job(uuid,text,bigint,uuid)',
   fail_question_generation_job: 'public.fail_question_generation_job(uuid,text,bigint,uuid,integer,bigint,bigint,text,text,jsonb)',
+  save_question_generation_checkpoint: 'public.save_question_generation_checkpoint(uuid,text,bigint,uuid,jsonb)',
   enqueue_question_generation_job_if_needed: 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)',
   fence_word_question_generation: 'public.fence_word_question_generation(uuid,uuid)',
   finalize_word_question_generation_edit: 'public.finalize_word_question_generation_edit(uuid,uuid)',
@@ -79,6 +80,9 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260824_game_states.sql',
       '20260825_enqueue_strict_ai_coverage.sql',
       '20260908_question_generation_fair_claim.sql',
+      '20260910_question_generation_non_terminal_retry.sql',
+      '20260910_question_coverage_reconciliation.sql',
+      '20260910_question_generation_checkpoints.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -173,6 +177,7 @@ const COMPLETE_STATE = Object.freeze({
   rpc_invalidate_formal_quiz_question_security_definer: false,
   rpc_replace_formal_quiz_question_security_definer: false,
   job_lease_token_column: true,
+  job_generation_checkpoint_column: true,
   formal_quality_function: true,
   formal_quality_function_security_invoker: true,
   formal_quality_function_safe_search_path: true,
@@ -220,6 +225,7 @@ const INCOMPLETE_STATE = Object.freeze({
   job_word_version_column: false,
   rpc_fence_word_question_generation_signature: false,
   job_lease_token_column: false,
+  job_generation_checkpoint_column: false,
   rpc_fence_word_question_generation_security_definer: false,
   rpc_fence_word_question_generation_service_role_execute: false,
   rpc_finalize_word_edit_signature: false,
@@ -714,6 +720,7 @@ test('post-migration verification fails closed when quiz session progress schema
 
 test('verification SQL checks required objects and direct execute ACLs', () => {
   assert.match(VERIFICATION_SQL, /question_generation_jobs/);
+  assert.match(VERIFICATION_SQL, /job_generation_checkpoint_column/);
   assert.match(VERIFICATION_SQL, /formal_challenges_table/);
   assert.match(VERIFICATION_SQL, /formal_challenge_questions_table/);
   assert.match(VERIFICATION_SQL, /formal_display_events_table/);
@@ -767,6 +774,7 @@ test('verification SQL checks required objects and direct execute ACLs', () => {
 
 test('approved SQL files are transactional and idempotent', () => {
   const [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql, formalAiAuditSql] = MIGRATION_PATHS.map(filePath => fs.readFileSync(filePath, 'utf8'));
+  const checkpointSql = fs.readFileSync(MIGRATION_PATHS.find(filePath => filePath.endsWith('20260910_question_generation_checkpoints.sql')), 'utf8');
 
   for (const sql of [jobsSql, claimSql, hardeningSql, versionSql, formalSql, badQuestionSql, cacheFkSql, qualitySql, assessmentParentSql, assessmentContextSql, masteryReconciliationSql, enqueueAclSql, assessmentOptionMeaningsSql, quizSessionProgressSql, formalChineseQualitySql, mandatoryAiAuditSql, formalAiAuditSql]) {
     assert.match(sql, /^\s*begin;/i);
@@ -834,7 +842,7 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(masteryReconciliationSql, /is distinct from/i);
   assert.match(enqueueAclSql, /revoke all on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*service_role/i);
   assert.match(enqueueAclSql, /grant execute on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*to service_role/i);
-  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}`;
+  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}\n${checkpointSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');

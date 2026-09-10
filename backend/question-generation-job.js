@@ -121,6 +121,7 @@ function completeQuestionGeneration(job, {
         last_error_code: null,
         last_error_detail: null,
         rejection_reasons: {},
+        generation_checkpoint: {},
         updated_at: timestamp,
     };
 }
@@ -146,19 +147,15 @@ function failQuestionGeneration(job, error, {
     requireOwnedInProgressJob(job, workerId);
     const timestamp = toDate(now);
     const attempts = Math.max(0, Number(job.attempt_count) || 0);
-    const attemptsLimit = Math.max(1, Math.floor(Number(maxAttempts) || 5));
     const baseMs = Math.max(1, Number(baseBackoffMs) || 60_000);
     const maximumMs = Math.max(baseMs, Number(maxBackoffMs) || 3_600_000);
     const diagnostics = errorDiagnostics(error);
-    const needsManualReview = attempts >= attemptsLimit;
     const backoffMs = Math.min(maximumMs, baseMs * (2 ** Math.max(0, attempts - 1)));
 
     return {
         ...job,
-        status: needsManualReview ? JOB_STATUS.NEEDS_MANUAL_REVIEW : JOB_STATUS.RETRY_WAIT,
-        next_attempt_at: needsManualReview
-            ? timestamp.toISOString()
-            : new Date(timestamp.getTime() + backoffMs).toISOString(),
+        status: JOB_STATUS.RETRY_WAIT,
+        next_attempt_at: new Date(timestamp.getTime() + backoffMs).toISOString(),
         lease_owner: null,
         lease_expires_at: null,
         last_error_code: diagnostics.code,
@@ -174,6 +171,7 @@ function createQuestionGenerationJobStore({
     claimDue,
     updateClaimed,
     renewClaimed,
+    saveClaimedCheckpoint,
     now = () => new Date(),
     leaseDurationMs = 60_000,
     maxAttempts = 5,
@@ -250,6 +248,27 @@ function createQuestionGenerationJobStore({
                 expectedStatuses: [...RECOVERABLE_STATUSES],
                 leaseValidAfter: timestamp.toISOString(),
                 patch,
+            });
+            if (!persisted || typeof persisted !== 'object') {
+                const error = new Error('Question generation job lease is no longer owned by this worker');
+                error.code = 'JOB_LEASE_NOT_OWNED_OR_STALE';
+                throw error;
+            }
+            return persisted;
+        },
+
+        async saveCheckpoint(job, checkpoint, { workerId } = {}) {
+            if (typeof saveClaimedCheckpoint !== 'function') {
+                throw new Error('QUESTION_GENERATION_CHECKPOINT_WRITER_REQUIRED');
+            }
+            const persisted = await saveClaimedCheckpoint({
+                jobId: requireId(job?.id, 'JOB_ID_REQUIRED'),
+                userId: requireId(job?.user_id, 'USER_ID_REQUIRED'),
+                wordId: requireId(job?.word_id, 'WORD_ID_REQUIRED'),
+                workerId: requireId(workerId, 'WORKER_ID_REQUIRED'),
+                expectedWordVersion: job?.word_version,
+                leaseToken: job?.lease_token,
+                checkpoint,
             });
             if (!persisted || typeof persisted !== 'object') {
                 const error = new Error('Question generation job lease is no longer owned by this worker');

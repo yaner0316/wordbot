@@ -179,6 +179,12 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
                 job.updated_at = NOW;
                 return { data: [clone(job)], error: null };
             }
+            if (name === 'save_question_generation_checkpoint') {
+                if (!ownsLiveLease) return { data: [], error: null };
+                job.generation_checkpoint = clone(args.p_checkpoint);
+                job.updated_at = NOW;
+                return { data: [clone(job)], error: null };
+            }
             if (name === 'complete_question_generation_job') {
                 if (!ownsLiveLease) return { data: [], error: null };
                 Object.assign(job, {
@@ -334,6 +340,25 @@ test('Supabase job store renews only an unexpired lease owned by the worker', as
         staleStore.renew(expired, { workerId: 'worker-a' }),
         error => error.code === 'JOB_LEASE_NOT_OWNED_OR_STALE'
     );
+});
+
+test('Supabase job store saves a checkpoint only through the owned live lease', async () => {
+    const active = generationJob();
+    const fake = createFakeSupabase({ jobs: [active] });
+    const store = createSupabaseQuestionGenerationJobStore({ client: fake.client, now: () => new Date(NOW) });
+    const checkpoint = { schemaVersion: 1, variants: [{ question_fingerprint: 'approved-1' }] };
+
+    const saved = await store.saveCheckpoint(active, checkpoint, { workerId: 'worker-a' });
+
+    assert.deepEqual(saved.generation_checkpoint, checkpoint);
+    const call = fake.calls.find(item => item.name === 'save_question_generation_checkpoint');
+    assert.deepEqual(call.args, {
+        p_job_id: 'job-1',
+        p_worker_id: 'worker-a',
+        p_expected_word_version: 1,
+        p_lease_token: 'lease-1',
+        p_checkpoint: checkpoint,
+    });
 });
 
 test('Supabase job store complete and fail both reject an expired owned lease', async () => {
@@ -664,6 +689,49 @@ test('runtime gives the candidate builder a lease-renewal callback', async () =>
         call.type === 'rpc' && call.name === 'renew_question_generation_job'
     );
     assert.equal(renewCalls.length, 2);
+});
+
+test('runtime resumes an approved checkpoint variant and durably saves its new sibling', async () => {
+    const { fingerprintQuestion } = require('../question-generation-service');
+    const first = candidate('She deposited her savings at the bank.');
+    const active = generationJob({
+        generation_checkpoint: {
+            schemaVersion: 1,
+            wordVersion: 1,
+            level: String.fromCharCode(0x4e2d, 0x5b66),
+            word: 'bank',
+            meaning: '["","银行"]',
+            variants: [{
+                ...first,
+                user_id: 'user-1', word_id: 'word-bank-finance',
+                round_type: 'primary', quality_status: 'ready',
+                question_fingerprint: fingerprintQuestion(first, 'word-bank-finance'),
+            }],
+        },
+    });
+    const fake = createFakeSupabase({
+        jobs: [active],
+        words: [{ id: active.word_id, user_id: active.user_id, word: 'bank', meaning_zh: '银行' }],
+        users: [{ id: active.user_id, learning_level: 'middle' }],
+    });
+    let buildInput;
+    const runtime = createQuestionGenerationRuntime({
+        client: fake.client,
+        workerId: 'worker-a',
+        now: () => new Date(NOW),
+        buildCandidates: async input => {
+            buildInput = input;
+            return [candidate('The bank approved the loan yesterday.', ['branch', 'coin', 'road'])];
+        },
+        runImmediately: false,
+    });
+
+    const result = await runtime.generationService.process(active);
+
+    assert.equal(buildInput.requiredCount, 1);
+    assert.equal(buildInput.approvedVariants.length, 1);
+    assert.equal(result.variants.length, 2);
+    assert.equal(fake.calls.filter(call => call.name === 'save_question_generation_checkpoint').length, 1);
 });
 
 test('runtime returns its worker and independently testable persistence components', () => {

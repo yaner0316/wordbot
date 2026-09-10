@@ -106,6 +106,24 @@ test('word queue prioritizes unmastered touched words and fills with earliest un
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
+test('word queue keeps a non-mastered meaning whose historical level differs from the current level', () => {
+    const historicalMeaning = word(1);
+    historicalMeaning.fields.Level = 'junior';
+
+    const queue = buildQuizWordQueue({
+        wordRecords: [historicalMeaning],
+        cacheRows: [],
+        assessmentRecords: [],
+        userId: 'student',
+        level: LEVEL,
+        limit: 1,
+        now: NOW,
+        minAgeMs: 0,
+    });
+
+    assert.deepEqual(queue, ['rec-1']);
+});
+
 test('word queue prioritizes wrong meanings over later touched correct-only meanings', () => {
     const wordRecords = Array.from({ length: 100 }, (_, index) => word(index + 1));
     wordRecords[1].fields.Word = wordRecords[0].fields.Word;
@@ -300,7 +318,7 @@ test('word queue is based on words even before ready cache rows exist', () => {
     assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
-test('word queue only includes words from the requested level', () => {
+test('word queue does not use historical word level as a coverage filter', () => {
     const wordRecords = [
         ...Array.from({ length: 12 }, (_, index) => {
             const record = word(index + 1);
@@ -325,7 +343,7 @@ test('word queue only includes words from the requested level', () => {
         minAgeMs: 0,
     });
 
-    assert.deepEqual(queue, ['rec-13', 'rec-14', 'rec-15', 'rec-16', 'rec-17', 'rec-18', 'rec-19', 'rec-20', 'rec-21', 'rec-22']);
+    assert.deepEqual(queue, ['rec-1', 'rec-2', 'rec-3', 'rec-4', 'rec-5', 'rec-6', 'rec-7', 'rec-8', 'rec-9', 'rec-10']);
 });
 
 test('word queue accepts a mismatched word level when ready cache exists for the requested level', () => {
