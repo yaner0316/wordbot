@@ -98,6 +98,11 @@ test('strict enqueue coverage migration requires approved AI audit rows and pres
   assert.doesNotMatch(migration, /status in \('ready', 'needs_manual_review'\)/);
 });
 
+test('schema verification accepts a table-qualified AI audit column in the enqueue RPC', () => {
+  assert.match(VERIFICATION_SQL, /regexp_replace\(\s*proc\.prosrc,/);
+  assert.match(VERIFICATION_SQL, /'\[a-z_\]\[a-z0-9_\]\*\[\.\]ai_audit_status'/);
+});
+
 test('service startup scripts do not run question-generation migrations', () => {
   const backendPackage = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const rootPackage = JSON.parse(
