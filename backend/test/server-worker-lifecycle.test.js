@@ -1,6 +1,20 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const HEALTHY_RUNTIME_ENV = {
+    SUPABASE_URL: 'https://wordbot-test.supabase.co',
+    SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
+};
+
+const healthyDatabaseClient = {
+    from() {
+        return {
+            select() { return this; },
+            limit() { return Promise.resolve({ data: [], error: null }); },
+        };
+    },
+};
+
 test('server starts and stops the durable question-generation worker with its lifecycle', async () => {
     const { startServer } = require('../server');
     const events = [];
@@ -22,6 +36,83 @@ test('server starts and stops the durable question-generation worker with its li
     assert.deepEqual(events, ['start', 'stop']);
 });
 
+test('server starts and stops the coverage controller with the generation worker', async t => {
+    const { startServer } = require('../server');
+    const events = [];
+    const runtime = {
+        worker: {
+            start() { events.push('worker:start'); return true; },
+            async stop() { events.push('worker:stop'); },
+            isRunning() { return true; },
+        },
+        coverageController: {
+            start() { events.push('coverage:start'); return true; },
+            async stop() { events.push('coverage:stop'); },
+        },
+    };
+    const server = startServer(0, {
+        runtimeFactory: () => runtime,
+        enableQuestionGenerationWorker: true,
+    });
+    t.after(async () => {
+        if (server.listening) await new Promise(resolve => server.close(resolve));
+    });
+    await new Promise(resolve => server.once('listening', resolve));
+    assert.deepEqual(events, ['worker:start', 'coverage:start']);
+
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, ['worker:start', 'coverage:start', 'coverage:stop', 'worker:stop']);
+});
+
+test('server health exposes safe coverage progress without target identities', async t => {
+    const { startServer } = require('../server');
+    const secretTarget = 'private-word-id';
+    const server = startServer(0, {
+        runtimeFactory: () => ({
+            worker: {
+                start() { return true; }, async stop() {}, isRunning() { return true; },
+            },
+            coverageController: {
+                start() { return true; }, async stop() {}, isRunning() { return true; },
+                getObservability() {
+                    return {
+                        startedAt: '2026-09-10T00:00:00.000Z',
+                        lastAttemptAt: '2026-09-10T00:01:00.000Z',
+                        lastSuccessAt: '2026-09-10T00:01:01.000Z',
+                        lastError: null,
+                        lastResult: {
+                            enqueued: 2,
+                            summary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2 },
+                            targets: [{ wordId: secretTarget, userId: 'private-user-id' }],
+                        },
+                    };
+                },
+            },
+        }),
+        enableQuestionGenerationWorker: true,
+    });
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(async () => {
+        if (server.listening) await new Promise(resolve => server.close(resolve));
+    });
+
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+    const body = await response.json();
+
+    assert.deepEqual(body.questionCoverage, {
+        configured: true,
+        running: true,
+        startedAt: '2026-09-10T00:00:00.000Z',
+        lastAttemptAt: '2026-09-10T00:01:00.000Z',
+        lastSuccessAt: '2026-09-10T00:01:01.000Z',
+        lastError: null,
+        lastEnqueued: 2,
+        lastSummary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2 },
+    });
+    assert.equal(JSON.stringify(body).includes(secretTarget), false);
+});
+
 test('server health recovers after a successful worker batch', async t => {
     const { startServer } = require('../server');
     let hooks;
@@ -38,6 +129,8 @@ test('server health recovers after a successful worker batch', async t => {
             return runtime;
         },
         enableQuestionGenerationWorker: true,
+        runtimeHealthEnv: HEALTHY_RUNTIME_ENV,
+        databaseHealthClient: healthyDatabaseClient,
     });
     await new Promise(resolve => server.once('listening', resolve));
     t.after(async () => {
@@ -279,6 +372,8 @@ test('two concurrently created servers isolate worker health and shutdown state'
     }
     const first = startServer(0, {
         enableQuestionGenerationWorker: true,
+        runtimeHealthEnv: HEALTHY_RUNTIME_ENV,
+        databaseHealthClient: healthyDatabaseClient,
         runtimeFactory: options => {
             hooks.first = options;
             return runtimeFor('first');
@@ -286,6 +381,8 @@ test('two concurrently created servers isolate worker health and shutdown state'
     });
     const second = startServer(0, {
         enableQuestionGenerationWorker: true,
+        runtimeHealthEnv: HEALTHY_RUNTIME_ENV,
+        databaseHealthClient: healthyDatabaseClient,
         runtimeFactory: options => {
             hooks.second = options;
             return runtimeFor('second');

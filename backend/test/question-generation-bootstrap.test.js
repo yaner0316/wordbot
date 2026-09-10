@@ -8,7 +8,9 @@ const {
     DEFAULT_QUESTION_WORKER_MAX_ATTEMPTS,
     DEFAULT_QUESTION_WORKER_BATCH_SIZE,
     DEFAULT_QUESTION_WORKER_LEASE_MS,
+    DEFAULT_QUESTION_COVERAGE_INTERVAL_MS,
     createDefaultCandidateBuilderOptions,
+    createDefaultQuestionGenerationRuntime,
 } = require('../question-generation-bootstrap');
 const { auditUniqueAnswer } = require('../question-semantic-audit');
 
@@ -27,4 +29,13 @@ test('default durable worker uses the shared unique-answer semantic auditor', ()
 
     assert.equal(options.semanticAudit, auditUniqueAnswer);
     assert.equal(options.requireSemanticAudit, true);
+});
+
+test('default runtime includes a periodic durable coverage controller', () => {
+    const runtime = createDefaultQuestionGenerationRuntime();
+
+    assert.equal(DEFAULT_QUESTION_COVERAGE_INTERVAL_MS, 5 * 60 * 1000);
+    assert.equal(typeof runtime.coverageController?.start, 'function');
+    assert.equal(typeof runtime.coverageController?.stop, 'function');
+    assert.equal(typeof runtime.reconcileCoverage, 'function');
 });

@@ -43,6 +43,7 @@ with claim_proc as (
     ('publish_question_generation_variants', 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)'),
     ('complete_question_generation_job', 'public.complete_question_generation_job(uuid,text,bigint,uuid)'),
     ('fail_question_generation_job', 'public.fail_question_generation_job(uuid,text,bigint,uuid,integer,bigint,bigint,text,text,jsonb)'),
+    ('save_question_generation_checkpoint', 'public.save_question_generation_checkpoint(uuid,text,bigint,uuid,jsonb)'),
     ('enqueue_question_generation_job_if_needed', 'public.enqueue_question_generation_job_if_needed(uuid,uuid,text)'),
     ('fence_word_question_generation', 'public.fence_word_question_generation(uuid,uuid)'),
     ('finalize_word_question_generation_edit', 'public.finalize_word_question_generation_edit(uuid,uuid)'),
@@ -251,6 +252,15 @@ select
   ) as job_lease_token_column,
   exists (
     select 1
+    from pg_catalog.pg_attribute as attribute
+    where attribute.attrelid = to_regclass('public.question_generation_jobs')
+      and attribute.attname = 'generation_checkpoint'
+      and attribute.atttypid = 'jsonb'::regtype
+      and attribute.attnotnull
+      and not attribute.attisdropped
+  ) as job_generation_checkpoint_column,
+  exists (
+    select 1
     from pg_catalog.pg_proc as revision_proc
     join pg_catalog.pg_namespace as revision_namespace
       on revision_namespace.oid = revision_proc.pronamespace
@@ -300,6 +310,12 @@ select
   (select anon_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_anon_execute,
   (select authenticated_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_authenticated_execute,
   (select service_role_execute from rpc_state where name = 'fail_question_generation_job') as rpc_fail_question_generation_job_service_role_execute,
+  (select signature from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_signature,
+  (select security_definer from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_security_definer,
+  (select public_execute from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_public_execute,
+  (select anon_execute from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'save_question_generation_checkpoint') as rpc_save_question_generation_checkpoint_service_role_execute,
   (select service_role_execute from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_service_role_execute,
   (select signature from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_signature,
   (select security_definer from rpc_state where name = 'enqueue_question_generation_job_if_needed') as rpc_enqueue_job_if_needed_security_definer,
@@ -385,6 +401,9 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260824_game_states.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260825_enqueue_strict_ai_coverage.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260908_question_generation_fair_claim.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260910_question_generation_non_terminal_retry.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260910_question_coverage_reconciliation.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20260910_question_generation_checkpoints.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -393,6 +412,7 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
   'publish_question_generation_variants',
   'complete_question_generation_job',
   'fail_question_generation_job',
+  'save_question_generation_checkpoint',
   'enqueue_question_generation_job_if_needed',
   'fence_word_question_generation',
   'finalize_word_question_generation_edit',
@@ -435,6 +455,7 @@ const EXPECTED_STATE = Object.freeze({
   job_word_version_column: true,
   backfill_hardening_revision: true,
   job_lease_token_column: true,
+  job_generation_checkpoint_column: true,
   formal_quality_function: true,
   formal_quality_function_security_invoker: true,
   formal_quality_function_safe_search_path: true,

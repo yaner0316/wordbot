@@ -238,14 +238,16 @@ function unknownQuestionGenerationQueueSummary() {
 }
 
 async function getServerRuntimeHealth(state) {
-    const health = getRuntimeHealth();
+    const runtimeHealthEnv = state?.runtimeHealthEnv || process.env;
+    const databaseHealthClient = state?.databaseHealthClient || supabase;
+    const health = getRuntimeHealth({ env: runtimeHealthEnv });
     const runtime = state?.runtime || null;
     let database = { ok: true };
-    if (health.dataSource === 'supabase' && process.env.SUPABASE_URL) {
+    if (health.dataSource === 'supabase' && runtimeHealthEnv.SUPABASE_URL) {
         try {
             const probes = await Promise.all([
-                supabase.from('users').select('id').limit(1),
-                supabase.from('question_generation_jobs').select('id').limit(1),
+                databaseHealthClient.from('users').select('id').limit(1),
+                databaseHealthClient.from('question_generation_jobs').select('id').limit(1),
             ]);
             const failed = probes.find(result => result?.error);
             if (failed?.error) database = { ok: false, error: failed.error.message };
@@ -286,12 +288,37 @@ async function getServerRuntimeHealth(state) {
         now: state?.workerHealthNow?.() || new Date().toISOString(),
         stallAfterMs: state?.workerStallAfterMs,
     });
+    const coverageController = runtime?.coverageController;
+    const coverageObserved = typeof coverageController?.getObservability === 'function'
+        ? coverageController.getObservability()
+        : {};
+    const coverageSummary = coverageObserved?.lastResult?.summary;
+    const safeCoverageCount = value => Number.isFinite(Number(value))
+        ? Math.max(0, Number(value))
+        : null;
+    const questionCoverage = {
+        configured: Boolean(coverageController),
+        running: Boolean(coverageController?.isRunning?.()),
+        startedAt: coverageObserved.startedAt || null,
+        lastAttemptAt: coverageObserved.lastAttemptAt || null,
+        lastSuccessAt: coverageObserved.lastSuccessAt || null,
+        lastError: coverageObserved.lastError ? 'question_coverage_reconciliation_failed' : null,
+        lastEnqueued: safeCoverageCount(coverageObserved?.lastResult?.enqueued),
+        lastSummary: coverageSummary ? {
+            scanned: safeCoverageCount(coverageSummary.scanned),
+            targets: safeCoverageCount(coverageSummary.targets),
+            ready: safeCoverageCount(coverageSummary.ready),
+            executable: safeCoverageCount(coverageSummary.executable),
+            planned: safeCoverageCount(coverageSummary.planned),
+        } : null,
+    };
     return {
         ...health,
         ok: health.ok && database.ok && workerHealth.ok,
         database,
         questionGenerationWorker: workerHealth,
         questionGenerationQueue,
+        questionCoverage,
         learningSupply: getLearningSupplyHealth(workerHealth, questionGenerationQueue),
     };
 }
@@ -299,12 +326,19 @@ async function getServerRuntimeHealth(state) {
 function stopServerWorker(server) {
     const state = questionGenerationServerStates.get(server);
     const worker = state?.runtime?.worker;
-    if (!worker || typeof worker.stop !== 'function') return Promise.resolve();
+    const coverageController = state?.runtime?.coverageController;
+    const canStopWorker = worker && typeof worker.stop === 'function';
+    const canStopCoverage = coverageController && typeof coverageController.stop === 'function';
+    if (!canStopWorker && !canStopCoverage) return Promise.resolve();
     if (state.stopPromise) return state.stopPromise;
     const stopping = Promise.resolve()
-        .then(() => worker.stop())
+        .then(async () => {
+            if (canStopCoverage) await coverageController.stop();
+            if (canStopWorker) await worker.stop();
+        })
         .finally(() => {
-            if (state.runtime?.worker === worker) state.runtime = null;
+            if (state.runtime?.worker === worker
+                && state.runtime?.coverageController === coverageController) state.runtime = null;
         });
     state.stopPromise = stopping;
     return stopping;
@@ -923,6 +957,8 @@ function startServer(port = PORT, options = {}) {
         workerLastCompletionAt: null,
         workerHealthNow: options.workerHealthNow || (() => new Date().toISOString()),
         workerStallAfterMs: options.workerStallAfterMs,
+        runtimeHealthEnv: options.runtimeHealthEnv || process.env,
+        databaseHealthClient: options.databaseHealthClient || supabase,
         getQuestionGenerationEligibleDueCount: null,
         getQuestionGenerationQueueSummary: null,
         stopPromise: null,
@@ -962,6 +998,7 @@ function startServer(port = PORT, options = {}) {
             });
             state.runtime = runtime;
             if (runtime.worker.start()) state.workerStartedAt = state.workerHealthNow();
+            if (runtime.coverageController?.start) runtime.coverageController.start();
         } catch (error) {
             state.workerLastError = 'question_generation_worker_start_failed';
             console.error('[question_generation_worker]', state.workerLastError);

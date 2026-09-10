@@ -96,6 +96,7 @@ test('complete marks the owned job ready and clears its lease', () => {
         attempt_count: 1,
         lease_owner: 'worker-a',
         lease_expires_at: '2026-08-03T12:01:00.000Z',
+        generation_checkpoint: { variants: [{ slot: 1 }] },
     }), {
         workerId: 'worker-a',
         now: new Date(NOW),
@@ -106,6 +107,7 @@ test('complete marks the owned job ready and clears its lease', () => {
     assert.equal(completed.lease_expires_at, null);
     assert.equal(completed.last_error_code, null);
     assert.equal(completed.last_error_detail, null);
+    assert.deepEqual(completed.generation_checkpoint, {});
 });
 
 test('fail schedules exponential backoff and persists diagnostics', () => {
@@ -132,20 +134,24 @@ test('fail schedules exponential backoff and persists diagnostics', () => {
     assert.deepEqual(failed.rejection_reasons, { duplicate_fingerprint: 3 });
 });
 
-test('fail moves the job to manual review at the maximum attempt count', () => {
-    const failed = failQuestionGeneration(job({
-        status: JOB_STATUS.GENERATING,
-        attempt_count: 4,
-        lease_owner: 'worker-a',
-    }), new Error('still invalid'), {
-        workerId: 'worker-a',
-        now: new Date(NOW),
-        maxAttempts: 4,
-    });
+test('fail keeps targets retryable at any attempt count and caps backoff', () => {
+    for (const attemptCount of [20, 200]) {
+        const failed = failQuestionGeneration(job({
+            status: JOB_STATUS.GENERATING,
+            attempt_count: attemptCount,
+            lease_owner: 'worker-a',
+        }), new Error('still invalid'), {
+            workerId: 'worker-a',
+            now: new Date(NOW),
+            maxAttempts: 4,
+            baseBackoffMs: 1_000,
+            maxBackoffMs: 60_000,
+        });
 
-    assert.equal(failed.status, JOB_STATUS.NEEDS_MANUAL_REVIEW);
-    assert.equal(failed.lease_owner, null);
-    assert.equal(failed.next_attempt_at, NOW);
+        assert.equal(failed.status, JOB_STATUS.RETRY_WAIT);
+        assert.equal(failed.lease_owner, null);
+        assert.equal(failed.next_attempt_at, '2026-08-03T12:01:00.000Z');
+    }
 });
 
 test('state transitions reject a stale lease owner', () => {

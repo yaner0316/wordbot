@@ -1,9 +1,15 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { normalizeGenerationCheckpoint } = require('./question-generation-checkpoint');
 
 function normalizeText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function checkpointMeaningIdentity(word) {
+    const clean = value => String(value || '').trim().replace(/\s+/g, ' ');
+    return JSON.stringify([clean(word?.meaning_en), clean(word?.meaning_zh)]);
 }
 
 function candidateDistractors(candidate) {
@@ -48,12 +54,44 @@ function insufficientVariantsError(readyCount, rejectionReasons) {
     return error;
 }
 
+function checkpointRow(variant) {
+    return variant?.row && typeof variant.row === 'object' ? variant.row : variant;
+}
+
+function rowCheckpoint(row, slot, wordText) {
+    const optionWords = Array.isArray(row.options)
+        ? row.options.map(option => String(option || '').replace(/^[A-D]\.\s*/i, ''))
+        : [];
+    const answerIndex = /^[A-D]$/.test(String(row.answer || ''))
+        ? String(row.answer).charCodeAt(0) - 65
+        : -1;
+    return {
+        slot,
+        context: String(row.question_text || row.questionText || '').replace(/_{3,}/, String(wordText || '')),
+        contextTranslation: row.context_zh || row.contextCN,
+        distractors: optionWords.filter((option, index) => index !== answerIndex),
+        optionWords,
+        options: Array.isArray(row.options) ? [...row.options] : [],
+        answer: row.answer,
+        optionMeanings: Array.isArray(row.option_meanings)
+            ? [...row.option_meanings]
+            : Array.isArray(row.optionMeanings) ? [...row.optionMeanings] : [],
+        localValidated: true,
+        audit: String(row.ai_audit_status || '').toLowerCase() === 'approved'
+            ? { approved: true, status: 'approved', validLetters: [row.answer] }
+            : undefined,
+        row,
+    };
+}
+
 function createQuestionGenerationService({
     loadWord,
     generateCandidates,
     validateCandidate,
     publishReadyVariants,
     beforePublish = async () => {},
+    loadCheckpoint = async () => null,
+    saveCheckpoint = async () => {},
     requiredReadyCount = 2,
     maxAttempts = 3,
 } = {}) {
@@ -62,6 +100,8 @@ function createQuestionGenerationService({
     if (typeof validateCandidate !== 'function') throw new Error('VALIDATE_CANDIDATE_REQUIRED');
     if (typeof publishReadyVariants !== 'function') throw new Error('PUBLISH_READY_VARIANTS_REQUIRED');
     if (typeof beforePublish !== 'function') throw new Error('BEFORE_PUBLISH_REQUIRED');
+    if (typeof loadCheckpoint !== 'function') throw new Error('LOAD_CHECKPOINT_REQUIRED');
+    if (typeof saveCheckpoint !== 'function') throw new Error('SAVE_CHECKPOINT_REQUIRED');
 
     const required = Math.max(2, Number(requiredReadyCount) || 2);
     const attemptsLimit = Math.max(1, Number(maxAttempts) || 3);
@@ -80,15 +120,32 @@ function createQuestionGenerationService({
                 throw error;
             }
 
+            const checkpoint = normalizeGenerationCheckpoint(await loadCheckpoint({ job, word }), {
+                wordVersion: word.word_version ?? job?.word_version,
+                level: word.level,
+                word: word.word,
+                meaning: checkpointMeaningIdentity(word),
+            });
             const variantsByFingerprint = new Map();
+            for (const savedVariant of checkpoint.variants) {
+                const variant = checkpointRow(savedVariant);
+                const fingerprint = String(variant?.question_fingerprint || '').trim();
+                if (fingerprint) variantsByFingerprint.set(fingerprint, variant);
+            }
             const rejectionReasons = {};
             for (let attempt = 1; attempt <= attemptsLimit && variantsByFingerprint.size < required; attempt += 1) {
                 const candidates = await generateCandidates({
                     job,
                     word,
                     attempt,
-                    requiredCount: required,
+                    requiredCount: required - variantsByFingerprint.size,
                     existingFingerprints: new Set(variantsByFingerprint.keys()),
+                    approvedVariants: [...variantsByFingerprint.values()],
+                    generationCheckpoint: checkpoint,
+                    saveGenerationCheckpoint: async nextCheckpoint => {
+                        Object.assign(checkpoint, nextCheckpoint);
+                        await saveCheckpoint({ job, word, checkpoint });
+                    },
                     reportRejection: code => {
                         if (/^[a-z][a-z0-9_]{0,79}$/.test(String(code))) {
                             rejectionReasons[code] = (rejectionReasons[code] || 0) + 1;
@@ -125,6 +182,18 @@ function createQuestionGenerationService({
                         quality_status: 'ready',
                         question_fingerprint: questionFingerprint,
                     });
+                    const approvedSlots = new Set();
+                    const approvedCheckpoints = [...variantsByFingerprint.values()].map((row, index) => {
+                        const slot = index + 1;
+                        approvedSlots.add(slot);
+                        return rowCheckpoint(row, slot, word.word);
+                    });
+                    const partials = checkpoint.variants.filter(variant =>
+                        !checkpointRow(variant)?.question_fingerprint
+                        && !approvedSlots.has(Number(variant?.slot))
+                    );
+                    checkpoint.variants = [...approvedCheckpoints, ...partials];
+                    await saveCheckpoint({ job, word, checkpoint });
                     if (variantsByFingerprint.size >= required) break;
                 }
             }

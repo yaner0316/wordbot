@@ -153,3 +153,120 @@ test('cache builder rejects stems that differ only by whitespace', async () => {
 
     assert.deepEqual(rows, []);
 });
+
+test('cache builder resumes at semantic audit without regenerating approved upstream stages', async () => {
+    const saved = [];
+    const rows = await buildCacheQuestionRowsForWord({
+        user, word, level: LEVEL, roundType: 'primary', requiredCount: 1,
+        allowPartialCandidates: true,
+        generationCheckpoint: {
+            variants: [{
+                slot: 1,
+                context: word.context_en,
+                distractors: ['pear', 'banana', 'orange'],
+                optionWords: ['apple', 'pear', 'banana', 'orange'],
+                options: ['A. apple', 'B. pear', 'C. banana', 'D. orange'],
+                answer: 'A',
+                optionMeanings: ['苹果', '梨', '香蕉', '橙子'],
+                contextTranslation: '这个孩子放学后吃了一个苹果。',
+                localValidated: true,
+            }],
+        },
+        saveGenerationCheckpoint: async checkpoint => saved.push(JSON.parse(JSON.stringify(checkpoint))),
+        generateContext: async () => { throw new Error('context must be reused'); },
+        generateDistractors: async () => { throw new Error('distractors must be reused'); },
+        translateWords: async () => { throw new Error('option meanings must be reused'); },
+        translateContext: async () => { throw new Error('context translation must be reused'); },
+        semanticAudit: async () => ({ approved: true, status: 'approved', validLetters: ['A'] }),
+        requireSemanticAudit: true,
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].ai_audit_status, 'approved');
+    assert.ok(saved.at(-1).variants[0].row);
+});
+
+test('cache builder keeps context translation when repairing distractors', async () => {
+    let translationCalls = 0;
+    const rows = await buildCacheQuestionRowsForWord({
+        user, word, level: LEVEL, roundType: 'primary', requiredCount: 1,
+        allowPartialCandidates: true,
+        generationCheckpoint: {
+            variants: [{
+                slot: 1,
+                context: word.context_en,
+                contextTranslation: '这个孩子放学后吃了一个苹果。',
+            }],
+        },
+        saveGenerationCheckpoint: async () => {},
+        generateContext: async () => { throw new Error('context must be reused'); },
+        generateDistractors: async () => ['pear', 'banana', 'orange'],
+        translateWords: uniqueTranslateWords,
+        translateContext: async () => { translationCalls += 1; return 'must not run'; },
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(translationCalls, 0);
+    assert.equal(rows[0].context_zh, '这个孩子放学后吃了一个苹果。');
+});
+
+test('semantic rejection invalidates distractors and downstream stages before retry', async () => {
+    let checkpoint = { variants: [] };
+    const common = {
+        user, word, level: LEVEL, roundType: 'primary', requiredCount: 1,
+        allowPartialCandidates: true,
+        translateWords: uniqueTranslateWords,
+        translateContext,
+        generateContext: async () => { throw new Error('saved context must be reused'); },
+        saveGenerationCheckpoint: async next => { checkpoint = JSON.parse(JSON.stringify(next)); },
+        requireSemanticAudit: true,
+    };
+    const rejected = await buildCacheQuestionRowsForWord({
+        ...common,
+        generationCheckpoint: checkpoint,
+        generateDistractors: async () => ['pear', 'banana', 'orange'],
+        semanticAudit: async () => ({ approved: false, status: 'rejected', validLetters: ['A', 'B'] }),
+    });
+
+    assert.deepEqual(rejected, []);
+    assert.equal(checkpoint.variants[0].context, word.context_en);
+    assert.equal('distractors' in checkpoint.variants[0], false);
+    assert.equal('audit' in checkpoint.variants[0], false);
+
+    let repairedDistractors = 0;
+    const repaired = await buildCacheQuestionRowsForWord({
+        ...common,
+        generationCheckpoint: checkpoint,
+        generateDistractors: async () => { repairedDistractors += 1; return ['snack', 'sandwich', 'biscuit']; },
+        semanticAudit: async ({ answer }) => ({ approved: true, status: 'approved', validLetters: [answer] }),
+    });
+
+    assert.equal(repaired.length, 1);
+    assert.equal(repairedDistractors, 1);
+});
+
+test('local option-quality rejection keeps the context but discards the bad distractors', async () => {
+    const reasons = [];
+    let checkpoint = { variants: [{
+        slot: 1,
+        context: word.context_en,
+        contextTranslation: '这个孩子放学后吃了一个苹果。',
+        distractors: ['agree to', 'banana', 'orange'],
+    }] };
+    const rows = await buildCacheQuestionRowsForWord({
+        user, word, level: LEVEL, roundType: 'primary', requiredCount: 1,
+        allowPartialCandidates: true,
+        generationCheckpoint: checkpoint,
+        saveGenerationCheckpoint: async next => { checkpoint = JSON.parse(JSON.stringify(next)); },
+        generateContext: async () => '',
+        generateDistractors: async () => { throw new Error('stored distractors are evaluated first'); },
+        translateWords: uniqueTranslateWords,
+        translateContext,
+        reportRejection: reason => reasons.push(reason),
+    });
+
+    assert.deepEqual(rows, []);
+    assert.equal(checkpoint.variants[0].context, word.context_en);
+    assert.equal('distractors' in checkpoint.variants[0], false, reasons.join(','));
+    assert.equal('options' in checkpoint.variants[0], false);
+});

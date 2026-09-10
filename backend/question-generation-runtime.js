@@ -12,6 +12,7 @@ const RENEW_RPC = 'renew_question_generation_job';
 const PUBLISH_RPC = 'publish_question_generation_variants';
 const COMPLETE_RPC = 'complete_question_generation_job';
 const FAIL_RPC = 'fail_question_generation_job';
+const SAVE_CHECKPOINT_RPC = 'save_question_generation_checkpoint';
 const JOB_TABLE = 'question_generation_jobs';
 const CACHE_TABLE = 'question_cache';
 const WORD_TABLE = 'words';
@@ -130,11 +131,26 @@ function createSupabaseQuestionGenerationJobStore({
         return row;
     }
 
+    async function saveClaimedCheckpoint(request) {
+        const { data, error } = await supabase.rpc(SAVE_CHECKPOINT_RPC, {
+            p_job_id: request.jobId,
+            p_worker_id: request.workerId,
+            p_expected_word_version: request.expectedWordVersion,
+            p_lease_token: request.leaseToken,
+            p_checkpoint: request.checkpoint,
+        });
+        throwSupabaseError(error, 'questionGenerationJob.saveCheckpoint');
+        const row = rowsFrom(data)[0];
+        if (!row) throw createStaleLeaseError();
+        return row;
+    }
+
     return createQuestionGenerationJobStore({
         upsert,
         claimDue,
         updateClaimed,
         renewClaimed,
+        saveClaimedCheckpoint,
         now,
         leaseDurationMs,
         maxAttempts,
@@ -314,7 +330,7 @@ function createSupabaseQuestionGenerationService({
         validateCandidate: validate,
         requiredReadyCount,
         maxAttempts,
-        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, reportRejection }) => builder({
+        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, approvedVariants, generationCheckpoint, saveGenerationCheckpoint, reportRejection }) => builder({
             ...candidateBuilderOptions,
             client: supabase,
             job,
@@ -324,6 +340,9 @@ function createSupabaseQuestionGenerationService({
             attempt,
             requiredCount,
             existingFingerprints,
+            approvedVariants,
+            generationCheckpoint,
+            saveGenerationCheckpoint,
             allowPartialCandidates: true,
             reportRejection,
         }),
@@ -369,7 +388,7 @@ function createQuestionGenerationRuntime({
         validateCandidate: validateCandidate || defaultValidateCandidate,
         requiredReadyCount,
         maxAttempts: maxGenerationAttempts,
-        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, reportRejection }) => builder({
+        generateCandidates: async ({ job, word, attempt, requiredCount, existingFingerprints, approvedVariants, generationCheckpoint, saveGenerationCheckpoint, reportRejection }) => builder({
             ...(candidateBuilderOptions || {}),
             client: supabase,
             job,
@@ -379,10 +398,18 @@ function createQuestionGenerationRuntime({
             attempt,
             requiredCount,
             existingFingerprints,
+            approvedVariants,
+            generationCheckpoint,
+            saveGenerationCheckpoint,
             allowPartialCandidates: true,
             reportRejection,
             renewLease: () => jobStore.renew(job, { workerId }),
         }),
+        loadCheckpoint: async ({ job }) => job?.generation_checkpoint || null,
+        saveCheckpoint: async ({ job, checkpoint }) => {
+            const persisted = await jobStore.saveCheckpoint(job, checkpoint, { workerId });
+            job.generation_checkpoint = persisted.generation_checkpoint || checkpoint;
+        },
         beforePublish: async ({ job }) => jobStore.renew(job, { workerId }),
         publishReadyVariants,
     });
