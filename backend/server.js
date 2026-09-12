@@ -454,6 +454,7 @@ app.use('/api/admin', (req, res, next) => {
 });
 app.post('/api/auth/logout', (req, res) => { res.setHeader('Set-Cookie', sessionStore.clearCookie()); res.json({ ok: true }); });
 app.use('/api/word', (req, res, next) => ['PUT', 'DELETE'].includes(req.method) ? requireParentSession(req, res, next) : requireUserSession(req, res, next));
+app.use('/api/words', requireUserSession);
 app.use('/api/quiz', requireUserSession);
 app.use('/api/submit', requireUserSession);
 app.use('/api/stats', requireUserSession);
@@ -761,7 +762,7 @@ app.post('/api/admin/validateWords', async (req, res) => {
     }
 });
 
-app.post('/api/admin/addWords', async (req, res) => {
+app.post(['/api/admin/addWords', '/api/words'], async (req, res) => {
     try {
         const { targetUser, words, confirmNewMeanings = false, skipDuplicateWords = false, selectedSenseFlow = false } = req.body;
         if (!targetUser || !words || !Array.isArray(words) || words.length === 0) {

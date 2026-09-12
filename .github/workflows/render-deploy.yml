@@ -19,12 +19,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reviewed Web contract; this is the current wordbot-web main commit.
+      # Reviewed Web contract for the paired word-entry and progress hotfix.
       - name: Check out production frontend contract
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: 13fc27b7da997addfc4b60d5871c22e9a240f74f
+          ref: 5df6c32a3d81235fb3361423809176e8216e5d46
           path: web-contract
           persist-credentials: false
 

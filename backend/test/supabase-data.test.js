@@ -83,13 +83,13 @@ test('Supabase data adapter exposes maintenance operations without a Feishu depe
     });
 });
 
-test('Supabase stats derive progress and quiz metrics from words and assessments', async () => {
+test('Supabase stats use saved progress and immutable assessments for quiz metrics', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
         words: [
-            { id: 'word-1', user_id: 'user-1', word: 'apple', mastery_status: 'pending' },
-            { id: 'word-2', user_id: 'user-1', word: 'banana', mastery_status: 'pending' },
-            { id: 'word-3', user_id: 'user-1', word: 'cherry', mastery_status: 'pending' },
+            { id: 'word-1', user_id: 'user-1', word: 'apple', mastery_status: 'mastered' },
+            { id: 'word-2', user_id: 'user-1', word: 'banana', mastery_status: 'recognized' },
+            { id: 'word-3', user_id: 'user-1', word: 'cherry', mastery_status: 'consolidating' },
             { id: 'word-4', user_id: 'user-1', word: 'date', mastery_status: 'pending' },
         ],
         assessments: [
@@ -645,6 +645,31 @@ test('cache generation does not overwrite a Chinese meaning written concurrently
         translateWords: async () => ({ apple: '苹果' }),
     }), error => error.code === 'TRANSLATED_MEANING_PERSIST_FAILED');
     assert.equal(client.db.words[0].meaning_zh, '已有释义');
+});
+
+test('saved mastery counts in stats without rewriting assessments', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    client.db.words[0].mastery_status = 'mastered';
+    client.db.assessments = [];
+    assert.equal((await adapter.getStats('qiuqiu')).masteredWords, 1);
+    assert.equal(client.db.assessments.length, 0);
+});
+
+test('stats retain a saved recognized stage even when no formal evidence exists', async () => {
+    const client = seededClient();
+    client.db.words[0].mastery_status = 'recognized';
+    client.db.assessments = [];
+    const stats = await createSupabaseDataAdapter(client).getStats('qiuqiu');
+    assert.equal(stats.recognizedWords, 1);
+    assert.equal(stats.unseenWords, 0);
+});
+
+test('late quiz mastery updates cannot demote a saved mastered meaning', async () => {
+    const client = seededClient();
+    client.db.words[0].mastery_status = 'mastered';
+    await createSupabaseDataAdapter(client).updateWordMastery('qiuqiu', 'Apple', 'recognized');
+    assert.equal(client.db.words[0].mastery_status, 'mastered');
 });
 
 test('updateWordMastery updates the resolved user word row', async () => {
@@ -2122,11 +2147,11 @@ test('rebuildQuestionCacheForUser does not use all candidate words as middle-sch
     assert.equal(client.db.question_cache.length, 0);
 });
 
-test('rebuildQuestionCacheForUser follows assessment evidence when stored mastery status is stale', async () => {
+test('rebuildQuestionCacheForUser respects saved mastery even without assessment evidence', async () => {
     const client = createFakeSupabase({ users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }], words: [{ id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple', meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE, context_en: 'The child ate an apple after school.', distractors: ['pear', 'desk', 'chair'], old_distractors: [], mastery_status: 'mastered', entered_at: '2026-07-30T00:00:00.000Z' }], assessments: [], question_cache: [] });
     const adapter = createSupabaseDataAdapter(client, { translateWords: async words => Object.fromEntries(words.map((word, index) => [word, ['梨子', '桌子', '椅子', '其他'][index]])), generateContext: async (word, meaning, level, previous) => previous ? 'The child packed an apple for the long trip.' : previous, generateDistractors: contextualDistractorsForTest });
     const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-    assert.equal(result.count, 2);
+    assert.equal(result.count, 0);
 });
 test('rebuildQuestionCacheForUser builds both variants for a hyphenated English word', async () => {
     const client = createFakeSupabase({
@@ -3294,6 +3319,25 @@ test('validateWords checks Supabase-owned duplicates and malformed words without
     assert.deepEqual(result.multiMeanings, []);
 });
 
+test('parent word status filters and edit-read round trips preserve all four stages', async () => {
+    const stages = ['Pending', 'Recognized', 'Consolidating', 'Mastered'];
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: stages.map((status, index) => ({ id: `stage-${index}`, feishu_record_id: `stage-${index}`, user_id: 'user-1', word: `word${index}`, mastery_status: status.toLowerCase() })),
+    });
+    const adapter = createSupabaseDataAdapter(client);
+    for (const status of stages) {
+        const page = await adapter.listUserWords('qiuqiu', { status });
+        assert.equal(page.total, 1, `${status} filter`);
+        assert.equal(page.words[0].status, status);
+    }
+    assert.equal((await adapter.listUserWords('qiuqiu', { status: 'optF5P0W3O' })).total, 1);
+    for (const status of stages) {
+        await adapter.updateWord('qiuqiu', 'word0', { recordId: 'stage-0', status });
+        assert.equal((await adapter.getWordByRecordId('stage-0', 'qiuqiu')).status, status);
+    }
+});
+
 test('Supabase word editor reads newly entered words from the authoritative words table', async () => {
     const client = seededClient();
     client.db.words.push({
@@ -4180,8 +4224,9 @@ for (const [label,kinds,answers,expected] of [
  ['wrong resets selected sense', ['context_evidence','context_evidence','context_evidence'],['correct','wrong','correct'],0],
  ['preparation is not mastery evidence',['initial_context','context_evidence'],['correct','correct'],0],
  ['distinct evidence masters',['context_evidence','context_evidence'],['correct','correct'],1],
-]) test(`stats use unified mastery: ${label}`,async()=>{
+]) test(`stats use evidence when legacy saved status is absent: ${label}`,async()=>{
  const client=createFakeSupabase({users:[{id:'user-1',username:'synthetic',username_key:'synthetic'}],words:[{id:'word-1',user_id:'user-1',word:'apple',mastery_status:'pending'}],assessments:answers.map((answer,i)=>({id:`a-${i}`,user_id:'user-1',word_id:'word-1',source_word_record_id:'word-1',test_id:`real-${i}`,assessment_kind:kinds[i],assessed_at:new Date(Date.UTC(2026,8,i+1)).toISOString(),question_text:`Context ${i} ____.`,is_correct:answer,submitted_answer:'A|sure'}))});
+ delete client.db.words[0].mastery_status;
  assert.equal((await createSupabaseDataAdapter(client).getStats('synthetic')).masteredWords,expected);
 });
 test('game state rejects stale devices and missing revisions without overwriting the cloud balance', async () => {

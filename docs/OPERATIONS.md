@@ -46,6 +46,10 @@ Operational checks:
 
 For a one-time reconciliation or backfill, run the existing planner in dry-run mode, review its deterministic fingerprint and target count, then apply that exact plan. If the plan changes or a partial apply fails, generate and review a new plan. Automatic coverage reconciliation must be idempotent and must not require this manual approval loop.
 
+For the user-authorized September 2026 progress recovery, retain mastery at the 2026-09-05 23:00 Asia/Shanghai cutoff under the exact preceding evaluator (`6458663^:backend/mastery-evidence.js`). Use `planMasteryStatusReconciliation` with the explicit recovery cutoff and that evaluator, merge later strict mastery and currently saved stages without downgrades, and retain original assessment rows. Normal reconciliation also must not revoke saved mastery.
+
+Before applying a recovery, save the source word/assessment snapshot, reviewed plan/fingerprint, and affected cache/job rows locally; do not commit learner data to the public repository. Apply through the existing `reconcile_word_mastery_status` compare-and-swap RPC, which fences generation and retires/removes obsolete supply when a meaning becomes mastered. Save per-row receipts so interrupted execution is recoverable. Read back changed rows and confirm restored mastered meanings are excluded from formal selection; verify that scores and assessment history were not rewritten. Reverse status fields only against matching post-recovery state if rollback is needed; do not replay stale worker leases or overwrite intervening learner progress.
+
 ## Incident boundaries
 
 - Preserve the last valid active cache pair while repairing a replacement.

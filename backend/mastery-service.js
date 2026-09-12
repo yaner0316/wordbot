@@ -24,6 +24,13 @@ function evaluateMeaning(records, isCorrectValue) {
     return evaluateMeaningMastery(records, isCorrectValue);
 }
 
+// Saved progress is the read-side authority; assessment evidence remains unchanged.
+function resolveSavedMastery(status, evidence) {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (!['pending', 'recognized', 'consolidating', 'mastered'].includes(normalized)) return evidence;
+    return { ...evidence, mastered: normalized === 'mastered', stage: normalized === 'pending' ? 'unseen' : normalized };
+}
+
 /**
  * 评估整个单词的掌握状态（多义词）
  * @param {Array} recordIds - 释义记录ID列表
@@ -116,6 +123,7 @@ function getWordTimestamp(record) {
 }
 
 module.exports = {
+    resolveSavedMastery,
     evaluateMeaning,
     evaluateWord,
     summarizeProgress,

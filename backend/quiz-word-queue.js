@@ -1,4 +1,5 @@
 const { assessmentTimestamp, evaluateWordMastery, isFormalAssessment, isSubmittedFormalQuiz } = require('./mastery-evidence');
+const { resolveSavedMastery } = require('./mastery-service');
 const { getTypePolicy, isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
 const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
 const { hasSelectedSenseFlowFlag, getSelectedSenseContextStage } = require('./selected-sense-flow');
@@ -168,7 +169,8 @@ function buildMasteryByRecordId(wordRecords, assessmentRecords) {
         const recordIds = group.map(record => record.record_id).filter(Boolean);
         const evaluation = evaluateWordMastery(recordIds, formalDisplayRecords, isCorrectField);
         for (const recordId of recordIds) {
-            masteryByRecordId.set(recordId, evaluation.meanings?.[recordId]);
+            const status = fieldValue(group.find(record => record.record_id === recordId)?.fields?.Status);
+            masteryByRecordId.set(recordId, resolveSavedMastery(status, evaluation.meanings?.[recordId]));
         }
     }
     return masteryByRecordId;

@@ -2,6 +2,7 @@
 
 const { createHash } = require('node:crypto');
 const { evaluateMeaningMastery } = require('../mastery-evidence');
+const { resolveSavedMastery } = require('../mastery-service');
 const { toFeishuAssessmentRecord } = require('../quiz-adapter');
 const { isBadQuizWord } = require('../question-quality');
 const { isCacheQuestionReady } = require('../question-cache');
@@ -79,7 +80,7 @@ function masteredMeaningKeys(words, assessments) {
         const wordId = normalizeId(word?.id || word?.word_id);
         const sourceRecordId = sourceRecordIdByWordId.get(wordId);
         const evidence = recordsBySourceId.get(sourceRecordId) || [];
-        if (evaluateMeaningMastery(evidence, isCorrectAssessmentValue).mastered) {
+        if (resolveSavedMastery(word.mastery_status, evaluateMeaningMastery(evidence, isCorrectAssessmentValue)).mastered) {
             mastered.add(identityKey(userId, wordId));
         }
     }

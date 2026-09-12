@@ -98,7 +98,11 @@ function evidenceRecordsForWord(word, assessments, sourceCounts) {
         });
 }
 
-function planMasteryStatusReconciliation({ words = [], assessments = [] } = {}) {
+function planMasteryStatusReconciliation({ words = [], assessments = [], recovery = null } = {}) {
+    const cutoff = recovery ? Date.parse(recovery.cutoff) : null;
+    if (recovery && (!Number.isFinite(cutoff) || typeof recovery.evaluateLegacy !== 'function')) {
+        throw new Error('RECOVERY_BASELINE_REQUIRED');
+    }
     const changes = [];
     const expectedStatuses = Object.fromEntries(STATUS_ORDER.map(status => [status, 0]));
     const users = new Map();
@@ -116,10 +120,39 @@ function planMasteryStatusReconciliation({ words = [], assessments = [] } = {}) 
         if (!wordId || !userId) continue;
         const records = evidenceRecordsForWord(word, assessments, sourceCounts);
         const evidence = evaluateMeaningMastery(records, isCorrectValue);
-        const expectedStatus = evidence.stage === 'unseen' ? 'pending' : evidence.stage;
+        let expectedStatus = evidence.stage === 'unseen' ? 'pending' : evidence.stage;
         const storedStatus = normalizeStatus(word?.mastery_status);
         const storedRememberedAt = normalizeTimestamp(word?.remembered_at);
-        const rememberedAt = expectedRememberedAt(records, evidence, storedRememberedAt);
+        let rememberedAt = expectedRememberedAt(records, evidence, storedRememberedAt);
+        let recoveryReason = null;
+        if (recovery) {
+            const ordered = records.filter(isSubmittedFormalQuiz)
+                .sort((a, b) => assessmentTimestamp(a) - assessmentTimestamp(b));
+            const baseline = ordered.filter(record => assessmentTimestamp(record) < cutoff);
+            const legacyEvidence = recovery.evaluateLegacy(baseline, isCorrectValue);
+            const newMasteryIndex = ordered.findIndex((record, index) => assessmentTimestamp(record) >= cutoff
+                && evaluateMeaningMastery(ordered.slice(0, index + 1), isCorrectValue).mastered);
+            if (legacyEvidence.mastered) {
+                expectedStatus = 'mastered';
+                rememberedAt = expectedRememberedAt(baseline, legacyEvidence, storedRememberedAt);
+                recoveryReason = 'legacy_mastery_retained';
+            } else if (newMasteryIndex >= 0) {
+                expectedStatus = 'mastered';
+                rememberedAt = storedRememberedAt || new Date(assessmentTimestamp(ordered[newMasteryIndex])).toISOString();
+                recoveryReason = 'post_cutoff_mastery_retained';
+            } else {
+                recoveryReason = 'progress_merged';
+            }
+            if (STATUS_ORDER.indexOf(storedStatus) > STATUS_ORDER.indexOf(expectedStatus)) {
+                expectedStatus = storedStatus;
+            }
+            // This recovery never clears a historical timestamp or replaces current progress with an old snapshot.
+            rememberedAt = storedRememberedAt || rememberedAt;
+        }
+        if (storedStatus === 'mastered') {
+            expectedStatus = 'mastered';
+            rememberedAt = storedRememberedAt || rememberedAt;
+        }
         expectedStatuses[expectedStatus] += 1;
 
         if (!users.has(userId)) {
@@ -139,6 +172,7 @@ function planMasteryStatusReconciliation({ words = [], assessments = [] } = {}) 
             expectedStatus,
             storedRememberedAt,
             expectedRememberedAt: rememberedAt,
+            ...(recoveryReason ? { recoveryReason } : {}),
         });
     }
 
@@ -172,7 +206,7 @@ async function reconcileMasteryStatus(dependencies, options = {}) {
         loadWords({ userId }),
         loadAssessments({ userId }),
     ]);
-    const plan = planMasteryStatusReconciliation({ words, assessments });
+    const plan = planMasteryStatusReconciliation({ words, assessments, recovery: options.recovery });
     const planFingerprint = createPlanFingerprint({ userId, changes: plan.changes });
 
     if (apply && !reviewedFingerprint) {

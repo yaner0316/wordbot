@@ -507,6 +507,23 @@ test('production cleanup accepts the authenticated parent and rejects cross-user
 
     assert.deepEqual(calls, [['student', 3]]);
 });
+test('student word entry accepts own session and rejects other users without parent privileges', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({ addWords: async (...args) => { calls.push(args); return { success: true, count: 1 }; } }));
+    delete process.env.WORDBOT_AUTH_TEST_BYPASS;
+    const { sessionStore } = require('../auth-middleware');
+    const cookie = sessionStore.cookie(sessionStore.issue('qiuqiu', 'user'));
+    await withServer(app, async baseUrl => {
+        for (const [targetUser, expected] of [['qiuqiu', 200], ['other', 403]]) {
+            const response = await fetch(`${baseUrl}/api/words`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUser, words: [{ word: 'bank', cnMeaning: '银行', meaning: 'a financial institution' }], selectedSenseFlow: true }) });
+            assert.equal(response.status, expected);
+        }
+        assert.equal((await fetch(`${baseUrl}/api/words`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2].selectedSenseFlow, true);
+});
+
 test('parent addWords endpoint preserves payload contract', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({

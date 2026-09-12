@@ -15,6 +15,19 @@ const YESTERDAY = NOW - DAY;
 const TODAY = NOW;
 const LEVEL = 'middle';
 
+test('saved mastered meaning stays out of the formal queue even without assessment evidence', () => {
+    const record = word(1);
+    record.fields.Status = 'mastered';
+    assert.deepEqual(buildQuizWordQueue({ wordRecords: [record], cacheRows: [cache(1)], assessmentRecords: [], userId: 'student', level: LEVEL, now: NOW, minAgeMs: 0, limit: 10 }), []);
+});
+
+test('a deliberate saved reset makes a meaning eligible despite older mastery evidence', () => {
+    const record = word(1);
+    record.fields.Status = 'recognized';
+    const assessmentRecords = [assessment('rec-1', { testId: 'real-a', time: NOW - 4 * DAY, correct: true }), assessment('rec-1', { testId: 'real-b', time: NOW - 3 * DAY, correct: true })];
+    assert.deepEqual(buildQuizWordQueue({ wordRecords: [record], cacheRows: [cache(1)], assessmentRecords, userId: 'student', level: LEVEL, now: NOW, minAgeMs: 0, limit: 10 }), ['rec-1']);
+});
+
 function word(index, overrides = {}) {
     return {
         record_id: `rec-${index}`,

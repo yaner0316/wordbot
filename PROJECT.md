@@ -26,8 +26,11 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 ## Learning and mastery invariants
 
 - Initial selected-sense context and recognition review are preparation, not formal mastery evidence.
-- One meaning becomes mastered only after two consecutive correct formal assessments on two different normalized stored stems, separated by at least 18 hours and no more than 720 hours.
-- A formal wrong answer resets that meaning's consecutive sequence. Missing stems, cosmetic duplicates, preview/test/review rows, and duplicate submissions do not prove mastery.
+- Automatic new mastery requires two consecutive correct formal assessments on two different normalized stored stems, separated by at least 18 hours and no more than 720 hours.
+- Before mastery, a formal wrong answer resets that meaning's consecutive sequence. Missing stems, cosmetic duplicates, preview/test/review rows, and duplicate submissions do not prove new mastery.
+- Saved mastery, including an explicit parent mark, stops formal question selection and generation. Later automatic recalculation or an in-flight submission must not revoke it; deliberate parent edits remain available. Manual mastery does not fabricate passed assessments.
+- The four valid saved stages are the shared read-side authority for the word list, progress statistics, question selection, and generation. Evidence is a fallback only for legacy records without a valid saved stage; formal submissions still calculate and persist new progress from immutable evidence.
+- The 2026-09-05 23:00 Asia/Shanghai rule change is forward-only: mastery earned under the prior rule at that cutoff is retained. The authorized recovery merges that baseline with later learning and current saved progress across every user; it never replaces current progress with an old snapshot or rewrites answers.
 - A spelling is mastered only when all of its meanings for that user are mastered.
 - Assessment answers are historical evidence and are not rewritten to force a desired state. Derived status and rewards are reconciled from canonical evidence.
 - Rewards are downstream of successful persistence and are based on newly mastered meanings; retries and duplicate submissions must not double-award.

@@ -98,7 +98,7 @@ test('does not attach source-only legacy evidence when the source id is ambiguou
     assert.deepEqual(result.byUser, [{ userId: 'user-1', scannedWords: 2, mismatches: 0, transitions: {} }]);
 });
 
-test('reports mismatches by user without exposing assessment content', () => {
+test('preserves saved mastery without manufacturing assessment evidence', () => {
     const result = planMasteryStatusReconciliation({
         words: [word({ mastery_status: 'mastered', remembered_at: '2026-01-01T00:00:00.000Z' })],
         assessments: [],
@@ -107,11 +107,46 @@ test('reports mismatches by user without exposing assessment content', () => {
     assert.deepEqual(result.byUser, [{
         userId: 'user-1',
         scannedWords: 1,
-        mismatches: 1,
-        transitions: { 'mastered->pending': 1 },
+        mismatches: 0,
+        transitions: {},
     }]);
-    assert.equal(result.changes[0].expectedRememberedAt, null);
+    assert.equal(result.changes.length, 0);
     assert.equal(JSON.stringify(result).includes('submitted_answer'), false);
+});
+
+test('recovery merges pre-cutoff mastery with later recognition and never rolls saved progress back', () => {
+    const words = [word({ id: 'old', mastery_status: 'consolidating' }), word({ id: 'new' }), word({ id: 'manual', mastery_status: 'recognized' })];
+    const rows = [
+        assessment({ id: 'old-1', word_id: 'old', question_text: 'Same stem.', assessed_at: '2026-09-01T00:00:00Z' }),
+        assessment({ id: 'old-2', word_id: 'old', question_text: 'Same stem.', assessed_at: '2026-09-02T00:00:00Z' }),
+        assessment({ id: 'new-1', word_id: 'new', is_correct: 'wrong', assessed_at: '2026-09-10T00:00:00Z' }),
+    ];
+    const before = JSON.stringify(rows);
+    const result = planMasteryStatusReconciliation({ words, assessments: rows, recovery: {
+        cutoff: '2026-09-05T15:00:00Z',
+        evaluateLegacy: records => ({ mastered: records.length === 2 }),
+    } });
+    assert.deepEqual(result.changes.map(x => [x.wordId, x.expectedStatus]), [['new', 'recognized'], ['old', 'mastered']]);
+    assert.equal(result.changes.find(x => x.wordId === 'old').expectedRememberedAt, '2026-09-02T00:00:00.000Z');
+    assert.equal(JSON.stringify(rows), before);
+});
+
+test('recovery retains mastery first achieved after cutoff even if a later question overwrote the pair', () => {
+    const result = planMasteryStatusReconciliation({ words: [word()], assessments: [
+        assessment({ id: 'a', assessed_at: '2026-09-06T00:00:00Z', question_text: 'First distinct stem.' }),
+        assessment({ id: 'b', assessed_at: '2026-09-07T00:00:00Z', question_text: 'Second distinct stem.' }),
+        assessment({ id: 'c', assessed_at: '2026-09-08T00:00:00Z', question_text: 'Second distinct stem.' }),
+    ], recovery: { cutoff: '2026-09-05T15:00:00Z', evaluateLegacy: () => ({ mastered: false }) } });
+    assert.equal(result.changes[0].expectedStatus, 'mastered');
+    assert.equal(result.changes[0].expectedRememberedAt, '2026-09-07T00:00:00.000Z');
+});
+
+test('recovery never applies the legacy relaxed rule to post-cutoff repeated stems', () => {
+    const result = planMasteryStatusReconciliation({ words: [word()], assessments: [
+        assessment({ id: 'a', assessed_at: '2026-09-06T00:00:00Z', question_text: 'Same stem.' }),
+        assessment({ id: 'b', assessed_at: '2026-09-07T00:00:00Z', question_text: 'Same stem.' }),
+    ], recovery: { cutoff: '2026-09-05T15:00:00Z', evaluateLegacy: rows => ({ mastered: rows.length >= 2 }) } });
+    assert.equal(result.changes[0].expectedStatus, 'consolidating');
 });
 
 test('plan fingerprint is stable across input order and changes with the plan', () => {

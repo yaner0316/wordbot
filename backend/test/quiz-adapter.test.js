@@ -212,12 +212,12 @@ test.skip('meaning fallback accepts multi-word vocabulary targets', async () => 
     assert.equal(quiz.questions.length, 10);
     assert.equal(quiz.questions.some(question => question.word === 'pop singer'), true);
 });
-test('Supabase quiz does not hide unassessed words behind a stale mastered flag', async () => {
+test('Supabase quiz stops generating when every meaning is saved mastered', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1, { mastery_status: 'mastered' }));
     const dataSource = { name: 'supabase', getUserByUsername: async () => ({ username: 'qiuqiu', username_key: 'qiuqiu' }), getWordsForUser: async () => words, getAssessmentsForUser: async () => [], getQuestionCache: async () => [] };
     const quiz = await generateQuizWithDataSource({ username: 'qiuqiu', level: MIDDLE, dataSource, mode: 'test', createId: () => 'stale-mastery-status' });
-    assert.equal(quiz.error, undefined);
-    assert.equal(quiz.questions.length, 10);
+    assert.equal(quiz.error, 'Question pool exhausted for this level.');
+    assert.equal(quiz.questions?.length || 0, 0);
 });
 test.skip('Supabase quiz adapter fills sparse ready cache from queued words instead of returning not ready', async () => {
     const words = Array.from({ length: 12 }, (_, index) => word(index + 1));

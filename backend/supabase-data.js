@@ -9,6 +9,7 @@ const { isRealAssessment, getAssessmentMode, normalizeAssessmentMode } = require
 const { assertFormalQuizQuestions } = require('./formal-quiz-session');
 const { isMeaningAnswerCorrect } = require('./meaning-review');
 const { evaluateMeaningMastery } = require('./mastery-evidence');
+const { resolveSavedMastery } = require('./mastery-service');
 const { summarizeReviewRound } = require('./review-session');
 const {
     getCacheQuestionReadinessIssues,
@@ -422,7 +423,7 @@ async function getFormalDisplayEventsForUserWithClient(client, username) {
 }
 
 function mapSupabaseWordRecord(row, user, partsOfSpeech = []) {
-    const mastered = String(row?.mastery_status || '').trim().toLowerCase() === 'mastered';
+    const masteryStatus = normalizeMasteryStatus(row?.mastery_status);
     return {
         word: String(row?.word || '').trim(),
         meaning: String(row?.meaning_en || '').trim(),
@@ -430,8 +431,8 @@ function mapSupabaseWordRecord(row, user, partsOfSpeech = []) {
         context: String(row?.context_en || '').trim(),
         contextCN: String(row?.context_zh || '').trim(),
         distractors: Array.isArray(row?.distractors) ? row.distractors.join(',') : String(row?.distractors || '').trim(),
-        status: mastered ? 'optF5P0W3O' : 'Pending',
-        mastery_status: row?.mastery_status || 'pending',
+        status: masteryStatus.charAt(0).toUpperCase() + masteryStatus.slice(1),
+        mastery_status: masteryStatus,
         qualityFlags: Array.isArray(row?.quality_flags) ? row.quality_flags.join(',') : String(row?.quality_flags || '').trim(),
         qualityNote: String(row?.quality_note || '').trim(),
         level: row?.level || '',
@@ -470,12 +471,11 @@ async function listUserWordsWithClient(client, username, options = {}) {
     if (!user) return { words: [], page: 1, pageSize: 20, total: 0, totalPages: 1 };
     const pageSize = Math.max(1, Math.min(50, Number(options.pageSize) || 20));
     const page = Math.max(1, Number(options.page) || 1);
-    const status = String(options.status || '').trim();
+    const requestedStatus = String(options.status || '').trim();
+    const status = requestedStatus === 'optF5P0W3O' ? 'mastered' : requestedStatus.toLowerCase();
     const rows = await getWordsForUserWithClient(client, user.username, null);
     const filtered = rows
-        .filter(row => !status
-            || (status === 'optF5P0W3O' && row.mastery_status === 'mastered')
-            || (status === 'Pending' && row.mastery_status !== 'mastered'))
+        .filter(row => !status || normalizeMasteryStatus(row.mastery_status) === status)
         .sort((left, right) => String(left.word || '').localeCompare(String(right.word || '')));
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -1586,7 +1586,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     const masteryByWordId = new Map(words.map(word => {
         const sourceRecordId = sourceRecordIdByWordId.get(String(word.id || ''));
         const evidence = assessmentRecordsBySourceId.get(sourceRecordId) || [];
-        return [word.id, evaluateMeaningMastery(evidence, isCorrectStatsValue)];
+        return [word.id, resolveSavedMastery(word.mastery_status, evaluateMeaningMastery(evidence, isCorrectStatsValue))];
     }));
     const isEvidenceMastered = word => Boolean(word && masteryByWordId.get(word.id)?.mastered);
     const candidateWords = words
@@ -2366,6 +2366,11 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     const rows = await resolveWordRows(client, user.id, word, options);
     const updated = [];
     for (const row of rows) {
+        // Formal submissions cannot revoke saved mastery; deliberate parent edits use updateWord.
+        if (row.mastery_status === 'mastered' && masteryStatus !== 'mastered') {
+            updated.push(row);
+            continue;
+        }
         const crossesMasteryBoundary = (row.mastery_status === 'mastered') !== (masteryStatus === 'mastered');
         if (crossesMasteryBoundary) await fenceWordQuestionGeneration(client, user.id, row.id);
         const payload = {
@@ -3197,7 +3202,7 @@ function summarizeSupabaseWordProgress(words, assessments) {
                     || (word.feishu_record_id && assessment.source_word_record_id === word.feishu_record_id))
                 .filter(assessment => assessment.is_correct !== null && assessment.is_correct !== undefined)
                 .map(statsAssessmentRow);
-            return evaluateMeaningMastery(evidence, isCorrectStatsValue);
+            return resolveSavedMastery(word.mastery_status, evaluateMeaningMastery(evidence, isCorrectStatsValue));
         });
         const stage = evaluations.every(item => item.mastered)
             ? 'mastered'

@@ -167,7 +167,7 @@ test('plans jobs only for unmastered meanings with fewer than two distinct ready
     assert.equal(plan.summary.alreadyQueued, 0);
 });
 
-test('uses assessment evidence instead of stale stored mastery status', () => {
+test('excludes saved mastery but allows a saved reset despite older mastery evidence', () => {
     const plan = planQuestionGenerationJobBackfill({
         words: [word({ id: 'stale-mastered', mastery_status: 'mastered' }), word({ id: 'evidence-mastered', mastery_status: 'pending' })],
         assessments: [
@@ -175,7 +175,7 @@ test('uses assessment evidence instead of stale stored mastery status', () => {
             assessment({ id: 'assessment-2', word_id: 'evidence-mastered', source_word_record_id: 'evidence-mastered', test_id: 'real-quiz-2', assessed_at: '2026-07-21T00:00:00.000Z' }),
         ], cacheRows: [], jobs: [],
     });
-    assert.deepEqual(plan.jobs.map(job => job.word_id), ['stale-mastered']);
+    assert.deepEqual(plan.jobs.map(job => job.word_id), ['evidence-mastered']);
     assert.equal(plan.summary.masteredByEvidence, 1);
 });
 

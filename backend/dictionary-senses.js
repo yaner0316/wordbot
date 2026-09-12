@@ -10,15 +10,22 @@ function normalizeLookupWord(value) {
 
 function normalizeDictionarySenses(entries) {
     const seen = new Set();
+    const seenDefinitions = new Set();
     const senses = [];
     for (const entry of Array.isArray(entries) ? entries : []) {
         const cnMeaning = String(entry?.cnMeaning || '').trim();
         const definition = String(entry?.definition || '').trim();
         const partOfSpeech = String(entry?.partOfSpeech || '').trim();
+        const usageNote = String(entry?.usageNote || '').trim();
+        const definitionKey = `${partOfSpeech}:${definition.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
         if (!/^[\u3400-\u9fff，、；（）·]{1,20}$/.test(cnMeaning) || !definition || definition.length > 280 || seen.has(cnMeaning)) continue;
         if (!/^(noun|verb|adjective|adverb|preposition|pronoun|conjunction|interjection|determiner|phrase)$/.test(partOfSpeech)) continue;
+        if (seenDefinitions.has(definitionKey)) continue;
         seen.add(cnMeaning);
-        senses.push({ partOfSpeech, definition, cnMeaning });
+        seenDefinitions.add(definitionKey);
+        senses.push({ partOfSpeech, definition, cnMeaning,
+            ...(/^[\u3400-\u9fff，。、“”；：（）·？！\s]{1,60}$/.test(usageNote) ? { usageNote } : {}),
+        });
         if (senses.length === 8) break;
     }
     return senses;
@@ -32,6 +39,8 @@ async function lookupDictionarySenses(word, { request = requestChineseSenses } =
         JSON.stringify(normalized),
         '只返回JSON数组，最多8项，不要凑数。每项包含cnMeaning（简体中文短语，通常2至8字，最多20字）、definition（对应英文释义）、partOfSpeech（英文词性全称，小写）。',
         '中文只写简洁释义，不加英文、词性、编号、例句或解释句。合并重复义项。不是有效英文词或无法确定含义时返回空数组，不要猜测或纠正拼写。',
+        '同一个概念的近义中文译法只保留一项，不得把同义译词拆成多个义项；指人和指能力等真正不同的概念仍要区分。中文必须独立可懂，避免脱离搭配就不清楚的泛化译词；必要时用简短限定词，不列罕见或仅固定搭配才成立的孤立释义。',
+        '每项另提供usageNote：全中文的简短用法提示，最多60字，解释这个意思指什么、与相近义项有何不同。不要重复中文释义，不包含英文。',
         '例如bank: [{"cnMeaning":"银行","definition":"a financial institution","partOfSpeech":"noun"},{"cnMeaning":"河岸","definition":"the land along a river","partOfSpeech":"noun"}]',
     ].join('\n');
     for (let attempt = 0; attempt < 2; attempt++) {

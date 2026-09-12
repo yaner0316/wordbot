@@ -15,6 +15,23 @@ test('normalizes a dictionary response into distinct selectable senses', () => {
     ]);
 });
 
+test('merges synonymous labels for the same definition without merging different meanings', () => {
+    assert.deepEqual(normalizeDictionarySenses([
+        { partOfSpeech: 'noun', definition: 'A person with exceptional ability.', cnMeaning: '天才' },
+        { partOfSpeech: 'noun', definition: 'a person with exceptional ability', cnMeaning: '天才人物' },
+        { partOfSpeech: 'noun', definition: 'exceptional natural ability', cnMeaning: '天赋' },
+    ]).map(sense => sense.cnMeaning), ['天才', '天赋']);
+});
+
+test('keeps a short Chinese usage note but never exposes an English usage note', () => {
+    const senses = normalizeDictionarySenses([
+        { partOfSpeech: 'noun', definition: 'a person with exceptional ability', cnMeaning: '天才', usageNote: '指能力非凡的人' },
+        { partOfSpeech: 'noun', definition: 'exceptional natural ability', cnMeaning: '天赋', usageNote: 'natural ability' },
+    ]);
+    assert.equal(senses[0].usageNote, '指能力非凡的人');
+    assert.equal(senses[1].usageNote, undefined);
+});
+
 test('rejects blank and excessively long definitions from a dictionary response', () => {
     const senses = normalizeDictionarySenses([
         { partOfSpeech: 'verb', definition: '', cnMeaning: '放置' },
