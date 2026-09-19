@@ -31,7 +31,37 @@ test('coverage reconciler enqueues only missing or legacy-terminal targets', asy
     assert.equal(result.summary.executable, 1);
 });
 
-test('coverage reconciler fails if a planned target is not durably accepted', async () => {
+test('coverage reconciler treats a refused enqueue as already handled and keeps processing the rest', async () => {
+    // The enqueue RPC returns false for legitimate no-op cases: the meaning became
+    // mastered or deleted, the word version already has an executable job, or the
+    // user has no current learning level. A false answer must not abort the pass,
+    // otherwise one un-actionable meaning permanently blocks coverage for everyone.
+    const attempted = [];
+    const reconcile = createQuestionCoverageReconciler({
+        loadSnapshot: async () => ({
+            users: [{ id: 'user-1', learning_level: '小学' }],
+            words: [
+                { id: 'word-a', user_id: 'user-1', word: 'cat', mastery_status: 'unseen', question_generation_version: 1 },
+                { id: 'word-b', user_id: 'user-1', word: 'dog', mastery_status: 'unseen', question_generation_version: 1 },
+                { id: 'word-c', user_id: 'user-1', word: 'pig', mastery_status: 'unseen', question_generation_version: 1 },
+            ],
+            cacheRows: [],
+            jobs: [],
+        }),
+        enqueue: async target => {
+            attempted.push(target.wordId);
+            return target.wordId !== 'word-b';
+        },
+    });
+
+    const result = await reconcile();
+
+    assert.deepEqual(attempted, ['word-a', 'word-b', 'word-c']);
+    assert.equal(result.enqueued, 2);
+    assert.equal(result.skipped, 1);
+});
+
+test('coverage reconciler still fails closed when the enqueue answer is missing', async () => {
     const reconcile = createQuestionCoverageReconciler({
         loadSnapshot: async () => ({
             users: [{ id: 'user-1', learning_level: '小学' }],
@@ -39,8 +69,34 @@ test('coverage reconciler fails if a planned target is not durably accepted', as
             cacheRows: [],
             jobs: [],
         }),
-        enqueue: async () => false,
+        enqueue: async () => undefined,
     });
 
     await assert.rejects(reconcile(), /QUESTION_COVERAGE_ENQUEUE_NOT_CONFIRMED/);
+});
+
+test('coverage reconciler never plans targets for a user without a usable current learning level', async () => {
+    const attempted = [];
+    const reconcile = createQuestionCoverageReconciler({
+        loadSnapshot: async () => ({
+            users: [
+                { id: 'user-1', learning_level: '小学' },
+                { id: 'user-2', learning_level: null },
+            ],
+            words: [
+                { id: 'word-blocked', user_id: 'user-2', word: 'cat', mastery_status: 'unseen', question_generation_version: 1 },
+                { id: 'word-actionable', user_id: 'user-1', word: 'dog', mastery_status: 'unseen', question_generation_version: 1 },
+            ],
+            cacheRows: [],
+            jobs: [],
+        }),
+        enqueue: async target => { attempted.push(target.wordId); return true; },
+    });
+
+    const result = await reconcile();
+
+    assert.deepEqual(attempted, ['word-actionable']);
+    assert.equal(result.enqueued, 1);
+    assert.equal(result.skipped, 0);
+    assert.equal(result.summary.skippedMissingLevel, 1);
 });

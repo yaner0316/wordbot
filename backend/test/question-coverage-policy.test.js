@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
     hasCurrentQuestionCoverage,
+    hasUsableCurrentLevel,
     isCoverageTarget,
     planQuestionCoverage,
 } = require('../question-coverage-policy');
@@ -118,5 +119,39 @@ test('coverage plan skips ready and executable targets but revives legacy termin
         ready: 1,
         executable: 1,
         planned: 2,
+        skippedMissingLevel: 0,
     });
+});
+
+test('coverage plan withholds meanings whose user has no usable current learning level', () => {
+    // The generator derives every formal question from the user's current learning
+    // level and refuses to work without one, so planning these meanings only produces
+    // un-actionable work. They stay counted in the plan as blocked instead.
+    const users = [
+        { id: 'user-1', learning_level: '小学' },
+        { id: 'user-2', learning_level: null },
+        { id: 'user-3', learning_level: '' },
+        { id: 'user-4', learning_level: 'not-a-level' },
+    ];
+    const words = [
+        word({ id: 'actionable' }),
+        word({ id: 'blocked-null', user_id: 'user-2' }),
+        word({ id: 'blocked-empty', user_id: 'user-3' }),
+        word({ id: 'blocked-invalid', user_id: 'user-4' }),
+    ];
+
+    const plan = planQuestionCoverage({ users, words, cacheRows: [], jobs: [] });
+
+    assert.deepEqual(plan.targets.map(target => target.wordId), ['actionable']);
+    assert.equal(plan.summary.skippedMissingLevel, 3);
+    assert.equal(plan.summary.planned, 1);
+});
+
+test('a usable current level must be present and normalizable', () => {
+    assert.equal(hasUsableCurrentLevel({ learning_level: '小学' }), true);
+    assert.equal(hasUsableCurrentLevel({ learning_level: 'elementary' }), true);
+    assert.equal(hasUsableCurrentLevel({ learning_level: null }), false);
+    assert.equal(hasUsableCurrentLevel({ learning_level: undefined }), false);
+    assert.equal(hasUsableCurrentLevel({ learning_level: '   ' }), false);
+    assert.equal(hasUsableCurrentLevel({ learning_level: 'not-a-level' }), false);
 });

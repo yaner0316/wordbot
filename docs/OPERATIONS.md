@@ -44,6 +44,13 @@ Operational checks:
 - `canStartFormalQuiz: true` is the supply gate for a ten-question formal challenge.
 - A growing oldest-pending age, no worker progress while eligible jobs exist, or repeated safe error codes requires investigation. It does not authorize destructive repair.
 
+Coverage reconciliation diagnostics:
+
+- `questionCoverage.lastError` is a bounded safe cause, never a raw message: `snapshot_load_failed`, `snapshot_cursor_invalid`, `enqueue_failed`, `enqueue_not_confirmed`, `not_configured`, or `reconciliation_failed`.
+- `lastSuccessAt: null` while `lastAttemptAt` advances means no pass has ever completed. Read `lastError` before investigating anything else.
+- `lastSummary.skippedMissingLevel` counts existing non-mastered meanings withheld from generation because their user has no current learning level. The generator derives every formal question from that level, so these meanings cannot be actioned until the level is set; they are reported rather than retried.
+- A refused enqueue (`enqueue` answered `false`) is an already-handled target: the meaning became mastered or deleted, its word version already has an executable job, or its user has no current level. It is counted in `lastSkipped` and does not fail the pass. Only a missing enqueue answer fails closed.
+
 For a one-time reconciliation or backfill, run the existing planner in dry-run mode, review its deterministic fingerprint and target count, then apply that exact plan. If the plan changes or a partial apply fails, generate and review a new plan. Automatic coverage reconciliation must be idempotent and must not require this manual approval loop.
 
 For the user-authorized September 2026 progress recovery, retain mastery at the 2026-09-05 23:00 Asia/Shanghai cutoff under the exact preceding evaluator (`6458663^:backend/mastery-evidence.js`). Use `planMasteryStatusReconciliation` with the explicit recovery cutoff and that evaluator, merge later strict mastery and currently saved stages without downgrades, and retain original assessment rows. Normal reconciliation also must not revoke saved mastery.
