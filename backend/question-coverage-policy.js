@@ -33,6 +33,16 @@ function readinessRow(row, word) {
     };
 }
 
+function hasUsableCurrentLevel(user) {
+    if (text(user?.learning_level) === '') return false;
+    try {
+        normalizeLevel(user.learning_level);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
 function hasCurrentQuestionCoverage({ word, user, cacheRows = [] } = {}) {
     if (!isCoverageTarget(word) || text(user?.id) !== text(word?.user_id)) return false;
     let level;
@@ -72,7 +82,7 @@ function planQuestionCoverage({ users = [], words = [], cacheRows = [], jobs = [
         jobsByWordId.get(wordId).push(job);
     }
 
-    const summary = { scanned: 0, targets: 0, ready: 0, executable: 0, planned: 0 };
+    const summary = { scanned: 0, targets: 0, ready: 0, executable: 0, planned: 0, skippedMissingLevel: 0 };
     const targets = [];
     const boundedLimit = Number.isFinite(Number(limit))
         ? Math.max(0, Math.floor(Number(limit)))
@@ -83,6 +93,13 @@ function planQuestionCoverage({ users = [], words = [], cacheRows = [], jobs = [
         const user = usersById.get(text(word.user_id));
         if (!user) continue;
         summary.targets += 1;
+        // Every formal question is generated at the user's current learning level.
+        // Without a selected level the generator refuses the work, so planning these
+        // meanings only produces un-actionable targets. Report them instead.
+        if (!hasUsableCurrentLevel(user)) {
+            summary.skippedMissingLevel += 1;
+            continue;
+        }
         const wordId = text(word.id || word.word_id);
         if (hasCurrentQuestionCoverage({ word, user, cacheRows: cacheByWordId.get(wordId) || [] })) {
             summary.ready += 1;
@@ -107,6 +124,7 @@ function planQuestionCoverage({ users = [], words = [], cacheRows = [], jobs = [
 
 module.exports = {
     hasCurrentQuestionCoverage,
+    hasUsableCurrentLevel,
     isCoverageTarget,
     planQuestionCoverage,
     EXECUTABLE_JOB_STATUSES,

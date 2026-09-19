@@ -302,14 +302,16 @@ async function getServerRuntimeHealth(state) {
         startedAt: coverageObserved.startedAt || null,
         lastAttemptAt: coverageObserved.lastAttemptAt || null,
         lastSuccessAt: coverageObserved.lastSuccessAt || null,
-        lastError: coverageObserved.lastError ? 'question_coverage_reconciliation_failed' : null,
+        lastError: coverageObserved.lastError || null,
         lastEnqueued: safeCoverageCount(coverageObserved?.lastResult?.enqueued),
+        lastSkipped: safeCoverageCount(coverageObserved?.lastResult?.skipped),
         lastSummary: coverageSummary ? {
             scanned: safeCoverageCount(coverageSummary.scanned),
             targets: safeCoverageCount(coverageSummary.targets),
             ready: safeCoverageCount(coverageSummary.ready),
             executable: safeCoverageCount(coverageSummary.executable),
             planned: safeCoverageCount(coverageSummary.planned),
+            skippedMissingLevel: safeCoverageCount(coverageSummary.skippedMissingLevel),
         } : null,
     };
     return {

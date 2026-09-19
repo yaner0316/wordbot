@@ -83,7 +83,8 @@ test('server health exposes safe coverage progress without target identities', a
                         lastError: null,
                         lastResult: {
                             enqueued: 2,
-                            summary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2 },
+                            skipped: 3,
+                            summary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2, skippedMissingLevel: 4 },
                             targets: [{ wordId: secretTarget, userId: 'private-user-id' }],
                         },
                     };
@@ -108,9 +109,53 @@ test('server health exposes safe coverage progress without target identities', a
         lastSuccessAt: '2026-09-10T00:01:01.000Z',
         lastError: null,
         lastEnqueued: 2,
-        lastSummary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2 },
+        lastSkipped: 3,
+        lastSummary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2, skippedMissingLevel: 4 },
     });
     assert.equal(JSON.stringify(body).includes(secretTarget), false);
+});
+
+test('server health reports the classified coverage failure cause and withholds blocked meanings', async t => {
+    const { startServer } = require('../server');
+    const secretTarget = 'private-word-id';
+    const server = startServer(0, {
+        runtimeFactory: () => ({
+            worker: {
+                start() { return true; }, async stop() {}, isRunning() { return true; },
+            },
+            coverageController: {
+                start() { return true; }, async stop() {}, isRunning() { return true; },
+                getObservability() {
+                    return {
+                        startedAt: '2026-09-10T00:00:00.000Z',
+                        lastAttemptAt: '2026-09-10T00:01:00.000Z',
+                        lastSuccessAt: null,
+                        lastError: 'snapshot_load_failed',
+                        lastResult: {
+                            enqueued: 0,
+                            skipped: 0,
+                            summary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 0, skippedMissingLevel: 4 },
+                            targets: [{ wordId: secretTarget, userId: 'private-user-id' }],
+                        },
+                    };
+                },
+            },
+        }),
+        enableQuestionGenerationWorker: true,
+    });
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(async () => {
+        if (server.listening) await new Promise(resolve => server.close(resolve));
+    });
+
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+    const body = await response.json();
+
+    assert.equal(body.questionCoverage.lastSuccessAt, null);
+    assert.equal(body.questionCoverage.lastError, 'snapshot_load_failed');
+    assert.equal(body.questionCoverage.lastSummary.skippedMissingLevel, 4);
+    assert.equal(JSON.stringify(body).includes(secretTarget), false);
+    assert.equal(JSON.stringify(body).includes('private-user-id'), false);
 });
 
 test('server health recovers after a successful worker batch', async t => {

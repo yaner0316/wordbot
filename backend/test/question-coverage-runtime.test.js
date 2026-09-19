@@ -47,10 +47,22 @@ test('Supabase coverage runtime scans all target inputs and durably enqueues mis
     assert.ok(client.calls.some(call => call[0] === 'select' && call[1] === 'question_cache'));
 });
 
-test('Supabase coverage runtime rejects an unconfirmed enqueue', async () => {
+test('Supabase coverage runtime treats a refused enqueue as an already-handled target', async () => {
+    // data === false is the RPC's documented "nothing to do" answer, not a failure.
     const client = createClient();
     client.rpc = async () => ({ data: false, error: null });
     const runtime = createSupabaseQuestionCoverageRuntime({ client, runImmediately: false });
 
-    await assert.rejects(runtime.reconcile(), /QUESTION_COVERAGE_ENQUEUE_NOT_CONFIRMED/);
+    const result = await runtime.reconcile();
+
+    assert.equal(result.enqueued, 0);
+    assert.equal(result.skipped, 1);
+});
+
+test('Supabase coverage runtime fails when the enqueue RPC itself errors', async () => {
+    const client = createClient();
+    client.rpc = async () => ({ data: null, error: { code: 'PGRST202', message: 'raw provider detail' } });
+    const runtime = createSupabaseQuestionCoverageRuntime({ client, runImmediately: false });
+
+    await assert.rejects(runtime.reconcile(), /QUESTION_COVERAGE_ENQUEUE_FAILED/);
 });
