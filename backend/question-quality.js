@@ -1,4 +1,5 @@
 const { inflectWord } = require('./word-inflector');
+const optionMeaningDistinctness = require('./option-meaning-distinctness');
 
 const BAD_QUIZ_WORDS = new Set(['genaine']);
 
@@ -554,16 +555,9 @@ function normalizeMeaningTokens(value) {
 }
 
 function hasOverlappingOptionMeanings(question) {
-    const groups = (question.optionMeanings || []).map(normalizeMeaningTokens);
-    if (groups.length !== 4) return false;
-    for (let left = 0; left < groups.length; left++) {
-        for (let right = left + 1; right < groups.length; right++) {
-            if (groups[left].some(a => groups[right].some(b => a === b || a.includes(b) || b.includes(a)))) {
-                return true;
-            }
-        }
-    }
-    return false;
+    // One shared rule with the distractor selection gate, so an option pair that the
+    // quality gate rejects can never have been accepted upstream as "good enough".
+    return optionMeaningDistinctness.hasOverlappingOptionMeanings(question?.optionMeanings || []);
 }
 
 function getQuestionQualityIssues(question) {

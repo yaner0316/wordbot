@@ -35,6 +35,7 @@ const { summarizeQuestionGenerationJobs } = require('./question-generation-job')
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { countEligibleReadyMeaningsByLevel } = require('./quiz-word-queue');
+const { getOverlappingOptionPairs } = require('./option-meaning-distinctness');
 const {
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
@@ -1172,22 +1173,74 @@ function stableWordOffset(word, size) {
     return hash % size;
 }
 
-async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, translateWords }) {
+async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, translateWords, knownMeanings = null }) {
+    const known = knownMeanings && typeof knownMeanings === 'object' ? knownMeanings : {};
+    const knownValue = option => String(known[option] || '').trim();
+    // Words the distinctness gate already translated are reused, not paid for twice.
     const missingWords = optionWords.filter(option =>
-        option !== correctWord || !hasMeaningfulChineseMeaning(correctMeaning)
+        !hasMeaningfulChineseMeaning(knownValue(option))
+        && (option !== correctWord || !hasMeaningfulChineseMeaning(correctMeaning))
     );
-    const translated = await translateWords(missingWords);
+    const translated = missingWords.length ? await translateWords(missingWords) : {};
     const meanings = optionWords.map(option =>
         option === correctWord
             ? String(translated?.[option] || correctMeaning || '').trim()
-            : String(translated?.[option] || '').trim()
+            : String(knownValue(option) || translated?.[option] || '').trim()
     );
     return meanings.every(hasMeaningfulChineseMeaning) ? meanings : null;
 }
 function rotateFallbackDistractors(pool, word) {
     const offset = stableWordOffset(word, pool.length);
     return [...pool.slice(offset), ...pool.slice(0, offset)];
-}async function buildType3CacheQuestionRowsForWord() {
+}
+
+// The four option meanings must be clearly different from each other. Overlapping
+// glosses ("career"/"occupation" both 职业, or "小的" inside "极小的") are the single
+// largest source of rejected candidates in production, and the question quality gate
+// rejects them only after the whole candidate has been built and audited.
+//
+// This gate checks the collision before building the question and asks the distractor
+// generator for a replacement of the offending word, so one bad option costs one
+// extra distractor call instead of a wasted candidate, audit and retry.
+async function resolveDistinctOptionDistractors({
+    distractors,
+    wordText,
+    meaning,
+    translateWords,
+    regenerate,
+    reportRejection = () => {},
+    maxRepairs = 2,
+}) {
+    let current = Array.isArray(distractors) ? [...distractors] : [];
+    if (current.length !== 3) return { distractors: current, meanings: null };
+    if (typeof translateWords !== 'function' || typeof regenerate !== 'function') return { distractors: current, meanings: null };
+    if (!hasMeaningfulChineseMeaning(meaning)) return { distractors: current, meanings: null };
+
+    const excluded = [];
+    for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
+        const translated = await translateWords(current).catch(() => null);
+        const meanings = current.map(word => String(translated?.[word] || '').trim());
+        // Without usable translations the existing downstream behaviour decides.
+        if (!meanings.every(hasMeaningfulChineseMeaning)) return { distractors: current, meanings: null };
+        const optionMeanings = [String(meaning).trim(), ...meanings];
+        const pairs = getOverlappingOptionPairs(optionMeanings);
+        // Hand the translations downstream so the same words are not paid for twice.
+        if (!pairs.length) {
+            return { distractors: current, meanings: Object.fromEntries(current.map((word, index) => [word, meanings[index]])) };
+        }
+        const conflicting = [...new Set(pairs
+            .flatMap(([, right]) => [right])
+            .filter(index => index >= 1)
+            .map(index => current[index - 1]))];
+        excluded.push(...conflicting);
+        const replacement = await regenerate([...new Set(excluded)]).catch(() => null);
+        if (!Array.isArray(replacement) || replacement.length !== 3) break;
+        current = [...replacement];
+    }
+    reportRejection('option_meaning_collision');
+    return null;
+}
+async function buildType3CacheQuestionRowsForWord() {
     return [];
 }
 function countDistractorOverlap(left, right) {
@@ -1201,7 +1254,7 @@ function checkpointInvalidationStageForIssues(issues) {
     if (issues.some(issue => /option|answer|distractor/.test(issue))) return 'distractors';
     return 'option_layout';
 }
-async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, reportRejection = () => {}, variantCheckpoint = {}, saveVariantCheckpoint = async () => {} }) {
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, reportRejection = () => {}, variantCheckpoint = {}, saveVariantCheckpoint = async () => {}, knownDistractorMeanings = null }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     const state = { ...variantCheckpoint, slot, context };
@@ -1229,6 +1282,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
             correctWord: wordText,
             correctMeaning: String(meaning || wordText),
             translateWords,
+            knownMeanings: knownDistractorMeanings,
         });
     if (!optionMeanings) { reportRejection('bad_option_meanings'); return null; }
     const contextTranslation = state.contextTranslation || (typeof translateContext === 'function'
@@ -1432,10 +1486,20 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             || (approvedVariants.length + approvedRows.length + 1);
         variantCheckpoint = { ...variantCheckpoint, slot, context };
         await persistVariant(variantCheckpoint);
-        const distractors = Array.isArray(variantCheckpoint.distractors)
+        const initialDistractors = Array.isArray(variantCheckpoint.distractors)
             ? variantCheckpoint.distractors
             : await generateForContext(context, approvedDistractors[0] || []);
-        if (!distractors) { reportRejection('distractor_generation_failed'); continue; }
+        if (!initialDistractors) { reportRejection('distractor_generation_failed'); continue; }
+        const resolved = await resolveDistinctOptionDistractors({
+            distractors: initialDistractors,
+            wordText,
+            meaning,
+            translateWords,
+            regenerate: excluded => generateForContext(context, [...(approvedDistractors[0] || []), ...excluded]),
+            reportRejection,
+        });
+        if (!resolved) continue;
+        const { distractors, meanings: knownDistractorMeanings } = resolved;
         variantCheckpoint.distractors = distractors;
         await persistVariant(variantCheckpoint);
         const row = await buildType1CacheRow({
@@ -1453,6 +1517,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             requireSemanticAudit,
             variantCheckpoint,
             saveVariantCheckpoint: persistVariant,
+            knownDistractorMeanings,
         });
         if (!row) continue;
         approvedRows.push(row);
@@ -3401,6 +3466,8 @@ module.exports = {
     backfillTranslations: defaultAdapter.backfillTranslations,
     hydrateFormalChallengeSnapshot,
     buildCacheQuestionRowsForWord,
+    resolveDistinctOptionDistractors,
+    buildOptionMeanings,
     generateReplacementContextWithAI,
     getUserByUsername: defaultAdapter.getUserByUsername,
     getStats: defaultAdapter.getStats,

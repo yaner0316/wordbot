@@ -2,7 +2,7 @@
  * LLM-assisted distractor generation for fill-in-the-blank quiz questions.
  */
 
-async function selectContextualDistractors({ word, meaning, context, candidates, excludedDistractors = [], callLLM }) {
+async function selectContextualDistractors({ word, meaning, level, context, candidates, excludedDistractors = [], callLLM }) {
     const referenceList = (candidates || []).slice(0, 8).join(', ');
     const exclusionList = (excludedDistractors || [])
         .map(value => String(value || '').trim())
@@ -15,9 +15,8 @@ meaning ? `Required meaning: "${String(meaning).trim()}"` : '',
         `Sentence: "${context.replace(/_____/g, '___')}"`,
         referenceList ? `Difficulty reference only: ${referenceList}` : '',
         exclusionList ? `Prior-stem distractors: ${exclusionList}. Reuse at most one.` : '',
-        'Each distractor must be exactly one English word using letters or one apostrophe; never use a phrase or hyphen.',
-        'Use the same part of speech and similar difficulty as the answer.',
-        'Prefer the same semantic category, but every option must be clearly wrong in this sentence.',
+        'Each option must be exactly one English word (letters or one apostrophe); never a phrase or hyphen.',
+        `Same part of speech and level "${level || '\u4e2d\u5b66'}". Never synonyms, antonyms or associated words of the answer or of each other: every wrong option must be impossible here and its Chinese meaning must clearly differ from the required meaning.`,
         `Never repeat "${word}". Return only JSON: {"distractors":["word1","word2","word3"]}`,
     ].filter(Boolean).join('\n');
 

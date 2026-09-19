@@ -8,7 +8,10 @@ const {
     buildCacheQuestionRowsForWord,
     generateReplacementContextWithAI,
     hydrateFormalChallengeSnapshot,
+    resolveDistinctOptionDistractors,
+    buildOptionMeanings,
 } = require('../supabase-data');
+const { getOverlappingOptionPairs } = require('../option-meaning-distinctness');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
 
@@ -4260,4 +4263,98 @@ test('formal progress cannot be overwritten by another device holding an older r
     await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0],baseRevision:0}),{code:'QUIZ_PROGRESS_CONFLICT'});
     await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0]}),{code:'SYNC_VERSION_REQUIRED'});
     assert.equal(client.db.quiz_challenges[0].session_state.currentQuestion,2);
+});
+
+test('a distractor whose Chinese meaning collides is replaced instead of rejecting the candidate', async () => {
+    // Production shape: the answer and one distractor translate to the same Chinese gloss
+    // (career/occupation both 职业), so the question is ambiguous and used to be rejected
+    // only after the whole candidate had been built, audited and retried from scratch.
+    const GLOSS = {
+        apple: '\u82f9\u679c',
+        pear: '\u82f9\u679c',      // collides with the answer
+        desk: '\u684c\u5b50',
+        chair: '\u6905\u5b50',
+        river: '\u6cb3\u6d41',
+        delta: '\u4e09\u89d2\u6d32',
+        echo: '\u56de\u58f0',
+        foxtrot: '\u72d0\u6b65\u821e',
+    };
+    const excludedSeen = [];
+    const client = createFakeSupabase({
+        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
+        words: [{
+            id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple',
+            meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE,
+            context_en: 'The child ate an apple after school.',
+            distractors: ['pear', 'desk', 'chair'], old_distractors: [],
+            mastery_status: 'pending', entered_at: '2026-07-30T00:00:00.000Z',
+        }],
+        assessments: [],
+        question_cache: [],
+    });
+    const adapter = createRawSupabaseDataAdapter(client, {
+        translateWords: async words => Object.fromEntries(words.map(word => [word, GLOSS[word] || ''])),
+        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        generateContext: async (word, meaning, level, previous) =>
+            previous ? 'The child packed an apple for the long trip.' : previous,
+        generateDistractors: async ({ excludedDistractors = [] }) => {
+            excludedSeen.push([...excludedDistractors]);
+            const excluded = new Set(excludedDistractors);
+            if (excluded.has('pear')) return ['desk', 'chair', 'river'];
+            if (excluded.size > 0) return ['delta', 'echo', 'foxtrot'];
+            return ['pear', 'desk', 'chair'];
+        },
+    });
+
+    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
+    const rows = client.db.question_cache.filter(row => row.round_type === 'primary');
+
+    assert.equal(result.count, 2);
+    assert.equal(rows.length, 2);
+    // The colliding distractor was excluded and a replacement was requested.
+    assert.ok(excludedSeen.some(list => list.includes('pear')), 'the colliding word must be excluded on repair');
+    for (const row of rows) {
+        const meanings = row.option_meanings;
+        assert.equal(meanings.length, 4);
+        assert.equal(new Set(meanings.map(value => String(value).toLowerCase())).size, 4);
+        assert.deepEqual(getOverlappingOptionPairs(meanings), []);
+        assert.equal(row.options.some(option => /pear/i.test(option)), false);
+    }
+});
+
+test('option-meaning gate stops with a specific rejection once replacements keep colliding', async () => {
+    const reported = [];
+    const result = await resolveDistinctOptionDistractors({
+        distractors: ['occupation', 'chair', 'river'],
+        wordText: 'career',
+        meaning: '\u804c\u4e1a',
+        translateWords: async words => Object.fromEntries(words.map(word =>
+            [word, { occupation: '\u804c\u4e1a', chair: '\u804c\u4e1a', river: '\u6cb3\u6d41' }[word] || ''])),
+        regenerate: async () => ['occupation', 'chair', 'river'],
+        reportRejection: code => reported.push(code),
+    });
+
+    assert.equal(result, null);
+    assert.deepEqual(reported, ['option_meaning_collision']);
+});
+
+test('option meanings already translated by the gate are not paid for a second time', async () => {
+    const requested = [];
+    const translateWords = async words => {
+        requested.push([...words]);
+        return Object.fromEntries(words.map(word =>
+            [word, { desk: '\u684c\u5b50', chair: '\u6905\u5b50', pear: '\u68a8\u5b50' }[word] || '']));
+    };
+
+    const meanings = await buildOptionMeanings({
+        optionWords: ['apple', 'desk', 'chair', 'pear'],
+        correctWord: 'apple',
+        correctMeaning: '\u82f9\u679c',
+        translateWords,
+        knownMeanings: { desk: '\u684c\u5b50', chair: '\u6905\u5b50' },
+    });
+
+    assert.deepEqual(meanings, ['\u82f9\u679c', '\u684c\u5b50', '\u6905\u5b50', '\u68a8\u5b50']);
+    // Only the still-unknown word costs a provider call.
+    assert.deepEqual(requested, [['pear']]);
 });
