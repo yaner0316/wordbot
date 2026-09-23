@@ -9,14 +9,15 @@ async function selectContextualDistractors({ word, meaning, level, context, cand
         .filter(Boolean)
         .join(', ');
     const prompt = [
-        'Create exactly 3 wrong options for this vocabulary fill-in quiz.',
+        'Create 3 wrong options for this vocabulary fill-in quiz.',
         `Correct answer: "${word}"`,
 meaning ? `Required meaning: "${String(meaning).trim()}"` : '',
         `Sentence: "${context.replace(/_____/g, '___')}"`,
         referenceList ? `Difficulty reference only: ${referenceList}` : '',
         exclusionList ? `Prior-stem distractors: ${exclusionList}. Reuse at most one.` : '',
         'Each option must be exactly one English word (letters or one apostrophe); never a phrase or hyphen.',
-        `Same part of speech and level "${level || '\u4e2d\u5b66'}". Never synonyms, antonyms or associated words of the answer or of each other: every wrong option must be impossible here and its Chinese meaning must clearly differ from the required meaning.`,
+        'Use the same part of speech and similar difficulty as the answer.',
+        `Choose plausible same-category words at level "${level || '\u4e2d\u5b66'}"; every wrong option must be impossible in this sentence and its Chinese meaning must not repeat or contain another option's.`,
         `Never repeat "${word}". Return only JSON: {"distractors":["word1","word2","word3"]}`,
     ].filter(Boolean).join('\n');
 
