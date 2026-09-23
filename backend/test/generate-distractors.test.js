@@ -46,28 +46,32 @@ test('prompt uses the real stem and asks the model to avoid prior variant distra
     assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
 });
 
-test('prompt forbids synonyms and requires clearly different Chinese option meanings', async () => {
-    // "Prefer the same semantic category" invited the synonyms whose Chinese glosses then
-    // repeated (职业/职业) or contained each other (小的 inside 极小的), which is the
-    // largest single source of rejected candidates in production.
+test('prompt keeps distractors in the same category and difficulty while forbidding gloss collisions', async () => {
+    // Two production failures shaped this contract:
+    //  - Asking for the same category with no Chinese-meaning constraint produced synonym
+    //    glosses that repeated (职业/职业), which rejected candidates at 50%+ of attempts.
+    //  - Then asking for words that are "not associated" produced unrelated and harder
+    //    distractors (saucer -> sprocket/lagoon/buttress), so difficulty and plausibility
+    //    must be required explicitly, and the collision limit must be stated about the
+    //    Chinese meaning rather than by banning associated words.
     let capturedPrompt = '';
     const result = await selectContextualDistractors({
-        word: 'tiny',
-        meaning: '\u6781\u5c0f\u7684',
-        level: '\u5c0f\u5b66',
-        context: 'The kitten was _____ compared with its mother.',
-        candidates: ['small'],
+        word: 'saucer',
+        meaning: '\u8336\u789f',
+        level: '\u9ad8\u4e2d',
+        context: 'After finishing her tea, Lily placed the cup on the _____.',
+        candidates: ['plate'],
         callLLM: async prompt => {
             capturedPrompt = prompt;
-            return '{"distractors":["chair","river","apple"]}';
+            return '{"distractors":["cup","bowl","tray"]}';
         },
     });
 
-    assert.deepEqual(result, ['chair', 'river', 'apple']);
-    assert.doesNotMatch(capturedPrompt, /same semantic category/i);
-    assert.match(capturedPrompt, /never synonyms, antonyms or associated words/i);
-    assert.match(capturedPrompt, /Chinese meaning must clearly differ from the required meaning/i);
-    assert.match(capturedPrompt, /\u5c0f\u5b66/);
-    assert.match(capturedPrompt, /Required meaning: \"\u6781\u5c0f\u7684\"/);
+    assert.deepEqual(result, ['cup', 'bowl', 'tray']);
+    assert.match(capturedPrompt, /same part of speech and similar difficulty as the answer/i);
+    assert.match(capturedPrompt, /plausible same-category words/i);
+    assert.doesNotMatch(capturedPrompt, /never synonyms, antonyms or associated words/i);
+    assert.match(capturedPrompt, /Chinese meaning must not repeat or contain another option/i);
+    assert.match(capturedPrompt, /\u9ad8\u4e2d/);
     assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
 });
