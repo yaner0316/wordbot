@@ -38,6 +38,7 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 ## Authorization and consistency
 
 - The server is authoritative for identity, role, quiz state, grading, mastery, and rewards.
+- Leaving the parent console for a child-facing page, including browser-back navigation, must first downgrade the server session to the child role and clear in-memory parent credentials. Reloading a remembered account must confirm this downgrade before loading the child homepage. If downgrade cannot be confirmed, remain on the parent page and offer a retry; an explicit unauthenticated response clears the expired local identity and returns to login. Navigation alone must not leave parent authority active.
 - Parent-only writes include user settings, word/meaning mutation, destructive cleanup, and review-flag changes. Children may perform the explicitly supported learning flow and read their allowed state.
 - Cross-device writes use server revisions or compare-and-swap semantics. Duplicate submissions are idempotent.
 - Child-facing errors are actionable but do not disclose provider payloads, credentials, internal job rows, or other users' data.
