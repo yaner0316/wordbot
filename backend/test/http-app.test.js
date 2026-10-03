@@ -112,6 +112,7 @@ test('all protected auth routes are checked before their account adapters', asyn
     };
     const app = createApp({
         submitAnswers: async () => ({}),
+        requireUserSession: (req, res, next) => next(),
         authRateLimiter,
         registerUser: async () => adapterCalls.push('register'),
         loginUser: async () => adapterCalls.push('login'),

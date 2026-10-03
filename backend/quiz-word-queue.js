@@ -264,6 +264,36 @@ function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [
         .sort((left, right) => assessmentSummary.get(left.record_id).latestAttemptAt - assessmentSummary.get(right.record_id).latestAttemptAt || recordTimestamp(left) - recordTimestamp(right));
     return [...oldWrong, ...touchedCorrectOnly, ...untested].slice(0, limit).map(record => record.record_id);
 }
+
+// 用与选题相同的掌握和展示记录解释等待原因；冷却结束不代表缓存届时一定就绪。
+function summarizeQuizLearningAvailability({ wordRecords = [], assessmentRecords = [], displayEvents = [], userId, now = Date.now(), minAgeMs = 0 }) {
+    const records = wordRecords.filter(record => userKey(record.fields?.user) === userKey(userId));
+    const mastery = buildMasteryByRecordId(records, assessmentRecords);
+    const displayed = mergeLatestTimestamps(
+        buildFormalAssessmentDisplaySummary(assessmentRecords, { userId }),
+        buildDisplayEventSummary(displayEvents, { userId })
+    );
+    const summary = { totalMeanings: records.length, masteredMeanings: 0, coolingMeanings: 0, awaitingReviewMeanings: 0, missingEntryTimeMeanings: 0, availableMeanings: 0, nextCooldownEndsAt: null };
+    let nextCooldown = Infinity;
+    for (const record of records) {
+        if (mastery.get(record.record_id)?.mastered) { summary.masteredMeanings++; continue; }
+        const enteredAt = recordTimestamp(record);
+        if (minAgeMs && !enteredAt) { summary.missingEntryTimeMeanings++; continue; }
+        const cooldownEndsAt = Math.max(enteredAt, lastDisplayedTimestamp(record), displayed.get(record.record_id) || 0) + minAgeMs;
+        if (minAgeMs && Number(now) < cooldownEndsAt) {
+            summary.coolingMeanings++;
+            nextCooldown = Math.min(nextCooldown, cooldownEndsAt);
+            continue;
+        }
+        if (hasSelectedSenseFlowFlag(record) && getSelectedSenseContextStage(record, assessmentRecords) === null) {
+            summary.awaitingReviewMeanings++;
+            continue;
+        }
+        summary.availableMeanings++;
+    }
+    if (Number.isFinite(nextCooldown)) summary.nextCooldownEndsAt = new Date(nextCooldown).toISOString();
+    return summary;
+}
 function countEligibleReadyMeaningsByLevel({
     cacheRows = [],
     wordRecords = [],
@@ -359,6 +389,7 @@ function selectCachedQuestionsForWordQueue({
 
 module.exports = {
     buildQuizWordQueue,
+    summarizeQuizLearningAvailability,
     countEligibleReadyMeaningsByLevel,
     selectCachedQuestionsForWordQueue,
     buildRecentQuestionTextsByWord,

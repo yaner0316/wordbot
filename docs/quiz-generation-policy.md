@@ -1,3 +1,7 @@
+# 已被取代的历史文件（保留作证据）
+
+本文件内容损坏且规则已过期，不作为实现、测试或运营依据。当前题目供给规则以 [`PROJECT.md`](../PROJECT.md) 的“Formal-question supply invariants”为准；生产检查与故障处置以 [`docs/OPERATIONS.md`](OPERATIONS.md) 为准。文件保留用于历史追溯，请勿从中复制规则。
+
 # ???????????
 
 ## ??

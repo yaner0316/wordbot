@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { createAuthRateLimiter } = require('./auth-rate-limit');
+const { requireUserSession: defaultRequireUserSession } = require('./auth-middleware');
 const {
     FORMAL_QUIZ_REQUIRED_COUNT,
     isResumableQuizSession,
@@ -170,6 +171,7 @@ function createApp({
     registerUser,
     loginUser,
     verifyParentLogin,
+    getParentCredentialStatus,
     setParentCredentials,
     resetChildPassword,
     getActiveFormalQuizChallenge,
@@ -208,7 +210,11 @@ function createApp({
                 limiter: authRateLimiter,
                 route: 'register',
                 account: username,
-                action: () => registerUser({ username, password }),
+                action: async () => {
+                    const result = await registerUser({ username, password });
+                    if (typeof onUserLogin === 'function') await onUserLogin({ req, res, result });
+                    return result;
+                },
             });
         });
     }
@@ -255,8 +261,32 @@ function createApp({
         app.use(['/api/quiz/session', '/api/submit', '/api/reviews', '/api/word-senses'], requireUserSession);
     }
 
+    const parentAccountSession = requireUserSession || defaultRequireUserSession;
+    if (typeof getParentCredentialStatus === 'function') {
+        app.get('/api/auth/parent/status', parentAccountSession, async (req, res) => {
+            try {
+                const result = await getParentCredentialStatus({ user: req.wordbotSession.user });
+                return res.json({ hasParentCredentials: Boolean(result.hasParentCredentials) });
+            } catch {
+                return res.status(503).json({ error: 'Unable to check parent account', code: 'AUTH_STATUS_UNAVAILABLE' });
+            }
+        });
+    }
+
+    if (typeof onUserLogin === 'function') {
+        app.post('/api/auth/parent/logout', parentAccountSession, async (req, res) => {
+            try {
+                const result = { ok: true, user: req.wordbotSession.user };
+                await onUserLogin({ req, res, result });
+                return res.json(result);
+            } catch {
+                return res.status(503).json({ error: 'Unable to leave parent mode', code: 'AUTH_SESSION_UNAVAILABLE' });
+            }
+        });
+    }
+
     if (typeof setParentCredentials === 'function') {
-        app.post('/api/auth/parent/setup', async (req, res) => {
+        app.post('/api/auth/parent/setup', parentAccountSession, async (req, res) => {
             const { user, childPassword, parentUsername, parentPassword, currentParentUsername, currentParentPassword } = req.body;
             await runProtectedAuth({
                 req,

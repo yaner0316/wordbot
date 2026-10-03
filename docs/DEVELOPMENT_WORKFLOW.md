@@ -21,8 +21,8 @@ Before merging a PR:
 ## Database rules
 
 - Versioned migrations are code; production data repair is a separately reviewed operation.
-- Startup migrations must be idempotent, transactional, and fail closed.
-- A migration failure must report its migration filename and safe PostgreSQL diagnostics, never credentials or row values.
+- Do not run DDL during service startup. Prepare migrations through the registered migration runner and release workflow described in `docs/OPERATIONS.md`; production application requires explicit operator authorization.
+- Migration failures must report safe diagnostics without credentials or row values.
 - Read-only mirror/reconcile tooling stays out of the runtime path until dry-run output, schema reconciliation, and rollback boundaries are accepted.
 - Never run a broad delete, truncate, drop, or mastery reconciliation as a deployment side effect.
 

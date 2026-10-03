@@ -688,6 +688,34 @@ test('updateWordMastery updates the resolved user word row', async () => {
     assert.ok(client.db.words[0].remembered_at);
 });
 
+test('interrupted mastery recovery only updates the unchanged word revision and preserves later parent edits', async () => {
+    const originalRevision = '2026-10-01T00:00:00.000Z';
+    for (const scenario of ['unchanged', 'parent-edited', 'parent-raced']) {
+        const client = createFakeSupabase({
+            users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+            words: [{ id: 'word-1', user_id: 'user-1', feishu_record_id: 'rec-1', word: 'bank',
+                mastery_status: 'pending', updated_at: scenario === 'parent-edited' ? '2026-10-02T00:00:00.000Z' : originalRevision }],
+        }, { beforeOperation: ({ table, operation, db }) => {
+            if (scenario === 'parent-raced' && table === 'words' && operation === 'update') {
+                db.words[0].updated_at = '2026-10-02T00:00:00.000Z';
+                db.words[0].mastery_status = 'recognized';
+            }
+        } });
+        const result = await createSupabaseDataAdapter(client).updateWordMastery('qiuqiu', 'bank', 'mastered',
+            { sourceWordRecordId: 'rec-1', expectedUpdatedAt: originalRevision });
+        if (scenario === 'unchanged') {
+            assert.equal(result.length, 1);
+            assert.equal(client.db.words[0].mastery_status, 'mastered');
+            const operation = client.operations.find(x => x.table === 'words' && x.operation === 'update');
+            assert.equal(operation.filters.some(f => f.column === 'updated_at' && f.value === originalRevision), true);
+        } else {
+            assert.deepEqual(result, []);
+            assert.equal(client.db.words[0].mastery_status, scenario === 'parent-raced' ? 'recognized' : 'pending');
+            assert.equal(client.operations.some(x => x.name === 'fence_word_question_generation'), false);
+        }
+    }
+});
+
 test('quiz mastery fences and finalizes only the exact same-spelling meaning, and retries after finalize failure', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -4263,6 +4291,43 @@ test('formal progress cannot be overwritten by another device holding an older r
     await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0],baseRevision:0}),{code:'QUIZ_PROGRESS_CONFLICT'});
     await assert.rejects(adapter.updateFormalQuizChallengeProgress('sync','real-sync',{currentQuestion:0,answers:[0]}),{code:'SYNC_VERSION_REQUIRED'});
     assert.equal(client.db.quiz_challenges[0].session_state.currentQuestion,2);
+});
+
+test('formal progress preserves server mastery feedback and ignores a client supplied replacement', async () => {
+    const snapshot = { version: 1, baseline: [{ meaningId: 'meaning', mastered: true }] };
+    const client = createFakeSupabase({ users: [{ id: 'user-sync', username: 'sync', username_key: 'sync' }],
+        quiz_challenges: [{ id: 'challenge', test_id: 'real-sync', user_id: 'user-sync', status: 'active',
+            session_state: { revision: 0, currentQuestion: 0, answers: [], submissionMastery: snapshot } }] });
+    const result = await createSupabaseDataAdapter(client).updateFormalQuizChallengeProgress('sync', 'real-sync',
+        { baseRevision: 0, currentQuestion: 2, answers: [0], submissionMastery: { baseline: [] } });
+    assert.deepEqual(client.db.quiz_challenges[0].session_state.submissionMastery, snapshot);
+    assert.deepEqual(result.progress, { revision: 1, currentQuestion: 2, answers: [0] });
+});
+
+test('server mastery snapshot retries a CAS conflict and freezes baseline and result once persisted', async () => {
+    let injected = false;
+    const client = createFakeSupabase({ users: [{ id: 'user-sync', username: 'sync', username_key: 'sync' }],
+        quiz_challenges: [{ id: 'challenge', test_id: 'real-sync', user_id: 'user-sync', status: 'active',
+            session_state: { revision: 0, currentQuestion: 0, answers: [] } }] }, {
+        beforeOperation: ({ table, operation, db }) => {
+            if (table === 'quiz_challenges' && operation === 'update' && !injected) {
+                injected = true;
+                db.quiz_challenges[0].session_state = { revision: 1, currentQuestion: 2, answers: [0] };
+            }
+        },
+    });
+    const adapter = createSupabaseDataAdapter(client);
+    const baseline = [{ meaningId: 'meaning', recordId: 'record', word: 'bank', meaningZh: '银行', mastered: false }];
+    const snapshot = await adapter.ensureQuizSubmissionMastery('sync', 'real-sync', baseline);
+    assert.deepEqual(snapshot.baseline, baseline);
+    assert.equal(client.db.quiz_challenges[0].session_state.revision, 1);
+    assert.equal(client.db.quiz_challenges[0].session_state.currentQuestion, 2);
+    assert.deepEqual((await adapter.ensureQuizSubmissionMastery('sync', 'real-sync', [])).baseline, baseline);
+    const feedback = { newlyMasteredMeanings: baseline.map(({ mastered, ...meaning }) => meaning), masteredWords: ['bank'] };
+    await adapter.saveQuizSubmissionMasteryResult('sync', 'real-sync', feedback);
+    assert.deepEqual(await adapter.saveQuizSubmissionMasteryResult('sync', 'real-sync', { newlyMasteredMeanings: [], masteredWords: [] }), feedback);
+    assert.deepEqual((await adapter.getQuizSubmissionMastery('sync', 'real-sync')).result, feedback);
+    assert.equal(await adapter.getQuizSubmissionMastery('sync', 'real-missing'), null);
 });
 
 test('a distractor whose Chinese meaning collides is replaced instead of rejecting the candidate', async () => {

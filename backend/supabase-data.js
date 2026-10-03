@@ -34,7 +34,7 @@ const { invalidateVariantFromStage } = require('./question-generation-checkpoint
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
-const { countEligibleReadyMeaningsByLevel } = require('./quiz-word-queue');
+const { countEligibleReadyMeaningsByLevel, summarizeQuizLearningAvailability } = require('./quiz-word-queue');
 const { getOverlappingOptionPairs } = require('./option-meaning-distinctness');
 const {
     toFeishuWordRecord,
@@ -57,6 +57,8 @@ const PAGE_SIZE = 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VALID_CORRECTNESS = new Set(['correct', 'wrong']);
 const VALID_CONFIDENCE = new Set(['sure', 'guess']);
+const { getQuizSubmissionMasteryWithClient, ensureQuizSubmissionMasteryWithClient,
+    saveQuizSubmissionMasteryResultWithClient } = require('./submission-mastery-feedback');
 const VALID_MASTERY_STATUS = new Set(['pending', 'recognized', 'consolidating', 'mastered']);
 const VALID_LEARNING_LEVELS = new Set(LEVELS);
 const LEVEL_CHANGE_COOLDOWN_MS = 30 * 24 * 60 * 60 * 1000;
@@ -937,6 +939,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         eligibleReadyMeanings,
         eligibleReadyMeaningsByLevel,
         generation,
+        learning: summarizeQuizLearningAvailability({ wordRecords, assessmentRecords, displayEvents, userId: user.username, now, minAgeMs: WORD_QUIZ_COOLDOWN_MS }),
         readiness: summarizeUserQuestionReadiness({
             readyCount: eligibleReadyMeanings,
             jobs: jobRows,
@@ -2430,14 +2433,16 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     const masteryStatus = normalizeMasteryStatus(newMasteryStatus);
     const rows = await resolveWordRows(client, user.id, word, options);
     const updated = [];
+    const conditionalRecovery = Object.prototype.hasOwnProperty.call(options, 'expectedUpdatedAt');
     for (const row of rows) {
+        if (conditionalRecovery && (!options.expectedUpdatedAt || row.updated_at !== options.expectedUpdatedAt)) continue;
         // Formal submissions cannot revoke saved mastery; deliberate parent edits use updateWord.
         if (row.mastery_status === 'mastered' && masteryStatus !== 'mastered') {
             updated.push(row);
             continue;
         }
         const crossesMasteryBoundary = (row.mastery_status === 'mastered') !== (masteryStatus === 'mastered');
-        if (crossesMasteryBoundary) await fenceWordQuestionGeneration(client, user.id, row.id);
+        if (crossesMasteryBoundary && !conditionalRecovery) await fenceWordQuestionGeneration(client, user.id, row.id);
         const payload = {
             mastery_status: masteryStatus,
             updated_at: new Date().toISOString(),
@@ -2445,13 +2450,18 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
         if (masteryStatus === 'mastered' && !row.remembered_at) {
             payload.remembered_at = new Date().toISOString();
         }
-        const { data, error } = await client
+        let update = client
             .from('words')
             .update(payload)
-            .eq('id', row.id)
-            .select('*')
-            .single();
+            .eq('id', row.id);
+        if (conditionalRecovery) update = update.eq('user_id', user.id).eq('updated_at', options.expectedUpdatedAt);
+        const { data, error } = conditionalRecovery
+            ? await update.select('*').maybeSingle()
+            : await update.select('*').single();
         ensureNoError(error, 'updateWordMastery');
+        if (conditionalRecovery && !data) continue;
+        // The fence changes updated_at itself, so recovery must win its CAS first.
+        if (crossesMasteryBoundary && conditionalRecovery) await fenceWordQuestionGeneration(client, user.id, row.id);
         if (crossesMasteryBoundary || masteryStatus === 'mastered') {
             await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
         }
@@ -3011,7 +3021,7 @@ async function updateFormalQuizChallengeProgressWithClient(client, username, tes
     if (!existing.data) return null;
     const current = normalizeFormalChallengeProgress(existing.data.session_state);
     if (current.revision !== progress.baseRevision) throw syncStateError('QUIZ_PROGRESS_CONFLICT');
-    const state = { ...normalizeFormalChallengeProgress(progress), revision: current.revision + 1 };
+    const state = { ...existing.data.session_state, ...normalizeFormalChallengeProgress(progress), revision: current.revision + 1 };
     const { data, error } = await client.from('quiz_challenges').update({ session_state: state })
         .eq('id', existing.data.id).eq('user_id', user.id).eq('status', 'active')
         .eq('session_state', JSON.stringify(existing.data.session_state))
@@ -3365,6 +3375,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         registerUser: auth.register,
         loginUser: auth.login,
         verifyParentLogin: auth.verifyParentLogin,
+        getParentCredentialStatus: auth.getParentCredentialStatus,
         setParentCredentials: auth.setParentCredentials,
         initializeParentCredentials: auth.initializeParentCredentials,
         resetChildPassword: auth.resetChildPassword,
@@ -3396,6 +3407,18 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         translateWords: words => translator(words),
         submitAssessment: input => submitAssessmentWithClient(client, input),
         submitAssessments: inputs => submitAssessmentsWithClient(client, inputs),
+        getQuizSubmissionMastery: async (username, testId) => {
+            const user = await requireUserByUsername(client, username);
+            return getQuizSubmissionMasteryWithClient(client, user.id, requireTestId(testId));
+        },
+        ensureQuizSubmissionMastery: async (username, testId, baseline) => {
+            const user = await requireUserByUsername(client, username);
+            return ensureQuizSubmissionMasteryWithClient(client, user.id, requireTestId(testId), baseline);
+        },
+        saveQuizSubmissionMasteryResult: async (username, testId, result) => {
+            const user = await requireUserByUsername(client, username);
+            return saveQuizSubmissionMasteryResultWithClient(client, user.id, requireTestId(testId), result);
+        },
         updateWordMastery: (username, word, newMasteryStatus, options) =>
             updateWordMasteryWithClient(client, username, word, newMasteryStatus, options),
         incrementCacheUsedCount: cacheId => incrementCacheUsedCountWithClient(client, cacheId),
@@ -3455,6 +3478,7 @@ module.exports = {
     registerUser: defaultAdapter.registerUser,
     loginUser: defaultAdapter.loginUser,
     verifyParentLogin: defaultAdapter.verifyParentLogin,
+    getParentCredentialStatus: defaultAdapter.getParentCredentialStatus,
     setParentCredentials: defaultAdapter.setParentCredentials,
     initializeParentCredentials: defaultAdapter.initializeParentCredentials,
     resetChildPassword: defaultAdapter.resetChildPassword,
@@ -3489,6 +3513,9 @@ module.exports = {
     translateWords: defaultAdapter.translateWords,
     submitAssessment: defaultAdapter.submitAssessment,
     submitAssessments: defaultAdapter.submitAssessments,
+    getQuizSubmissionMastery: defaultAdapter.getQuizSubmissionMastery,
+    ensureQuizSubmissionMastery: defaultAdapter.ensureQuizSubmissionMastery,
+    saveQuizSubmissionMasteryResult: defaultAdapter.saveQuizSubmissionMasteryResult,
     updateWordMastery: defaultAdapter.updateWordMastery,
     incrementCacheUsedCount: defaultAdapter.incrementCacheUsedCount,
     applyQuizCacheLifecycle: defaultAdapter.applyQuizCacheLifecycle,

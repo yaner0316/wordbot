@@ -126,6 +126,20 @@ test('changing an existing parent account requires child password and current pa
     });
 });
 
+test('parent credential status is read only and exposes only whether complete credentials exist', async () => {
+    const { service, added, updated, stats } = fixture();
+    await service.register({ username: 'Kid', password: 'kidpass' });
+    assert.equal(typeof service.getParentCredentialStatus, 'function');
+    assert.deepEqual(await service.getParentCredentialStatus({ user: 'KID' }), { hasParentCredentials: false });
+    await service.setParentCredentials({ user: 'Kid', childPassword: 'kidpass', parentUsername: 'adult', parentPassword: 'parentpass' });
+    const before = { added: added.length, updated: updated.length };
+    assert.deepEqual(await service.getParentCredentialStatus({ user: 'kid' }), { hasParentCredentials: true });
+    assert.deepEqual({ added: added.length, updated: updated.length }, before);
+    stats[0].fields.parent_password_salt = '';
+    assert.deepEqual(await service.getParentCredentialStatus({ user: 'kid' }), { hasParentCredentials: false });
+    await assert.rejects(service.getParentCredentialStatus({ user: 'missing' }), /user not found/);
+});
+
 test('register uses targeted account lookup when available', async () => {
     const added = [];
     const lookupUsers = [];

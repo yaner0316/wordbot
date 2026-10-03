@@ -19,12 +19,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reviewed Web contract for the paired word-entry and progress hotfix.
+      # Reviewed Web contract for the paired authentication and quiz-recovery fixes.
       - name: Check out production frontend contract
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: 5df6c32a3d81235fb3361423809176e8216e5d46
+          ref: 55d539ba8c4ccf193e0c0a349bee30c8797433ed
           path: web-contract
           persist-credentials: false
 

@@ -1,6 +1,6 @@
 # Supabase Render Deployment
 
-This prepares WordBot to run with Supabase as the only production backend data source. Feishu files and migration utilities remain offline-only and are not part of the production runtime.
+This page records a legacy deployment proposal. For the current release and data procedures, follow [`docs/OPERATIONS.md`](OPERATIONS.md) and the repository's release workflow. Supabase is the production source of truth; legacy Feishu utilities are not part of production runtime.
 
 ## Render Environment Variables
 
@@ -14,29 +14,16 @@ DATABASE_URL=postgresql://...
 
 Keep `SUPABASE_SERVICE_ROLE_KEY` server-side only. Do not expose it in frontend code.
 
-## Deployment Steps
+## Current deployment boundary
 
-1. Review and merge the Gate 5 code changes.
-2. Push the branch to GitHub.
-3. Let Render auto-deploy the updated backend service.
-4. Open Render logs and confirm the backend starts without missing environment variable errors.
+Deploy through the approved `main` release workflow after its checks pass. Do not use the old Gate 5 branch-push sequence below as current release instructions. Apply and verify database migrations only through the registered release process in `docs/OPERATIONS.md`.
 
 ## Rollback Plan
 
 Rollback means restoring the previous Supabase-backed application build. Feishu is not a production rollback target. Keep migration evidence and offline tools separately if historical recovery is required.
 
-## Post-Deployment Smoke Test
+## Isolated smoke test
 
-Call the quiz API for `qiuqiu` and verify the response is sourced from Supabase data:
+Use a local backend connected to a disposable Supabase environment and a synthetic account with no real learner data. Register and explicitly log in to that account, then run the smoke check against the local endpoint. Keep the base URL fixed to `http://127.0.0.1:5000`; do not point this procedure at Render or substitute a real child's identifier.
 
-```bash
-curl -X POST "$RENDER_BACKEND_URL/api/quiz" \
-  -H "Content-Type: application/json" \
-  -d "{\"user\":\"qiuqiu\",\"level\":\"中学\",\"mode\":\"real\"}"
-```
-
-Expected result:
-
-- HTTP 200 when the Supabase question cache has enough ready rows.
-- Response includes `source: "question_cache"` and `diagnostics.dataSource: "supabase"`.
-- Questions should match records migrated into Supabase, not newly read Feishu rows.
+Use the local web build to verify quiz load, submit, result, and history. Production user-flow validation follows the authorization and evidence requirements in `PROJECT.md` and `docs/OPERATIONS.md`.
