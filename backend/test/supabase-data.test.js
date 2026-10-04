@@ -3390,6 +3390,34 @@ test('cache repair excludes invalid meanings while keeping their historical jobs
     const diagnostics = await adapter.getQuestionCacheDiagnostics('qiuqiu');
     assert.equal(diagnostics.generation.counts.blockedInvalidWord, 1);
     assert.equal(diagnostics.generation.failures.find(f => f.wordId === 'invalid').lastErrorCode, 'INVALID_GENERATION_WORD');
+    const wordRead = client.readOperations.find(op => op.table === 'words' && op.selectColumns.includes('feishu_record_id'));
+    for (const column of ['user_id', 'mastery_status', 'question_generation_version']) assert.ok(wordRead.selectColumns.split(',').map(s => s.trim()).includes(column), `diagnostics word projection requires ${column}`);
+});
+
+test('diagnostics word lookup splits long ID lists without losing blocked jobs', async () => {
+    const client = seededClient();
+    client.db.question_cache = [];
+    const words = Array.from({length:121}, (_,i) => ({id:`blocked-${i}`,user_id:'user-1',word:'bad_word',mastery_status:'pending',question_generation_version:1}));
+    client.db.words.push(...words);
+    client.db.question_generation_jobs = words.map(w=>({id:`j-${w.id}`,user_id:'user-1',word_id:w.id,word_version:1,status:'pending'}));
+    const originalFrom = client.from.bind(client);
+    const batchSizes = [];
+    client.from = table => {
+        const query = originalFrom(table);
+        const originalIn = query.in.bind(query);
+        query.in = (column, ids) => {
+            if (table === 'words' && column === 'id') {
+                batchSizes.push(ids.length);
+                if (ids.length > 100) throw new Error('simulated query size limit');
+            }
+            return originalIn(column, ids);
+        };
+        return query;
+    };
+    const result = await createSupabaseDataAdapter(client).getQuestionCacheDiagnostics('qiuqiu');
+    assert.equal(result.generation.counts.blockedInvalidWord,121);
+    assert.equal(result.generation.failures.length,121);
+    assert.deepEqual(batchSizes,[100,21]);
 });
 
 test('parent word status filters and edit-read round trips preserve all four stages', async () => {

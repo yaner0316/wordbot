@@ -137,6 +137,7 @@ function assessmentDiagnosticField(row, key) {
 // 使用统一的 auth-middleware 中的 requireAdminToken 和 requireUserSession
 const questionGenerationServerStates = new WeakMap();
 const QUESTION_GENERATION_HEALTH_PAGE_SIZE = 1000;
+const QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE = 100;
 const CLAIMABLE_JOB_STATUSES = new Set(['pending', 'retry_wait']);
 const LEASED_JOB_STATUSES = new Set(['generating', 'validating', 'repairing']);
 
@@ -225,11 +226,13 @@ function createQuestionGenerationQueueSummaryReader({ client = supabase, now = (
             .from('question_generation_jobs')
             .select('id,user_id,word_id,word_version,status,created_at,updated_at,last_error_code'));
         const words = [];
-        const wordIds = [...new Set(rows.map(row => row.word_id).filter(Boolean))];
-        for (let offset = 0; offset < wordIds.length; offset += QUESTION_GENERATION_HEALTH_PAGE_SIZE) {
+        const wordIds = [...new Set(rows
+            .filter(row => CLAIMABLE_JOB_STATUSES.has(row.status) || LEASED_JOB_STATUSES.has(row.status))
+            .map(row => row.word_id).filter(Boolean))];
+        for (let offset = 0; offset < wordIds.length; offset += QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE) {
             const { data, error } = await client.from('words').select('id,user_id,word,mastery_status,question_generation_version')
-                .in('id', wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_PAGE_SIZE))
-                .order('id', { ascending: true }).limit(QUESTION_GENERATION_HEALTH_PAGE_SIZE);
+                .in('id', wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE))
+                .order('id', { ascending: true }).limit(QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE);
             throwHealthQueryError(error);
             words.push(...(data || []));
         }
@@ -239,7 +242,7 @@ function createQuestionGenerationQueueSummaryReader({ client = supabase, now = (
 
 function unknownQuestionGenerationQueueSummary() {
     return {
-        counts: { pending: 'unknown', running: 'unknown', retrying: 'unknown', failed: 'unknown' },
+        counts: { pending: 'unknown', running: 'unknown', retrying: 'unknown', failed: 'unknown', blockedInvalidWord: 'unknown' },
         oldestPendingAgeMs: null,
         lastErrorCode: null,
     };

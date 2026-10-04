@@ -37,7 +37,7 @@
 
 `GET /api/admin/questionCache/status?userId=<当前用户>` 的 `status.learning` 区分总词义、已掌握、冷却、等待识别复习、缺录入时间和可选词义数量，并提供 `nextCooldownEndsAt`。该时间只表示最早冷却结束，不保证届时已有十道可用题；正式开考仍由现有可选题数决定。查询失败不等于题数为零。
 
-`status.generation.counts.blockedInvalidWord` 和 `status.readiness.queue.blockedInvalidWordCount` 单列格式不符合生成条件的词义任务，不把它们算成普通 pending/retrying。对应的 `generation.failures` 条目为 `status: blocked_invalid_word`、`lastErrorCode: INVALID_GENERATION_WORD`、`nextAttemptAt: null`，保留本用户的 `wordId` 供既有词库管理定位；应修正词义所属单词，不能通过重复重建解决。可用题不足十道且存在此类阻塞时 readiness 为 `needs_attention`；已有足够合格题时仍可开考，阻塞问题独立提示。公网 health 中同类问题以 `learningSupply.status: invalid_data_blocked` 暴露，不冒称供题健康。
+`status.generation.counts.blockedInvalidWord` 和 `status.readiness.queue.blockedInvalidWordCount` 单列格式不符合生成条件的词义任务，不把它们算成普通 pending/retrying。对应的 `generation.failures` 条目为 `status: blocked_invalid_word`、`lastErrorCode: INVALID_GENERATION_WORD`、`nextAttemptAt: null`，保留本用户的 `wordId` 供既有词库管理定位；应修正词义所属单词，不能通过重复重建解决。可用题不足十道且存在此类阻塞时 readiness 为 `needs_attention`；已有足够合格题时仍可开考，阻塞问题独立提示。公网 health 中同类问题以 `learningSupply.status: invalid_data_blocked` 暴露，不冒称供题健康。队列读取失败时为 `learningSupply.status: queue_unavailable`，不能把未知状态显示成 ready。
 
 云端没有活跃试卷（`active: false`）不能单独证明一次超时提交已保存。客户端应保留结果未知的原答卷，允许查看只读备份或历史；再次确认同一提交必须复用原始请求内容，不能因切页、重载或其他设备开始新试卷而删除待核对答案。
 

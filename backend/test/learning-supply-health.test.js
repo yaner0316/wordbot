@@ -14,3 +14,8 @@ test('invalid blocked data keeps learning supply degraded when the worker has no
  const result = getLearningSupplyHealth({ok:true,status:'idle',eligibleDueCount:0}, {counts:{pending:0,retrying:1,failed:0,blockedInvalidWord:10},alerts:{oldestPendingOverThreshold:false}});
  assert.deepEqual(result, {ok:false,status:'invalid_data_blocked'});
 });
+
+test('an unknown queue cannot report learning supply ready even when no work is currently due', () => {
+ const queue = { counts: { pending: 'unknown', running: 'unknown', retrying: 'unknown', failed: 'unknown', blockedInvalidWord: 'unknown' } };
+ assert.deepEqual(getLearningSupplyHealth({ok:true,status:'idle',eligibleDueCount:0}, queue), {ok:false,status:'queue_unavailable'});
+});

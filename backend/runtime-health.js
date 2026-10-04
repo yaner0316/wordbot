@@ -110,6 +110,7 @@ function getRuntimeHealth({
 function getLearningSupplyHealth(worker = {}, queue = {}) {
     let status = 'ready';
     if (Number(queue.counts?.blockedInvalidWord) > 0) status = 'invalid_data_blocked';
+    else if (Object.values(queue.counts || {}).some(value => value === 'unknown')) status = 'queue_unavailable';
     else if (queue.alerts?.oldestPendingOverThreshold === true) status = 'backlog_overdue';
     else if (!worker.ok) status = 'worker_unavailable';
     else if (Number(queue.counts?.failed) > 0) status = 'manual_review_required';
