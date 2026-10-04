@@ -24,3 +24,29 @@ test('parent middleware retains ownership checks', () => {
         assert.equal(allowed,status===200);
     }
 });
+
+test('server parent logout replaces the elevated cookie before parent-managed writes', async t => {
+    const { startServer } = require('../server');
+    const server = startServer(0, { enableQuestionGenerationWorker: false });
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const parentCookie = sessionStore.cookie(sessionStore.issue('audit-child', 'parent'));
+    const response = await fetch(baseUrl + '/api/auth/parent/logout', {
+        method: 'POST',
+        headers: { cookie: parentCookie, 'Content-Type': 'application/json' },
+        body: '{}',
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, user: 'audit-child' });
+    const childCookie = response.headers.get('set-cookie')?.split(';')[0];
+    assert.equal(sessionStore.read({ get: () => childCookie }).role, 'user');
+    for (const [method, path] of [['PUT','/api/admin/userSettings'], ['POST','/api/admin/addWord'], ['POST','/api/admin/addWords'], ['POST','/api/admin/cleanup'], ['POST','/api/admin/reviewWords/mark'], ['POST','/api/admin/reviewWords/clear'], ['PUT','/api/word'], ['DELETE','/api/word']]) {
+        const mutation = await fetch(baseUrl + path, {
+            method,
+            headers: { cookie: childCookie, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user: 'audit-child' }),
+        });
+        assert.equal(mutation.status, 403, `${method} ${path}`);
+    }
+});

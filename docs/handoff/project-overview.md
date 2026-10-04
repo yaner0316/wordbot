@@ -1,4 +1,8 @@
-﻿# 项目总览
+# 项目总览（历史记录）
+
+本文保留早期架构与状态快照，所述 Feishu 存储、7 天掌握规则及待确认部署状态已被当前实现取代。权威产品和技术事实见 [`PROJECT.md`](../../PROJECT.md)、[`AGENTS.md`](../../AGENTS.md) 与 [`docs/OPERATIONS.md`](../OPERATIONS.md)。
+
+# 项目总览
 
 ## 项目定位
 

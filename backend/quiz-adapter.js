@@ -17,6 +17,7 @@ const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable,
 const { generateElementaryTemplateContext } = require('./elementary-context');
 const { normalizeSubmittedAnswer } = require('./mastery-evidence');
 const { evaluateMeaning } = require('./mastery-service');
+const { emptyFeedback, buildSubmissionMasteryBaseline, deriveSubmissionMasteryFeedback } = require('./submission-mastery-feedback');
 const { getSelectedSenseContextStage, hasSelectedSenseFlowFlag } = require('./selected-sense-flow');
 
 const ANSWER_LETTERS = ['A', 'B', 'C', 'D'];
@@ -195,7 +196,7 @@ function masteryStageToStatus(stage) {
     return 'pending';
 }
 
-function buildSubmitResult({ testId, results, correct, replacementRequired = false }) {
+function buildSubmitResult({ testId, results, correct, replacementRequired = false, masteryFeedback = emptyFeedback() }) {
     const total = results.length;
     const mode = getAssessmentMode(testId);
     return {
@@ -206,7 +207,7 @@ function buildSubmitResult({ testId, results, correct, replacementRequired = fal
         total,
         replacementRequired,
         accuracy: total > 0 ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
-        masteredWords: [],
+        ...masteryFeedback,
         gameReward: calculateGameReward({
             testId,
             mode,
@@ -573,6 +574,8 @@ async function submitQuizWithDataSource({
     let sourceRecordIdByWordId = new Map();
     let wordRecords = [];
     let wordRowsByRecordId = new Map();
+    let masterySnapshot = null;
+    let masteryFeedback = emptyFeedback();
     if (shouldUpdateMastery) {
         wordRows = typeof dataSource.getWordsForUser === 'function'
             ? await dataSource.getWordsForUser(username)
@@ -586,6 +589,10 @@ async function submitQuizWithDataSource({
         sourceRecordIdByWordId = buildWordSourceIdMap(wordRows);
         wordRowsByRecordId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
         wordRecords = wordRows.map(row => toFeishuWordRecord(row, { username }));
+        if (typeof dataSource.ensureQuizSubmissionMastery === 'function') {
+            masterySnapshot = await dataSource.ensureQuizSubmissionMastery(username, testId,
+                existingAssessments.length ? undefined : buildSubmissionMasteryBaseline(wordRows, questions));
+        }
     }
 
     for (let index = 0; index < questions.length; index++) {
@@ -729,13 +736,17 @@ async function submitQuizWithDataSource({
             const nextStatus = masteryStageToStatus(evaluation.stage || fallbackStage);
             await dataSource.updateWordMastery(username, question.word, nextStatus, { sourceWordRecordId });
         }
+        if (masterySnapshot && !replacementRequired && typeof dataSource.saveQuizSubmissionMasteryResult === 'function') {
+            masteryFeedback = masterySnapshot.result || deriveSubmissionMasteryFeedback(testId, masterySnapshot.baseline, assessmentRecords);
+            masteryFeedback = await dataSource.saveQuizSubmissionMasteryResult(username, testId, masteryFeedback);
+        }
     }
 
     await Promise.all(pendingSubmissions
         .filter(({ question }) => question.cacheRecordId && typeof dataSource.incrementCacheUsedCount === 'function')
         .map(({ question }) => dataSource.incrementCacheUsedCount(question.cacheRecordId)));
 
-    return buildSubmitResult({ testId, results, correct, replacementRequired });
+    return buildSubmitResult({ testId, results, correct, replacementRequired, masteryFeedback });
 }
 module.exports = {
     generateQuizWithDataSource,

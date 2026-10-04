@@ -57,7 +57,7 @@ function parseStoredArray(value) {
     }
 }
 
-function rebuildSubmittedResult(records, isCorrectValue) {
+function rebuildSubmittedResult(records, isCorrectValue, masteryFeedback) {
     const results = records.map((record, index) => {
         const fields = record.fields || {};
         const storedAnswer = parseStoredAnswer(fieldValue(fields.your_answer));
@@ -90,6 +90,7 @@ function rebuildSubmittedResult(records, isCorrectValue) {
         total,
         accuracy: total > 0 ? `${((correct / total) * 100).toFixed(1)}%` : '0.0%',
         masteredWords: [],
+        ...(masteryFeedback || {}),
         gameReward: calculateGameReward({
             testId: fieldValue(records[0]?.fields?.test_id),
             mode: getAssessmentMode(fieldValue(records[0]?.fields?.test_id)),

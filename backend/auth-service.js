@@ -179,6 +179,18 @@ function createAuthService({
         return { ok: true, user: accountUser(account), parentUsername: accountParentUsername(account) };
     }
 
+    async function getParentCredentialStatus({ user } = {}) {
+        const student = normalizeUsername(user);
+        validateUsername(student);
+        const account = await lookupAccountByUsername(student);
+        if (!account) throw new Error('user not found');
+        return {
+            hasParentCredentials: Boolean(accountParentUsername(account)
+                && extractText(account.fields?.parent_password_hash)
+                && extractText(account.fields?.parent_password_salt)),
+        };
+    }
+
     async function setParentCredentials({
         user,
         childPassword,
@@ -242,7 +254,7 @@ function createAuthService({
         return { ok: true, user: accountUser(account), parentUsername: parent.parentUsername };
     }
 
-    return { login, register, verifyParentLogin, setParentCredentials, initializeParentCredentials, resetChildPassword };
+    return { login, register, verifyParentLogin, getParentCredentialStatus, setParentCredentials, initializeParentCredentials, resetChildPassword };
 }
 
 module.exports = {

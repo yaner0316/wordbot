@@ -6,6 +6,7 @@ const {
     toFeishuCacheRow,
 } = require('./quiz-adapter');
 const { rebuildSubmittedResult } = require('./submission-coordinator');
+const { emptyFeedback, deriveSubmissionMasteryFeedback } = require('./submission-mastery-feedback');
 const {
     FORMAL_QUIZ_REQUIRED_COUNT: QUIZ_QUESTION_COUNT,
     assertFormalQuizQuestions,
@@ -117,6 +118,7 @@ function loadSupabaseDataSource() {
         'verifyParentLogin',
         'setParentCredentials',
         'initializeParentCredentials',
+        'getParentCredentialStatus',
         'resetChildPassword',
     ];
     const requiredAdminMethods = [
@@ -358,6 +360,32 @@ function loadSupabaseDataSource() {
         return rebuildSupabaseQuizResult(testId, assessments || [], expectedCount);
     }
 
+    async function withSubmittedMasteryFeedback(user, testId, result) {
+        if (!isRealAssessment(testId) || typeof supabaseData.getQuizSubmissionMastery !== 'function') {
+            return { ...result, ...emptyFeedback() };
+        }
+        const snapshot = await supabaseData.getQuizSubmissionMastery(user, testId);
+        if (!snapshot) return { ...result, ...emptyFeedback() };
+        if (snapshot.result) return { ...result, ...snapshot.result };
+        const sourceIds = result.results.map(r => r.recordId).filter(Boolean);
+        const rows = typeof supabaseData.getMasteryAssessmentsForWords === 'function'
+            ? await supabaseData.getMasteryAssessmentsForWords(user, sourceIds)
+            : await supabaseData.getAssessmentsForUser(user);
+        const feedback = deriveSubmissionMasteryFeedback(testId, snapshot.baseline,
+            rows.map(row => toFeishuAssessmentRecord(row, { username: user })));
+        // A crash may have persisted answers before persisting the mastery projection.
+        // Reapply only proven new meanings before recording a successful feedback result.
+        for (const meaning of feedback.newlyMasteredMeanings) {
+            const baseline = snapshot.baseline.find(item => item.meaningId === meaning.meaningId);
+            if (!baseline?.revision) continue;
+            await supabaseData.updateWordMastery(user, meaning.word, 'mastered', {
+                sourceWordRecordId: meaning.recordId, expectedUpdatedAt: baseline.revision,
+            });
+        }
+        const saved = await supabaseData.saveQuizSubmissionMasteryResult(user, testId, feedback);
+        return { ...result, ...saved };
+    }
+
     async function completeFormalChallengeIfSubmitted(user, testId, result) {
         if (!isRealAssessment(testId) || !result || result.replacementRequired) return;
         if (typeof supabaseData.completeFormalQuizChallenge !== 'function') return;
@@ -386,7 +414,7 @@ function loadSupabaseDataSource() {
                     const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
                     if (existingResult) {
                         await completeFormalChallengeIfSubmitted(user, testId, existingResult);
-                        return existingResult;
+                        return withSubmittedMasteryFeedback(user, testId, existingResult);
                     }
                     if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
                     throw new Error('FORMAL_CHALLENGE_NOT_FOUND');
@@ -400,7 +428,7 @@ function loadSupabaseDataSource() {
                 const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, QUIZ_QUESTION_COUNT);
                 if (existingResult) {
                     await completeFormalChallengeIfSubmitted(user, testId, existingResult);
-                    return existingResult;
+                    return withSubmittedMasteryFeedback(user, testId, existingResult);
                 }
                 if (existingAssessments.length > 0) throw new Error('QUIZ_SUBMISSION_INCOMPLETE');
                 throw new Error('QUIZ_SESSION_NOT_FOUND');
@@ -411,7 +439,7 @@ function loadSupabaseDataSource() {
         const existingResult = getCompleteSupabaseQuizResult(testId, existingAssessments, questions.length);
         if (existingResult) {
             await completeFormalChallengeIfSubmitted(user, testId, existingResult);
-            return existingResult;
+            return withSubmittedMasteryFeedback(user, testId, existingResult);
         }
         const result = await submitQuizWithDataSource({
             username: user,

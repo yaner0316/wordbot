@@ -42,6 +42,7 @@ function loadDataSource({ envValue, cacheSource, nodeEnv, supabaseExports = {}, 
             verifyParentLogin: async input => ({ source: 'supabase-parent-login', input }),
             setParentCredentials: async input => ({ source: 'supabase-parent-setup', input }),
             initializeParentCredentials: async input => ({ source: 'supabase-parent-initialize', input }),
+            getParentCredentialStatus: async username => ({ hasParentCredentials: username === 'configured-parent' }),
             resetChildPassword: async input => ({ source: 'supabase-child-reset', input }),
             getAllUsers: async () => ['supabase-user'],
             getReviewWords: async username => [{ source: 'supabase-review', username }],
@@ -678,6 +679,70 @@ test('DATA_SOURCE=supabase fails closed when the Supabase authentication adapter
         }),
         /SUPABASE_ADAPTER_INCOMPLETE.*loginUser/
     );
+});
+
+test('parent credential readiness is required and forwarded by the Supabase data source', async () => {
+    assert.throws(() => loadDataSource({ supabaseExports: { getParentCredentialStatus: undefined } }),
+        /SUPABASE_ADAPTER_INCOMPLETE.*getParentCredentialStatus/);
+    assert.deepEqual(await loadDataSource().getParentCredentialStatus('configured-parent'),
+        { hasParentCredentials: true });
+});
+
+test('mastery feedback survives restart and replays its durable result without consulting current words', async () => {
+    const testId = 'real-feedback-restart';
+    const rows = formalWordRows().map((word, i) => ({ id: `answer-${i}`, test_id: testId,
+        word_id: word.id, source_word_record_id: word.feishu_record_id, word_snapshot: word.word,
+        is_correct: 'correct', submitted_answer: 'A', assessed_at: '2026-10-02T00:00:00Z' }));
+    const feedback = { newlyMasteredMeanings: [{ meaningId: 'word-1', recordId: 'rec-word-1', word: 'word1', meaningZh: '义项' }], masteredWords: ['word1'] };
+    const exports = {
+        getFormalQuizChallenge: async () => null,
+        getAssessmentsForTest: async () => rows,
+        getQuizSubmissionMastery: async () => ({ version: 1, baseline: [], result: feedback }),
+        getWordsForUser: async () => { throw new Error('replay must not infer feedback from mutable words'); },
+    };
+    const first = await loadDataSource({ supabaseExports: exports }).submitAnswers('qiuqiu', testId, Array(10).fill(0));
+    const restarted = await loadDataSource({ supabaseExports: exports }).submitAnswers('qiuqiu', testId, Array(10).fill(1));
+    assert.deepEqual(first.newlyMasteredMeanings, feedback.newlyMasteredMeanings);
+    assert.deepEqual(restarted.newlyMasteredMeanings, first.newlyMasteredMeanings);
+    assert.deepEqual(restarted.masteredWords, first.masteredWords);
+    assert.equal(restarted.correct, 10);
+});
+
+test('restart after answer persistence finalizes feedback from saved baseline and immutable evidence', async () => {
+    const testId = 'real-feedback-interrupted';
+    const words = formalWordRows();
+    const prior = words.map((word, i) => ({ id: `prior-${i}`, test_id: 'real-prior-feedback', word_id: word.id,
+        source_word_record_id: word.feishu_record_id, word_snapshot: word.word, is_correct: 'correct',
+        submitted_answer: 'A', question_text: `Previous sentence ${i}.`, assessed_at: '2026-10-01T00:00:00Z' }));
+    const rows = words.map((word, i) => ({ ...prior[i], id: `current-${i}`, test_id: testId,
+        question_text: `Current sentence ${i}.`, assessed_at: '2026-10-02T00:00:00Z' }));
+    const snapshot = { version: 1, baseline: words.map((w, i) => ({ meaningId: w.id, recordId: w.feishu_record_id,
+        word: w.word, meaningZh: '义项', mastered: i === 0, revision: '2026-10-01T00:00:00Z' })) };
+    const updated = [];
+    const exports = {
+        getFormalQuizChallenge: async () => null,
+        getAssessmentsForTest: async () => rows,
+        getQuizSubmissionMastery: async () => structuredClone(snapshot),
+        getMasteryAssessmentsForWords: async () => [...prior, ...rows],
+        updateWordMastery: async (_user, _word, status, options) => {
+            assert.equal(options.expectedUpdatedAt, '2026-10-01T00:00:00Z');
+            updated.push([status, options.sourceWordRecordId]);
+        },
+        saveQuizSubmissionMasteryResult: async (_user, _id, feedback) => { snapshot.result ||= feedback; return snapshot.result; },
+    };
+    const result = await loadDataSource({ supabaseExports: exports }).submitAnswers('qiuqiu', testId, Array(10).fill(0));
+    assert.equal(result.newlyMasteredMeanings.length, 9);
+    assert.equal(snapshot.result.newlyMasteredMeanings.length, 9);
+    assert.equal(updated.length, 9);
+    const replay = await loadDataSource({ supabaseExports: exports }).submitAnswers('qiuqiu', testId, Array(10).fill(0));
+    assert.deepEqual(replay.newlyMasteredMeanings, result.newlyMasteredMeanings);
+    assert.equal(updated.length, 9, 'completed feedback replay performs no mastery writes');
+    delete snapshot.result;
+    snapshot.baseline.forEach(m => { delete m.revision; });
+    updated.length = 0;
+    const legacy = await loadDataSource({ supabaseExports: exports }).submitAnswers('qiuqiu', testId, Array(10).fill(0));
+    assert.deepEqual(legacy.newlyMasteredMeanings, result.newlyMasteredMeanings);
+    assert.equal(updated.length, 0, 'legacy snapshots without a revision do not reapply mastery');
 });
 
 test('DATA_SOURCE=supabase does not load or enumerate Feishu exports', async () => {
