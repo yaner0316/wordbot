@@ -404,6 +404,50 @@ test('public health classifies invalid current jobs using the actual selected co
     assert.doesNotMatch(JSON.stringify(health), /bad_word|j-w-|INSUFFICIENT.*bank/);
 });
 
+test('queue health loads active word IDs in small batches and preserves the full job summary', async t => {
+    const { startServer } = require('../server');
+    const now = '2026-10-05T00:50:00Z';
+    const words = Array.from({length:332}, (_, i) => ({ id: `word-${i}`, user_id: 'u', word: i < 10 ? 'bad_word' : 'bank', mastery_status: 'pending', question_generation_version: 1 }));
+    const jobs = words.map((w, i) => ({ id: `job-${i}`, user_id: 'u', word_id: w.id, word_version: 1,
+        status: i >= 212 ? 'ready' : i === 211 ? 'retry_wait' : 'pending', created_at: '2026-10-05T00:45:00Z', next_attempt_at: '2026-10-05T01:00:00Z' }));
+    const requestedIds = [];
+    const batchSizes = [];
+    let failWordRead = false;
+    const client = { from(table) {
+        let columns;
+        let ids;
+        return { select(value) { columns=value;return this; }, order() {return this;}, gt() {return this;},
+            in(column, value) {ids=value;return this;},
+            limit() {
+                if (table === 'words') {
+                    if (failWordRead) return Promise.resolve({data:null,error:{message:'private simulated failure'}});
+                    batchSizes.push(ids.length);
+                    requestedIds.push(...ids);
+                    if (ids.length > 100) return Promise.resolve({data:null,error:{message:'simulated query size limit'}});
+                }
+                const rows=(table === 'words' ? words.filter(w => ids.includes(w.id)) : jobs);
+                return Promise.resolve({data:rows.map(row=>Object.fromEntries(columns.split(',').map(key=>[key,row[key]]))),error:null});
+            },
+        };
+    } };
+    const runtime={worker:{start(){return true;},isRunning(){return true;},async stop(){}}};
+    const server=startServer(0,{runtimeFactory:()=>runtime,enableQuestionGenerationWorker:true,runtimeHealthEnv:HEALTHY_RUNTIME_ENV,
+        databaseHealthClient:healthyDatabaseClient,questionGenerationHealthClient:client,workerHealthNow:()=>now,getQuestionGenerationEligibleDueCount:async()=>0});
+    await new Promise(resolve=>server.once('listening',resolve));
+    t.after(async()=>{if(server.listening) await new Promise(resolve=>server.close(resolve));});
+    const health=await(await fetch(`http://127.0.0.1:${server.address().port}/api/health`)).json();
+    assert.equal(health.questionGenerationQueue.counts.blockedInvalidWord,10);
+    assert.equal(health.questionGenerationQueue.counts.pending,201);
+    assert.equal(health.questionGenerationQueue.counts.retrying,1);
+    assert.deepEqual(batchSizes,[100,100,12]);
+    assert.deepEqual(requestedIds,jobs.filter(j=>j.status!=='ready').map(j=>j.word_id));
+    failWordRead = true;
+    const unavailable = await(await fetch(`http://127.0.0.1:${server.address().port}/api/health`)).json();
+    assert.equal(unavailable.questionGenerationQueue.counts.blockedInvalidWord,'unknown');
+    assert.deepEqual(unavailable.learningSupply,{ok:false,status:'queue_unavailable'});
+    assert.doesNotMatch(JSON.stringify(unavailable),/private simulated/);
+});
+
 test('shutdownServer waits for the in-flight worker to stop', async t => {
     const { startServer, shutdownServer } = require('../server');
     let releaseStop;

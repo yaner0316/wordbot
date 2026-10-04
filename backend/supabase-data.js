@@ -735,13 +735,16 @@ async function getWordsById(wordIds) {
 async function getWordsByIdWithClient(client, wordIds) {
     const uniqueIds = [...new Set(wordIds.filter(Boolean))];
     if (!uniqueIds.length) return new Map();
-    const rows = await fetchAllRows(
-        () => client
-            .from('words')
-            .select('id, feishu_record_id, word, meaning_zh, context_zh')
-            .in('id', uniqueIds),
-        'getQuestionCache.words'
-    );
+    const rows = [];
+    for (let offset = 0; offset < uniqueIds.length; offset += 100) {
+        rows.push(...await fetchAllRows(
+            () => client
+                .from('words')
+                .select('id, feishu_record_id, word, meaning_zh, context_zh, user_id, mastery_status, question_generation_version')
+                .in('id', uniqueIds.slice(offset, offset + 100)),
+            'getQuestionCache.words'
+        ));
+    }
     return new Map(rows.map((row) => [row.id, row]));
 }
 
