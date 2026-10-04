@@ -37,6 +37,10 @@
 
 `GET /api/admin/questionCache/status?userId=<当前用户>` 的 `status.learning` 区分总词义、已掌握、冷却、等待识别复习、缺录入时间和可选词义数量，并提供 `nextCooldownEndsAt`。该时间只表示最早冷却结束，不保证届时已有十道可用题；正式开考仍由现有可选题数决定。查询失败不等于题数为零。
 
+`status.generation.counts.blockedInvalidWord` 和 `status.readiness.queue.blockedInvalidWordCount` 单列格式不符合生成条件的词义任务，不把它们算成普通 pending/retrying。对应的 `generation.failures` 条目为 `status: blocked_invalid_word`、`lastErrorCode: INVALID_GENERATION_WORD`、`nextAttemptAt: null`，保留本用户的 `wordId` 供既有词库管理定位；应修正词义所属单词，不能通过重复重建解决。可用题不足十道且存在此类阻塞时 readiness 为 `needs_attention`；已有足够合格题时仍可开考，阻塞问题独立提示。公网 health 中同类问题以 `learningSupply.status: invalid_data_blocked` 暴露，不冒称供题健康。
+
+云端没有活跃试卷（`active: false`）不能单独证明一次超时提交已保存。客户端应保留结果未知的原答卷，允许查看只读备份或历史；再次确认同一提交必须复用原始请求内容，不能因切页、重载或其他设备开始新试卷而删除待核对答案。
+
 `POST /api/submit` 的 `newlyMasteredMeanings` 返回本次新增掌握的 `{ meaningId, recordId, word, meaningZh }`，`masteredWords` 仅列出所有词义均已掌握的拼写。正式提交在已有会话状态中保存服务端基线和固定反馈，重复提交返回相同摘要；没有基线的历史提交保守返回空摘要。中断恢复按原词义版本补写，版本已变或缺失时保留后续状态。此反馈不改变现行计分或奖励公式。
 
 ## 隔离冒烟检查

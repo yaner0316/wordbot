@@ -3,6 +3,7 @@
 const { normalizeLevel } = require('./learning-level');
 const { getCacheQuestionReadinessIssues } = require('./question-cache');
 const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
+const { isValidGenerationWord } = require('./question-generation-eligibility');
 
 const EXECUTABLE_JOB_STATUSES = new Set([
     'pending',
@@ -44,7 +45,7 @@ function hasUsableCurrentLevel(user) {
 }
 
 function hasCurrentQuestionCoverage({ word, user, cacheRows = [] } = {}) {
-    if (!isCoverageTarget(word) || text(user?.id) !== text(word?.user_id)) return false;
+    if (!isCoverageTarget(word) || !isValidGenerationWord(word.word) || text(user?.id) !== text(word?.user_id)) return false;
     let level;
     try {
         level = normalizeLevel(user?.learning_level);
@@ -61,7 +62,7 @@ function hasCurrentQuestionCoverage({ word, user, cacheRows = [] } = {}) {
 }
 
 function jobIsExecutable(job, word) {
-    return text(job?.user_id) === text(word?.user_id)
+    return isValidGenerationWord(word?.word) && text(job?.user_id) === text(word?.user_id)
         && text(job?.word_id) === text(word?.id || word?.word_id)
         && Number(job?.word_version) === Number(word?.question_generation_version)
         && EXECUTABLE_JOB_STATUSES.has(text(job?.status).toLowerCase());
@@ -82,7 +83,7 @@ function planQuestionCoverage({ users = [], words = [], cacheRows = [], jobs = [
         jobsByWordId.get(wordId).push(job);
     }
 
-    const summary = { scanned: 0, targets: 0, ready: 0, executable: 0, planned: 0, skippedMissingLevel: 0 };
+    const summary = { scanned: 0, targets: 0, ready: 0, executable: 0, planned: 0, skippedMissingLevel: 0, blockedInvalidWord: 0 };
     const targets = [];
     const boundedLimit = Number.isFinite(Number(limit))
         ? Math.max(0, Math.floor(Number(limit)))
@@ -93,6 +94,10 @@ function planQuestionCoverage({ users = [], words = [], cacheRows = [], jobs = [
         const user = usersById.get(text(word.user_id));
         if (!user) continue;
         summary.targets += 1;
+        if (!isValidGenerationWord(word.word)) {
+            summary.blockedInvalidWord += 1;
+            continue;
+        }
         // Every formal question is generated at the user's current learning level.
         // Without a selected level the generator refuses the work, so planning these
         // meanings only produces un-actionable targets. Report them instead.

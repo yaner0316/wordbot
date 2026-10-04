@@ -109,7 +109,8 @@ function getRuntimeHealth({
 
 function getLearningSupplyHealth(worker = {}, queue = {}) {
     let status = 'ready';
-    if (queue.alerts?.oldestPendingOverThreshold === true) status = 'backlog_overdue';
+    if (Number(queue.counts?.blockedInvalidWord) > 0) status = 'invalid_data_blocked';
+    else if (queue.alerts?.oldestPendingOverThreshold === true) status = 'backlog_overdue';
     else if (!worker.ok) status = 'worker_unavailable';
     else if (Number(queue.counts?.failed) > 0) status = 'manual_review_required';
     else if (worker.status === 'never_succeeded' && worker.eligibleDueCount !== 0) status = 'warming_up';

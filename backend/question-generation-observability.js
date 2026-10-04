@@ -1,4 +1,5 @@
 'use strict';
+const { classifyGenerationJobs } = require('./question-generation-eligibility');
 
 const FORMAL_QUIZ_READY_COUNT = 10;
 const OLDEST_PENDING_ALERT_AFTER_MS = 30 * 60_000;
@@ -18,13 +19,17 @@ function safeQuestionGenerationErrorCode(value) {
     return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'QUESTION_GENERATION_FAILED';
 }
 
-function summarizeQuestionGenerationQueue(rows, { now = new Date().toISOString() } = {}) {
+function summarizeQuestionGenerationQueue(rows, { now = new Date().toISOString(), words } = {}) {
     const nowMs = toTimestamp(now);
-    const counts = { pending: 0, running: 0, retrying: 0, failed: 0 };
+    const counts = { pending: 0, running: 0, retrying: 0, failed: 0, blockedInvalidWord: 0 };
     let oldestPendingAt = null;
     let lastErrorCode = null;
 
-    for (const row of rows || []) {
+    for (const row of classifyGenerationJobs(rows, words)) {
+        if (row.generationBlockReason === 'INVALID_GENERATION_WORD') {
+            counts.blockedInvalidWord++;
+            continue;
+        }
         const status = String(row?.status || '').trim();
         if (PENDING_STATUSES.has(status)) {
             counts.pending += 1;
@@ -58,19 +63,20 @@ function summarizeQuestionGenerationQueue(rows, { now = new Date().toISOString()
 
 function getReadinessStatus({ readyCount, queue }) {
     if (readyCount >= FORMAL_QUIZ_READY_COUNT) return 'ready';
-    if (queue.failedCount > 0) return 'needs_attention';
+    if (queue.failedCount > 0 || queue.blockedInvalidWordCount > 0) return 'needs_attention';
     if (queue.retryingCount > 0) return 'waiting_retry';
     if (queue.pendingCount > 0 || queue.runningCount > 0) return 'building';
     return 'empty';
 }
 
-function summarizeUserQuestionReadiness({ readyCount = 0, jobs = [], now } = {}) {
-    const summary = summarizeQuestionGenerationQueue(jobs, { now });
+function summarizeUserQuestionReadiness({ readyCount = 0, jobs = [], now, words } = {}) {
+    const summary = summarizeQuestionGenerationQueue(jobs, { now, words });
     const queue = {
         pendingCount: summary.counts.pending,
         runningCount: summary.counts.running,
         retryingCount: summary.counts.retrying,
         failedCount: summary.counts.failed,
+        blockedInvalidWordCount: summary.counts.blockedInvalidWord,
         oldestPendingAgeMs: summary.oldestPendingAgeMs,
         lastErrorCode: summary.lastErrorCode,
     };

@@ -816,8 +816,8 @@ test('updateWord fences the exact meaning with RPCs before word and POS writes',
     assert.deepEqual(client.db.question_cache.map(row => row.id), ['cache-river']);
 });
 
-test('mastered and invalid edits finalize by removing only their fenced cache and job', async () => {
-    for (const fields of [{ status: 'mastered' }, { word: 'genaine' }]) {
+test('mastered edits finalize by removing only their fenced cache and job', async () => {
+    for (const fields of [{ status: 'mastered' }]) {
         const client = createFakeSupabase({
             users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
             words: [{ id: 'word-1', feishu_record_id: 'rec-1', user_id: 'user-1', word: 'apple', meaning_en: 'fruit', mastery_status: 'pending' }],
@@ -1057,6 +1057,7 @@ test('question cache status exposes safe per-user formal readiness', async () =>
             runningCount: 0,
             retryingCount: 0,
             failedCount: 1,
+            blockedInvalidWordCount: 0,
             oldestPendingAgeMs: null,
             lastErrorCode: 'QUESTION_GENERATION_FAILED',
         },
@@ -3350,6 +3351,47 @@ test('validateWords checks Supabase-owned duplicates and malformed words without
     assert.deepEqual(result.multiMeanings, []);
 });
 
+test('word entry and spelling edits reject generation-ineligible input before writing any data', async () => {
+    for (const spelling of ['bad_word', 'genaine', 'bank\n', '\tbank\t']) {
+        const client = seededClient();
+        const adapter = createSupabaseDataAdapter(client);
+        const before = JSON.stringify(client.db);
+        let translations = 0;
+        await assert.rejects(adapter.addWord({ username: 'qiuqiu', word: spelling, meaning: 'meaning', selectedSenseFlow: true,
+            translateMeaning: async () => { translations++; return '词义'; } }), { code: 'INVALID_GENERATION_WORD' });
+        await assert.rejects(adapter.updateWord('qiuqiu', 'apple', { recordId: 'rec-word-1', word: spelling }), { code: 'INVALID_GENERATION_WORD' });
+        assert.equal(JSON.stringify(client.db), before);
+        assert.equal(translations, 0);
+        const validation = await adapter.validateWords('qiuqiu', [spelling]);
+        assert.equal(validation.errors.length, 1);
+    }
+});
+
+test('cache repair excludes invalid meanings while keeping their historical jobs observable', async () => {
+    const client = seededClient();
+    client.db.quiz_display_events = [];
+    client.db.words.push({ id: 'invalid', user_id: 'user-1', word: 'bad_word', mastery_status: 'pending', question_generation_version: 1 });
+    client.db.question_generation_jobs = [{ id: 'job-invalid', user_id: 'user-1', word_id: 'invalid', word_version: 1, status: 'pending', attempt_count: 0, created_at: '2026-08-01T00:00:00Z' }];
+    const oldInvalid = JSON.stringify(client.db.question_generation_jobs[0]);
+    const adapter = createSupabaseDataAdapter(client);
+    const repair = await adapter.requestQuestionCacheRebuildForUser('qiuqiu');
+    assert.equal(repair.requested, 1);
+    assert.equal(repair.blockedInvalidWord, 1);
+    assert.equal(JSON.stringify(client.db.question_generation_jobs.find(j => j.word_id === 'invalid')), oldInvalid);
+    const status = await adapter.getQuestionCacheStatus('qiuqiu');
+    assert.equal(status.generation.counts.blockedInvalidWord, 1);
+    assert.equal(status.readiness.queue.blockedInvalidWordCount, 1);
+    assert.equal(status.readiness.status, 'needs_attention');
+    const jobsRead = client.readOperations.find(op => op.table === 'question_generation_jobs' && op.operation === 'select' && op.selectColumns !== '*');
+    for (const column of ['user_id', 'word_id', 'word_version']) assert.ok(jobsRead.selectColumns.split(',').map(s => s.trim()).includes(column));
+    const failure = status.generation.failures.find(f => f.wordId === 'invalid');
+    assert.equal(failure.status, 'blocked_invalid_word');
+    assert.equal(failure.lastErrorCode, 'INVALID_GENERATION_WORD');
+    const diagnostics = await adapter.getQuestionCacheDiagnostics('qiuqiu');
+    assert.equal(diagnostics.generation.counts.blockedInvalidWord, 1);
+    assert.equal(diagnostics.generation.failures.find(f => f.wordId === 'invalid').lastErrorCode, 'INVALID_GENERATION_WORD');
+});
+
 test('parent word status filters and edit-read round trips preserve all four stages', async () => {
     const stages = ['Pending', 'Recognized', 'Consolidating', 'Mastered'];
     const client = createFakeSupabase({
@@ -3657,7 +3699,7 @@ test('requestQuestionCacheRebuildForUser persists jobs without changing cache ro
 
     const result = await createSupabaseDataAdapter(client).requestQuestionCacheRebuildForUser('qiuqiu');
 
-    assert.deepEqual(result, { accepted: true, userId: 'qiuqiu', requested: 1 });
+    assert.deepEqual(result, { accepted: true, userId: 'qiuqiu', requested: 1, blockedInvalidWord: 0 });
     assert.deepEqual(client.db.question_cache, cacheRowsBeforeRequest);
     assert.equal(client.db.question_generation_jobs.length, 1);
     assert.equal(client.db.question_generation_jobs[0].status, 'pending');
