@@ -297,9 +297,16 @@ function createQuestionGenerationJobStore({
 }
 
 function summarizeQuestionGenerationJobs(rows) {
-    const counts = { pending: 0, retrying: 0, manualReview: 0, ready: 0 };
+    const counts = { pending: 0, retrying: 0, manualReview: 0, ready: 0, blockedInvalidWord: 0 };
     const failures = [];
     for (const row of rows || []) {
+        if (row.generationBlockReason === 'INVALID_GENERATION_WORD') {
+            counts.blockedInvalidWord++;
+            failures.push({ wordId: String(row.word_id || ''), status: 'blocked_invalid_word',
+                attemptCount: Math.max(0, Number(row.attempt_count) || 0),
+                lastErrorCode: 'INVALID_GENERATION_WORD', nextAttemptAt: null });
+            continue;
+        }
         const status = String(row?.status || '');
         if ([JOB_STATUS.PENDING, JOB_STATUS.GENERATING, JOB_STATUS.VALIDATING, JOB_STATUS.REPAIRING].includes(status)) counts.pending += 1;
         else if (status === JOB_STATUS.RETRY_WAIT) counts.retrying += 1;

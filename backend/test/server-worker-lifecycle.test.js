@@ -110,7 +110,7 @@ test('server health exposes safe coverage progress without target identities', a
         lastError: null,
         lastEnqueued: 2,
         lastSkipped: 3,
-        lastSummary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2, skippedMissingLevel: 4 },
+        lastSummary: { scanned: 5, targets: 4, ready: 1, executable: 1, planned: 2, skippedMissingLevel: 4, blockedInvalidWord: null },
     });
     assert.equal(JSON.stringify(body).includes(secretTarget), false);
 });
@@ -365,6 +365,43 @@ test('worker due-count failures are masked in health output', async t => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
     const body = await response.text();
     assert.equal(body.includes(secret), false);
+});
+
+test('public health classifies invalid current jobs using the actual selected columns', async t => {
+    const { startServer } = require('../server');
+    const now = '2026-10-05T00:50:00.000Z';
+    const words = Array.from({ length: 10 }, (_, i) => ({ id: `w-${i}`, user_id: 'u', word: 'bad_word', mastery_status: 'pending', question_generation_version: 1 }));
+    words.push({ id: 'valid', user_id: 'u', word: 'bank', mastery_status: 'pending', question_generation_version: 1 });
+    const jobs = words.map(w => ({ id: `j-${w.id}`, user_id: 'u', word_id: w.id, word_version: 1,
+        status: w.id === 'valid' ? 'retry_wait' : 'pending', created_at: '2026-09-10T00:00:00Z',
+        next_attempt_at: w.id === 'valid' ? '2026-10-05T01:00:00Z' : '2026-09-10T00:00:00Z',
+        last_error_code: w.id === 'valid' ? 'INSUFFICIENT_DISTINCT_READY_VARIANTS' : null }));
+    const client = { from(table) {
+        let selected;
+        let allowedIds;
+        return {
+            select(columns) { selected = columns; return this; }, or() { return this; }, order() { return this; }, gt() { return this; },
+            in(column, ids) { allowedIds = ids; return this; },
+            limit() {
+                const rows = (table === 'words' ? words : jobs).filter(row => !allowedIds || allowedIds.includes(row.id));
+                return Promise.resolve({ data: rows.map(row => Object.fromEntries(selected.split(',').map(key => [key.trim(), row[key.trim()]]))), error: null });
+            },
+        };
+    } };
+    const runtime = { worker: { start() { return true; }, isRunning() { return true; }, async stop() {} } };
+    const server = startServer(0, { runtimeFactory: () => runtime, enableQuestionGenerationWorker: true,
+        runtimeHealthEnv: HEALTHY_RUNTIME_ENV, databaseHealthClient: healthyDatabaseClient,
+        questionGenerationHealthClient: client, workerHealthNow: () => now });
+    await new Promise(resolve => server.once('listening', resolve));
+    t.after(async () => { if (server.listening) await new Promise(resolve => server.close(resolve)); });
+    const health = await (await fetch(`http://127.0.0.1:${server.address().port}/api/health`)).json();
+    assert.equal(health.questionGenerationWorker.eligibleDueCount, 0);
+    assert.equal(health.questionGenerationQueue.counts.blockedInvalidWord, 10);
+    assert.equal(health.questionGenerationQueue.counts.pending, 0);
+    assert.equal(health.questionGenerationQueue.counts.retrying, 1);
+    assert.equal(health.questionGenerationQueue.oldestPendingAgeMs, null);
+    assert.deepEqual(health.learningSupply, { ok: false, status: 'invalid_data_blocked' });
+    assert.doesNotMatch(JSON.stringify(health), /bad_word|j-w-|INSUFFICIENT.*bank/);
 });
 
 test('shutdownServer waits for the in-flight worker to stop', async t => {

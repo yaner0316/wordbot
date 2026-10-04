@@ -9,3 +9,8 @@ test('new worker with pending work is warming up, empty queue can be ready',()=>
  assert.equal(getLearningSupplyHealth({ok:true,status:'never_succeeded',eligibleDueCount:1},{}).ok,false);
  assert.equal(getLearningSupplyHealth({ok:true,status:'idle',eligibleDueCount:0},{counts:{failed:0}}).ok,true);
 });
+
+test('invalid blocked data keeps learning supply degraded when the worker has no claimable jobs', () => {
+ const result = getLearningSupplyHealth({ok:true,status:'idle',eligibleDueCount:0}, {counts:{pending:0,retrying:1,failed:0,blockedInvalidWord:10},alerts:{oldestPendingOverThreshold:false}});
+ assert.deepEqual(result, {ok:false,status:'invalid_data_blocked'});
+});

@@ -20,7 +20,7 @@ const {
     generateElementaryDistractors,
     generateElementaryTemplateContext,
 } = require('./elementary-context');
-const { hasMeaningfulChineseMeaning, isBadQuizWord } = require('./question-quality');
+const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
@@ -33,6 +33,7 @@ const { fingerprintQuestion } = require('./question-generation-service');
 const { invalidateVariantFromStage } = require('./question-generation-checkpoint');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
+const { normalizeGenerationWord, isValidGenerationWord, invalidGenerationWordError, classifyGenerationJobs } = require('./question-generation-eligibility');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { countEligibleReadyMeaningsByLevel, summarizeQuizLearningAvailability } = require('./quiz-word-queue');
 const { getOverlappingOptionPairs } = require('./option-meaning-distinctness');
@@ -233,13 +234,13 @@ function normalizeWordInput(input) {
         const [wordPart, ...meaningParts] = input.split('|');
         const meaning = meaningParts.join('|').trim();
         return {
-            word: String(wordPart || '').trim().toLowerCase(),
+            word: normalizeGenerationWord(wordPart).toLowerCase(),
             meaning: meaning || String(wordPart || '').trim().toLowerCase(),
             meaningZh: meaning || null,
             raw: input,
         };
     }
-    const word = String(input?.word || input?.Word || '').trim().toLowerCase();
+    const word = normalizeGenerationWord(input?.word || input?.Word).toLowerCase();
     const meaning = String(input?.meaning || input?.Meaning || input?.meaningEn || input?.Meaning_EN || '').trim();
     const meaningZh = String(input?.meaningZh || input?.cnMeaning || input?.CN_Meaning || '').trim();
     return {
@@ -925,10 +926,10 @@ async function getQuestionCacheStatusWithClient(client, username) {
         minAgeMs: WORD_QUIZ_COOLDOWN_MS,
     });
     const jobRows = await fetchAllRows(
-        () => client.from('question_generation_jobs').select('id, word_id, status, reason, attempt_count, next_attempt_at, last_error_code, rejection_reasons, created_at, updated_at').eq('user_id', user.id).order('created_at', { ascending: true }),
+        () => client.from('question_generation_jobs').select('id, user_id, word_id, word_version, status, reason, attempt_count, next_attempt_at, last_error_code, rejection_reasons, created_at, updated_at').eq('user_id', user.id).order('created_at', { ascending: true }),
         'getQuestionCacheStatus.jobs'
     );
-    const generation = summarizeQuestionGenerationJobs(jobRows);
+    const generation = summarizeQuestionGenerationJobs(classifyGenerationJobs(jobRows, wordRows));
     const eligibleReadyMeanings = Number(
         eligibleReadyMeaningsByLevel[normalizeLearningLevel(user.learning_level || DEFAULT_LEARNING_LEVEL)] || 0
     );
@@ -943,6 +944,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         readiness: summarizeUserQuestionReadiness({
             readyCount: eligibleReadyMeanings,
             jobs: jobRows,
+            words: wordRows,
         }),
     };
 }
@@ -1073,9 +1075,9 @@ async function getQuestionCacheDiagnosticsWithClient(client, username) {
         },
         'getQuestionCacheDiagnostics.jobs'
     );
-    const generation = summarizeQuestionGenerationJobs(jobRows);
     const usersById = new Map(userRows.map(row => [row.id, row]));
-    const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
+    const wordsById = await getWordsByIdWithClient(client, [...rows, ...jobRows].map(row => row.word_id));
+    const generation = summarizeQuestionGenerationJobs(classifyGenerationJobs(jobRows, [...wordsById.values()]));
     const groups = new Map();
     for (const row of rows) {
         const rowUser = usersById.get(row.user_id);
@@ -1393,8 +1395,8 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
 }
 
 async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, allowPartialCandidates = false, reportRejection = () => {}, requiredCount = 2, approvedVariants = [], generationCheckpoint = null, saveGenerationCheckpoint = async () => {} }) {
-    const wordText = String(word.word || '').trim().toLowerCase();
-    if (!wordText || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(wordText) || isBadQuizWord(wordText)) return [];
+    if (!isValidGenerationWord(word.word)) return [];
+    const wordText = normalizeGenerationWord(word.word).toLowerCase();
     const targetCount = Math.max(1, Math.min(2, Number(requiredCount) || 2));
     const checkpoint = generationCheckpoint && typeof generationCheckpoint === 'object'
         ? generationCheckpoint
@@ -1567,6 +1569,9 @@ async function isolatePrimaryCachePairForReplacementWithClient(client, userId, w
 }
 
 async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wordId, reason }) {
+    const words = await getWordsByIdWithClient(client, [wordId]);
+    const word = words.get(wordId);
+    if (word && String(word.user_id) === String(userId) && !isValidGenerationWord(word.word)) return;
     const { data, error } = await client.rpc(
         'enqueue_question_generation_job_if_needed',
         {
@@ -1617,7 +1622,8 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
 async function requestQuestionCacheRebuildForUserWithClient(client, username) {
     const user = await requireUserByUsername(client, username);
     const words = await getWordsForUserWithClient(client, username);
-    const eligibleWords = words.filter(word => String(word?.mastery_status || '').trim().toLowerCase() !== 'mastered');
+    const targets = words.filter(word => String(word?.mastery_status || '').trim().toLowerCase() !== 'mastered');
+    const eligibleWords = targets.filter(word => isValidGenerationWord(word.word));
 
     for (const word of eligibleWords) {
         await enqueueQuestionGenerationJobWithConfirmation(client, {
@@ -1627,7 +1633,7 @@ async function requestQuestionCacheRebuildForUserWithClient(client, username) {
         });
     }
 
-    return { accepted: true, userId: user.username, requested: eligibleWords.length };
+    return { accepted: true, userId: user.username, requested: eligibleWords.length, blockedInvalidWord: targets.length - eligibleWords.length };
 }
 
 async function rebuildQuestionCacheForUserWithClient(client, username, distractorGenerator = null, translator = null, contextTranslator = null, contextGenerator = null, semanticAuditor = null, requireSemanticAudit = false) {
@@ -1659,6 +1665,7 @@ async function rebuildQuestionCacheForUserWithClient(client, username, distracto
     const isEvidenceMastered = word => Boolean(word && masteryByWordId.get(word.id)?.mastered);
     const candidateWords = words
         .filter(row => !isEvidenceMastered(row))
+        .filter(row => isValidGenerationWord(row.word))
         .sort((left, right) => {
             const priority = { pending: 0, recognized: 1, consolidating: 2, mastered: 3 };
             const leftPriority = priority[masteryByWordId.get(left.id)?.stage] ?? 1;
@@ -2489,6 +2496,7 @@ async function finalizeWordQuestionGenerationEdit(client, userId, wordId) {
 }
 
 async function updateWordWithClient(client, username, word, fields = {}) {
+    if (Object.prototype.hasOwnProperty.call(fields, 'word') && fields.word !== undefined && !isValidGenerationWord(fields.word)) throw invalidGenerationWordError();
     const user = await requireUserByUsername(client, username);
     const has = key => Object.prototype.hasOwnProperty.call(fields, key) && fields[key] !== undefined;
     const editable = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'status', 'qualityFlags', 'qualityNote'];
@@ -2500,7 +2508,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     if (questionGenerationChanged) await fenceWordQuestionGeneration(client, user.id, row.id);
 
     const payload = { updated_at: new Date().toISOString() };
-    if (has('word')) payload.word = fields.word;
+    if (has('word')) payload.word = normalizeGenerationWord(fields.word);
     if (has('meaning')) payload.meaning_en = fields.meaning;
     if (has('cnMeaning')) payload.meaning_zh = fields.cnMeaning;
     if (has('context')) payload.context_en = fields.context;
@@ -2582,7 +2590,8 @@ async function validateWordsWithClient(client, targetUserOrWords, maybeWords) {
     const targetUser = Array.isArray(targetUserOrWords) ? null : targetUserOrWords;
     const words = Array.isArray(targetUserOrWords) ? targetUserOrWords : maybeWords;
     const entries = normalizeValidationEntries(words);
-    const errors = entries.filter(entry => !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(entry.word)).map(entry => entry.raw || entry.word);
+    const errors = entries.filter(entry => !isValidGenerationWord(typeof entry.raw === 'string'
+        ? entry.raw.split('|')[0] : entry.raw?.word || entry.raw?.Word || entry.word)).map(entry => entry.raw || entry.word);
     const repeatedByWord = new Map();
     for (const entry of entries) {
         if (!repeatedByWord.has(entry.word)) repeatedByWord.set(entry.word, []);
@@ -2682,8 +2691,10 @@ async function ensurePartOfSpeechRows(client, codes) {
 }
 
 async function addWordWithClient(client, input) {
+    if (!normalizeGenerationWord(input.word) || !String(input.meaning || '').trim()) throw new Error('WORD_AND_MEANING_REQUIRED');
+    if (!isValidGenerationWord(input.word)) throw invalidGenerationWordError();
     const user = await requireUserByUsername(client, input.username);
-    const word = String(input.word || '').trim();
+    const word = normalizeGenerationWord(input.word);
     const meaning = String(input.meaning || '').trim();
     if (!word || !meaning) throw new Error('WORD_AND_MEANING_REQUIRED');
 

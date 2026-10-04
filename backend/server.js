@@ -11,6 +11,7 @@ const { getParentCredentialStatus } = require('./data-source');
 const { lookupDictionarySenses } = require('./dictionary-senses');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth, getLearningSupplyHealth } = require('./runtime-health');
 const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
+const { isValidGenerationWord } = require('./question-generation-eligibility');
 const {
     ASSESSMENT_MODE,
     filterAssessmentRecords,
@@ -138,7 +139,6 @@ const questionGenerationServerStates = new WeakMap();
 const QUESTION_GENERATION_HEALTH_PAGE_SIZE = 1000;
 const CLAIMABLE_JOB_STATUSES = new Set(['pending', 'retry_wait']);
 const LEASED_JOB_STATUSES = new Set(['generating', 'validating', 'repairing']);
-const VALID_GENERATION_WORD = /^[a-z]+([ '-][a-z]+)*$/i;
 
 function throwHealthQueryError(error) {
     if (error) throw new Error('QUESTION_GENERATION_HEALTH_QUERY_FAILED');
@@ -179,9 +179,7 @@ function isWordEligibleForJob(word, job) {
     if (String(word.user_id) !== String(job?.user_id)) return false;
     if (String(word.question_generation_version) !== String(job?.word_version)) return false;
     if (word.mastery_status === null || word.mastery_status === undefined || word.mastery_status === 'mastered') return false;
-    const spelling = String(word.word || '').replace(/^ +| +$/g, '');
-    const spellingMatch = spelling.match(VALID_GENERATION_WORD);
-    return spelling.toLowerCase() !== 'genaine' && spellingMatch?.[0] === spelling;
+    return isValidGenerationWord(word.word);
 }
 
 function createQuestionGenerationEligibleDueCounter({ client = supabase, now = () => new Date().toISOString() } = {}) {
@@ -225,8 +223,17 @@ function createQuestionGenerationQueueSummaryReader({ client = supabase, now = (
     return async function getQuestionGenerationQueueSummary() {
         const rows = await loadHealthRowsById(() => client
             .from('question_generation_jobs')
-            .select('id,status,created_at,updated_at,last_error_code'));
-        return summarizeQuestionGenerationQueue(rows, { now: now() });
+            .select('id,user_id,word_id,word_version,status,created_at,updated_at,last_error_code'));
+        const words = [];
+        const wordIds = [...new Set(rows.map(row => row.word_id).filter(Boolean))];
+        for (let offset = 0; offset < wordIds.length; offset += QUESTION_GENERATION_HEALTH_PAGE_SIZE) {
+            const { data, error } = await client.from('words').select('id,user_id,word,mastery_status,question_generation_version')
+                .in('id', wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_PAGE_SIZE))
+                .order('id', { ascending: true }).limit(QUESTION_GENERATION_HEALTH_PAGE_SIZE);
+            throwHealthQueryError(error);
+            words.push(...(data || []));
+        }
+        return summarizeQuestionGenerationQueue(rows, { now: now(), words });
     };
 }
 
@@ -313,6 +320,7 @@ async function getServerRuntimeHealth(state) {
             executable: safeCoverageCount(coverageSummary.executable),
             planned: safeCoverageCount(coverageSummary.planned),
             skippedMissingLevel: safeCoverageCount(coverageSummary.skippedMissingLevel),
+            blockedInvalidWord: safeCoverageCount(coverageSummary.blockedInvalidWord),
         } : null,
     };
     return {

@@ -120,6 +120,7 @@ test('coverage plan skips ready and executable targets but revives legacy termin
         executable: 1,
         planned: 2,
         skippedMissingLevel: 0,
+        blockedInvalidWord: 0,
     });
 });
 
@@ -154,4 +155,20 @@ test('a usable current level must be present and normalizable', () => {
     assert.equal(hasUsableCurrentLevel({ learning_level: undefined }), false);
     assert.equal(hasUsableCurrentLevel({ learning_level: '   ' }), false);
     assert.equal(hasUsableCurrentLevel({ learning_level: 'not-a-level' }), false);
+});
+
+test('invalid historical spellings stay visible as blocked coverage without being planned or executable', () => {
+    const users = [{ id: 'user-1', learning_level: '小学' }];
+    const invalid = ['bad_word', 'genaine', 'bank\n', '\tbank\t', '词义'];
+    const words = invalid.map((spelling, i) => word({ id: `invalid-${i}`, word: spelling }));
+    words.push(word({ id: 'valid-retry', word: "mother-in-law" }), word({ id: 'valid-new', word: "can't" }));
+    const jobs = words.slice(0, -1).map(w => ({ user_id: w.user_id, word_id: w.id, word_version: 3, status: 'pending' }));
+    const plan = planQuestionCoverage({ users, words, jobs });
+    assert.equal(plan.summary.targets, 7, 'blocked data must not disappear from coverage');
+    assert.equal(plan.summary.blockedInvalidWord, 5);
+    assert.equal(plan.summary.executable, 1);
+    assert.equal(plan.summary.ready, 0);
+    assert.deepEqual(plan.targets.map(t => t.wordId), ['valid-new']);
+    assert.equal(words.length, 7);
+    assert.equal(jobs.length, 6, 'classifying does not delete historical jobs');
 });

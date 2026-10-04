@@ -16,6 +16,7 @@ test('generation diagnostics expose pending, retrying, manual-review and ready m
         retrying: 1,
         manualReview: 1,
         ready: 1,
+        blockedInvalidWord: 0,
     });
     assert.deepEqual(summary.failures, [{
         wordId: 'w4', status: 'needs_manual_review', attemptCount: 5, lastErrorCode: 'MEANING_MISSING', nextAttemptAt: null,

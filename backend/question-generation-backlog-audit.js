@@ -1,4 +1,5 @@
 'use strict';
+const { isValidGenerationWord: isValidQuizWord } = require('./question-generation-eligibility');
 
 const HIGH_ATTEMPT_THRESHOLD = 10;
 const AVAILABLE_CACHE_STATES = new Set(['active', 'reserved_next_day']);
@@ -17,12 +18,6 @@ function safeCode(value, fallback = 'unspecified') {
 
 function identityKey(userId, wordId) {
     return `${text(userId)}\u0000${text(wordId)}`;
-}
-
-function isValidQuizWord(value) {
-    const normalized = text(value);
-    return normalized.toLowerCase() !== 'genaine'
-        && /^[a-z]+(?:[ '-][a-z]+)*$/i.test(normalized);
 }
 
 function isAvailableCache(row) {
