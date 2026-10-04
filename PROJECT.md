@@ -33,13 +33,14 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 - The 2026-09-05 23:00 Asia/Shanghai rule change is forward-only: mastery earned under the prior rule at that cutoff is retained. The authorized recovery merges that baseline with later learning and current saved progress across every user; it never replaces current progress with an old snapshot or rewrites answers.
 - A spelling is mastered only when all of its meanings for that user are mastered.
 - Assessment answers are historical evidence and are not rewritten to force a desired state. Derived status and rewards are reconciled from canonical evidence.
-- Rewards are downstream of successful persistence and are based on newly mastered meanings; retries and duplicate submissions must not double-award.
+- Game-time adjustments follow successful persistence of a complete, real, ten-question formal quiz: 10/10 adds 10 minutes, 9/10 adds 5 minutes, 6–8/10 makes no adjustment, and 0–5/10 deducts 5 minutes. Test and review rounds do not adjust game time; retries and duplicate submissions must not apply the adjustment twice.
+- Mastery progress and newly mastered feedback follow the independent mastery evidence rules above. Quiz scores determine game time, not mastery; newly mastered feedback does not introduce a separate reward formula.
 
 ## Authorization and consistency
 
 - The server is authoritative for identity, role, quiz state, grading, mastery, and rewards.
 - Leaving the parent console for a child-facing page, including browser-back navigation, must first downgrade the server session to the child role and clear in-memory parent credentials. Reloading a remembered account must confirm this downgrade before loading the child homepage. If downgrade cannot be confirmed, remain on the parent page and offer a retry; an explicit unauthenticated response clears the expired local identity and returns to login. Navigation alone must not leave parent authority active.
-- Parent-only writes include user settings, word/meaning mutation, destructive cleanup, and review-flag changes. Children may perform the explicitly supported learning flow and read their allowed state.
+- Children may add their own words/meanings through the supported learning entry (`POST /api/words`), perform the explicitly supported learning flow, and read their allowed state. Editing or deleting existing words/meanings, user settings, destructive cleanup, and review-flag changes are parent-only writes.
 - Cross-device writes use server revisions or compare-and-swap semantics. Duplicate submissions are idempotent.
 - Child-facing errors are actionable but do not disclose provider payloads, credentials, internal job rows, or other users' data.
 
