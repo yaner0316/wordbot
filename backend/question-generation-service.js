@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { normalizeGenerationCheckpoint } = require('./question-generation-checkpoint');
+const { normalizeGenerationCheckpoint, invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
 
 function normalizeText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -127,12 +127,26 @@ function createQuestionGenerationService({
                 meaning: checkpointMeaningIdentity(word),
             });
             const variantsByFingerprint = new Map();
-            for (const savedVariant of checkpoint.variants) {
+            const rejectionReasons = {};
+            let restoredInvalidRow = false;
+            checkpoint.variants = checkpoint.variants.map((savedVariant, index) => {
                 const variant = checkpointRow(savedVariant);
                 const fingerprint = String(variant?.question_fingerprint || '').trim();
-                if (fingerprint) variantsByFingerprint.set(fingerprint, variant);
-            }
-            const rejectionReasons = {};
+                if (!fingerprint) return savedVariant;
+                const issues = validationIssues(validateCandidate, variant, word);
+                if (issues.length) {
+                    restoredInvalidRow = true;
+                    for (const issue of issues) rejectionReasons[issue] = (rejectionReasons[issue] || 0) + 1;
+                    const slot = Number(savedVariant.slot) || index + 1;
+                    return invalidateVariantFromStage(
+                        savedVariant.row ? { ...savedVariant, slot } : rowCheckpoint(variant, slot, word.word),
+                        checkpointInvalidationStageForIssues(issues)
+                    );
+                }
+                variantsByFingerprint.set(fingerprint, variant);
+                return savedVariant;
+            });
+            if (restoredInvalidRow) await saveCheckpoint({ job, word, checkpoint });
             for (let attempt = 1; attempt <= attemptsLimit && variantsByFingerprint.size < required; attempt += 1) {
                 const candidates = await generateCandidates({
                     job,

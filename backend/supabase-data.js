@@ -30,7 +30,7 @@ const { createSupabaseAdminAdapter } = require('./supabase-admin');
 const { createSupabaseAuthAdapter } = require('./supabase-auth');
 const { createSupabaseMaintenanceAdapter } = require('./supabase-maintenance');
 const { fingerprintQuestion } = require('./question-generation-service');
-const { invalidateVariantFromStage } = require('./question-generation-checkpoint');
+const { invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { normalizeGenerationWord, isValidGenerationWord, invalidGenerationWordError, classifyGenerationJobs } = require('./question-generation-eligibility');
@@ -1255,23 +1255,27 @@ function countDistractorOverlap(left, right) {
     const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
     return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
 }
-function checkpointInvalidationStageForIssues(issues) {
-    if (issues.some(issue => /context/.test(issue) && !/translation/.test(issue))) return 'context';
-    if (issues.some(issue => /context.*translation|translation.*context/.test(issue))) return 'context_translation';
-    if (issues.some(issue => /option_meaning|correct_meaning/.test(issue))) return 'option_meanings';
-    if (issues.some(issue => /option|answer|distractor/.test(issue))) return 'distractors';
-    return 'option_layout';
-}
 async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, reportRejection = () => {}, variantCheckpoint = {}, saveVariantCheckpoint = async () => {}, knownDistractorMeanings = null }) {
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
-    const state = { ...variantCheckpoint, slot, context };
+    let state = { ...variantCheckpoint, slot, context };
     const blankedContext = blankWordInContext(state.context, wordText);
     const approvedDistractors = uniqueWords(state.distractors || distractors || [], wordText).slice(0, 3);
     if (approvedDistractors.length < 3) {
         reportRejection('insufficient_distractors');
         await saveVariantCheckpoint(invalidateVariantFromStage(state, 'distractors'));
         return null;
+    }
+    const expectedWords = [wordText, ...approvedDistractors];
+    if (state.optionWords || state.options || state.answer) {
+        const words = Array.isArray(state.optionWords) ? state.optionWords : [];
+        const options = Array.isArray(state.options) ? state.options : [];
+        const sameWords = words.length === 4 && new Set(words).size === 4
+            && expectedWords.every(word => words.includes(word));
+        const sameLayout = options.length === 4 && options.every((option, index) =>
+            option === String.fromCharCode(65 + index) + '. ' + words[index]
+        ) && state.answer === String.fromCharCode(65 + words.indexOf(wordText));
+        if (!sameWords || !sameLayout) state = invalidateVariantFromStage(state, 'option_layout');
     }
     state.distractors = approvedDistractors;
     await saveVariantCheckpoint(state);
@@ -1490,8 +1494,11 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         if (attemptedContexts.has(contextKey)) continue;
         attemptedContexts.add(contextKey);
 
-        const slot = Number(variantCheckpoint.slot)
-            || (approvedVariants.length + approvedRows.length + 1);
+        const occupiedSlots = new Set(checkpoint.variants.filter(variant => variant?.row).map(variant => Number(variant.slot)));
+        for (const row of approvedRows) occupiedSlots.add(Number(row.variant_slot));
+        let freeSlot = 1;
+        while (occupiedSlots.has(freeSlot)) freeSlot += 1;
+        const slot = Number(variantCheckpoint.slot) || freeSlot;
         variantCheckpoint = { ...variantCheckpoint, slot, context };
         await persistVariant(variantCheckpoint);
         const initialDistractors = Array.isArray(variantCheckpoint.distractors)
@@ -2195,6 +2202,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     const prompt = [
         `Write one natural English sentence of 8 to 16 words for level "${String(level || '').trim()}".`,
         `Use "${String(word || '').trim().toLowerCase()}" exactly once with meaning "${String(meaning || '').trim()}".`,
+        'Use the word in a concrete situation. Do not describe the word itself or explain its meaning.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
         'Return only JSON with one context key.',
     ].filter(Boolean).join('\n');
