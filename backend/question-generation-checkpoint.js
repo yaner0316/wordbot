@@ -32,6 +32,14 @@ function invalidateVariantFromStage(variant, stage) {
     return result;
 }
 
+function checkpointInvalidationStageForIssues(issues) {
+    if (issues.some(issue => /context/.test(issue) && !/translation/.test(issue))) return 'context';
+    if (issues.some(issue => /context.*translation|translation.*context/.test(issue))) return 'context_translation';
+    if (issues.some(issue => /option_meaning|correct_meaning/.test(issue))) return 'option_meanings';
+    if (issues.some(issue => /option|answer|distractor/.test(issue))) return 'distractors';
+    return 'option_layout';
+}
+
 function normalizeGenerationCheckpoint(checkpoint, current) {
     const previous = checkpoint && typeof checkpoint === 'object' ? checkpoint : {};
     const input = current && typeof current === 'object' ? current : {};
@@ -59,6 +67,7 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
 }
 
 module.exports = {
+    checkpointInvalidationStageForIssues,
     invalidateVariantFromStage,
     normalizeGenerationCheckpoint,
 };

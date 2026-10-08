@@ -484,7 +484,9 @@ function hasSenseMismatchRisk(question) {
 
 function hasGenericFillInContext(question) {
     const context = String(question.context || '').trim().toLowerCase().replace(/_{3,}/g, '_____').replace(/\s+/g, ' ');
-    return context === 'the student wrote _____ in the sentence.';
+    return context === 'the student wrote _____ in the sentence.'
+        || /\bthe meaning of\b/.test(context)
+            && /(?:\(\s*_____\s*\)|['"“‘]\s*_____\s*['"”’])/.test(context);
 }
 
 function hasDictionaryFragmentContext(question) {
