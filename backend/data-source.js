@@ -1,5 +1,6 @@
 const {
     generateQuizWithDataSource,
+    getChallengeCandidatesWithDataSource,
     submitQuizWithDataSource,
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
@@ -61,6 +62,7 @@ function buildFormalReplacementQuestion(row, oldQuestion) {
         ordinal: oldQuestion.ordinal,
         questionFingerprint: String(row?.question_fingerprint || row?.questionFingerprint || '').trim(),
         correctAnswer: normalized.question.answer,
+        ...(oldQuestion.challengeSize ? { challengeSize: oldQuestion.challengeSize } : {}),
     };
 }
 
@@ -81,8 +83,7 @@ function isResumableQuizSession(session, requestedMode) {
 
     const questions = Array.isArray(session?.questions) ? session.questions : [];
     if (mode === 'test') return questions.length > 0;
-    return questions.length === QUIZ_QUESTION_COUNT
-        && isStructurallyResumableQuizSession(session, mode)
+    return isStructurallyResumableQuizSession(session, mode)
         && questions.every(question => String(question?.source || '').trim().toLowerCase() === 'question_cache'
             && String(question?.cacheRecordId || '').trim());
 }
@@ -204,7 +205,12 @@ function loadSupabaseDataSource() {
         }
         return [];
     }
-    async function generateQuiz(user, level, mode) {
+    async function generateQuiz(user, level, mode, selection = null) {
+        if (selection) {
+            const settings = await supabaseData.getUserLearningSettings(user);
+            level = settings.learningLevel || settings.level;
+            mode = 'real';
+        }
         const formalChallengeReaderAvailable = typeof supabaseData.getActiveFormalQuizChallenge === 'function';
         const activeFormalChallenge = mode === 'real'
             ? await getActiveFormalQuizChallenge(user)
@@ -218,7 +224,7 @@ function loadSupabaseDataSource() {
             };
         }
         if (activeFormalChallenge && Array.isArray(activeFormalChallenge.questions)
-            && activeFormalChallenge.questions.length === QUIZ_QUESTION_COUNT) {
+            && isStructurallyResumableQuizSession(activeFormalChallenge)) {
             const questions = activeFormalChallenge.questions;
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${activeFormalChallenge.test_id}`, questions);
             return {
@@ -227,9 +233,9 @@ function loadSupabaseDataSource() {
                 mode: 'real', level: level || activeFormalChallenge.level || null,
                 source: 'formal_quiz_challenge', questions,
                 progress: activeFormalChallenge.progress || { currentQuestion: 0, answers: [] },
-                readyCount: questions.length, requiredCount: QUIZ_QUESTION_COUNT,
-                partialFormalChallenge: false,
-                diagnostics: { fallbackUsed: false, resumed: true, requiredCount: QUIZ_QUESTION_COUNT, readyCount: questions.length, finalQuestionCount: questions.length },
+                readyCount: questions.length, requiredCount: questions.length,
+                partialFormalChallenge: questions.length < QUIZ_QUESTION_COUNT,
+                diagnostics: { fallbackUsed: false, resumed: true, requiredCount: questions.length, readyCount: questions.length, finalQuestionCount: questions.length },
             };
         }
         const activeSession = mode === 'real' && formalChallengeReaderAvailable
@@ -273,13 +279,14 @@ function loadSupabaseDataSource() {
                 roundType: 'primary',
                 limit: 10,
                 dataSource: supabaseData,
+                selection,
             });
             if (quiz.error || !quiz.testId || !Array.isArray(quiz.questions)) break;
             if ((mode || 'real') === 'real' && formalChallengeReaderAvailable
                 && typeof supabaseData.createFormalQuizChallenge !== 'function') {
                 throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
             }
-            if (formalMode && quiz.questions.length === QUIZ_QUESTION_COUNT
+            if (formalMode && quiz.questions.length > 0
                 && typeof supabaseData.createFormalQuizChallenge === 'function') {
                 let challenge;
                 try {
@@ -290,6 +297,12 @@ function loadSupabaseDataSource() {
                         questions: quiz.questions,
                     });
                 } catch (error) {
+                    if (selection && /FORMAL_CHALLENGE_(STEM_REUSED|CACHE_NOT_READY|CACHE_AI_AUDIT_REQUIRED)/.test(String(error?.message || error))) {
+                        const meaningIds = quiz.questions.map(q => q.meaningId);
+                        await supabaseData.ensureQuizQuestionSupply?.(user, meaningIds);
+                        return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds,
+                            requiredCount: meaningIds.length, readyCount: 0, questions: [], source: 'question_cache' };
+                    }
                     const stemCollision = String(error?.code || error?.message || error).includes('FORMAL_CHALLENGE_STEM_REUSED');
                     if (stemCollision && attempt < maxCreateAttempts) continue;
                     if (stemCollision) {
@@ -322,6 +335,11 @@ function loadSupabaseDataSource() {
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${quiz.testId}`, quiz.questions);
             await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);
+            if (quiz.nextSupplyMeaningIds?.length && typeof supabaseData.ensureQuizQuestionSupply === 'function') {
+                try { await supabaseData.ensureQuizQuestionSupply(user, quiz.nextSupplyMeaningIds); }
+                catch { console.warn('[custom-challenge] advance supply enqueue will retry on the next preparation request'); }
+            }
+            delete quiz.nextSupplyMeaningIds;
         }
         return quiz;
     }
@@ -573,6 +591,7 @@ function loadSupabaseDataSource() {
     }
     return {
         ...supabaseData,
+        getChallengeCandidates: (username) => getChallengeCandidatesWithDataSource({ username, dataSource: supabaseData }),
         getActiveFormalQuizChallenge,
         getQuizHistory: (username, mode) => supabaseData.getQuizHistory(username, mode),
         getActiveQuizSession,

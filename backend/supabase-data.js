@@ -1629,10 +1629,11 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
     }
 }
 
-async function requestQuestionCacheRebuildForUserWithClient(client, username) {
+async function requestQuestionCacheRebuildForUserWithClient(client, username, meaningIds = null) {
     const user = await requireUserByUsername(client, username);
     const words = await getWordsForUserWithClient(client, username);
-    const targets = words.filter(word => String(word?.mastery_status || '').trim().toLowerCase() !== 'mastered');
+    const targets = words.filter(word => String(word?.mastery_status || '').trim().toLowerCase() !== 'mastered'
+        && (!meaningIds || meaningIds.includes(String(word.id))));
     const eligibleWords = targets.filter(word => isValidGenerationWord(word.word));
 
     for (const word of eligibleWords) {
@@ -2919,7 +2920,6 @@ async function createFormalQuizChallengeWithClient(client, options = {}) {
     if (!user) throw new Error(`USER_NOT_FOUND: ${username}`);
     const testId = requireTestId(options.testId);
     const questions = options.questions;
-    if (!Array.isArray(questions) || questions.length !== 10) throw new Error('FORMAL_QUIZ_INCOMPLETE');
     assertFormalQuizQuestions(questions);
     assertFormalChallengeQuestionsRenderable(questions);
     const payload = {
@@ -3415,6 +3415,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
         getQuizWordsForUser: (username, level) => getQuizWordsForUserWithClient(client, username, level),
+        ensureQuizQuestionSupply: (username, ids) => requestQuestionCacheRebuildForUserWithClient(client, username, ids),
         getWord: (username, word) => getWordWithClient(client, username, word),
         getWordByRecordId: (recordId, username) => getWordByRecordIdWithClient(client, recordId, username),
         listUserWords: (username, options) => listUserWordsWithClient(client, username, options),
@@ -3522,6 +3523,7 @@ module.exports = {
     updateUserLearningSettings: defaultAdapter.updateUserLearningSettings,
     getWordsForUser: defaultAdapter.getWordsForUser,
     getQuizWordsForUser: defaultAdapter.getQuizWordsForUser,
+    ensureQuizQuestionSupply: defaultAdapter.ensureQuizQuestionSupply,
     getWord: defaultAdapter.getWord,
     getWordByRecordId: defaultAdapter.getWordByRecordId,
     listUserWords: defaultAdapter.listUserWords,

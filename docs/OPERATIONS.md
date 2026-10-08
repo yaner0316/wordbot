@@ -69,6 +69,12 @@ Before applying a recovery, save the source word/assessment snapshot, reviewed p
 
 ## Release and rollback evidence
 
+### Self-selected challenges (2026-10-05)
+
+Prepare and review `backend/migrations/20261005_custom_challenges.sql` before releasing the paired frontend/backend change. Execution remains an explicitly authorized operator action. The existing verifier checks `rpc_custom_challenge_count_contract`; when this is the only missing contract, the migration runner applies only this new file. It permits complete 1–10-question challenges with a stored count marker and retains the 18-hour entry-age cooldown for first challenges, as well as ownership, saved mastery, current level, display cooldown and AI audit checks. It does not rewrite historical answers.
+
+Publish the frontend branch before backend CI resolves its pinned web-contract revision; apply the authorized migration, deploy the backend, then the frontend. Verify the affected real flow with an explicitly selected account: exact chosen meanings, random fill, short challenge submission, persisted progress/history and no short-quiz game-time change. Local synthetic browser/database tests are not production acceptance. An old backend/frontend may reject new short sessions, so rollback needs paired code and preservation of those stored sessions; do not remove their count markers or historical evidence.
+
 Before release, record branch/base and intended SHA, focused and full test counts, migration apply state, CI/deploy result, live backend SHA, and the affected real-user persistence/readback result.
 
 Rollback code through the normal repository/deploy path. Database rollback is a separate reviewed operation: prefer forward-compatible corrective migrations and preserve evidence. Do not claim a release complete until the live SHA and affected production flow match `PROJECT.md`'s definition of done.

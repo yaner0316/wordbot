@@ -243,6 +243,27 @@ function buildRecentQuestionTextsByWord(assessmentRecords, { userId, now = Date.
     }
     return result;
 }
+// Cache readiness never changes the library size; entry and display both enforce cooldown.
+function buildChallengeCandidates({ wordRecords = [], assessmentRecords = [], displayEvents = [], userId, now = Date.now(), minAgeMs = 18 * 60 * 60 * 1000 }) {
+    const mastery = buildMasteryByRecordId(wordRecords, assessmentRecords);
+    const displayed = mergeLatestTimestamps(
+        buildFormalAssessmentDisplaySummary(assessmentRecords, { userId }),
+        buildDisplayEventSummary(displayEvents, { userId })
+    );
+    return wordRecords.filter(record => userKey(record.fields?.user) === userKey(userId))
+        .filter(record => !mastery.get(record.record_id)?.mastered)
+        .map(record => {
+            const lastDisplay = Math.max(lastDisplayedTimestamp(record), displayed.get(record.record_id) || 0);
+            const enteredAt = recordTimestamp(record);
+            const endsAt = enteredAt ? Math.max(enteredAt, lastDisplay) + minAgeMs : 0;
+            const saved = fieldValue(record.fields?.Status).trim().toLowerCase();
+            const status = ['recognized', 'consolidating'].includes(saved) ? saved : 'pending';
+            return { recordId: record.record_id, word: fieldValue(record.fields?.Word),
+                meaning: fieldValue(record.fields?.CN_Meaning), status,
+                eligible: Boolean(enteredAt) && now >= endsAt,
+                cooldownEndsAt: endsAt > now ? new Date(endsAt).toISOString() : null };
+        });
+}
 function buildQuizWordQueue({ cacheRows = [], wordRecords, assessmentRecords = [], displayEvents = [], userId, level = '', limit = 10, now = Date.now(), minAgeMs = 0 }) {
     const assessmentSummary = buildAssessmentSummary(assessmentRecords, { userId });
     const formalDisplayByRecordId = mergeLatestTimestamps(
@@ -388,6 +409,7 @@ function selectCachedQuestionsForWordQueue({
 }
 
 module.exports = {
+    buildChallengeCandidates,
     buildQuizWordQueue,
     summarizeQuizLearningAvailability,
     countEligibleReadyMeaningsByLevel,

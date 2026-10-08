@@ -83,6 +83,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260910_question_generation_non_terminal_retry.sql',
       '20260910_question_coverage_reconciliation.sql',
       '20260910_question_generation_checkpoints.sql',
+      '20261005_custom_challenges.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -225,6 +226,7 @@ const COMPLETE_STATE = Object.freeze({
   rpc_publish_question_generation_variants_ai_audit_contract: true,
   rpc_enqueue_job_if_needed_strict_ai_audit_contract: true,
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
+  rpc_custom_challenge_count_contract: true,
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
@@ -1091,4 +1093,15 @@ test('a database missing only fair user rotation applies only the new migration'
   });
   assert.equal(result.status, 'applied');
   assert.deepEqual(readPaths, ['20260908_question_generation_fair_claim.sql']);
+});
+
+test('a database missing only custom challenge support applies only the new migration', async () => {
+  const harness = createDatabaseHarness({ states: [{ ...COMPLETE_STATE, rpc_custom_challenge_count_contract: false }, COMPLETE_STATE] });
+  const readPaths = [];
+  const result = await applyQuestionGenerationMigrations({
+    env: { DATABASE_URL: 'postgresql://postgres:test@db.example.com/postgres' }, Client: harness.Client,
+    readFile: async file => { readPaths.push(path.basename(file)); return '-- custom challenge migration'; },
+  });
+  assert.equal(result.status, 'applied');
+  assert.deepEqual(readPaths, ['20261005_custom_challenges.sql']);
 });
