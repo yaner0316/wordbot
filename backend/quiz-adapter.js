@@ -2,6 +2,7 @@ const crypto = require('crypto');
 
 const {
     buildQuizWordQueue,
+    buildChallengeCandidates,
     buildActiveDisplayStemsByMeaning,
     buildRecentQuestionTextsByWord,
     selectCachedQuestionsForWordQueue,
@@ -305,6 +306,43 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
     }
     return questions;
 }
+async function getChallengeCandidatesWithDataSource({ username, dataSource, now = Date.now() }) {
+    const [user, words, assessments, displays] = await Promise.all([
+        dataSource.getUserByUsername(username),
+        (dataSource.getQuizWordsForUser || dataSource.getWordsForUser)(username),
+        (dataSource.getQuizAssessmentsForUser || dataSource.getAssessmentsForUser)(username),
+        dataSource.getFormalDisplayEventsForUser?.(username) || [],
+    ]);
+    const canonicalUsername = user?.username || username;
+    const sourceIds = buildWordSourceIdMap(words);
+    const canonicalIds = new Map(words.map(w => [sourceRecordId(w), String(w.id)]));
+    const candidates = buildChallengeCandidates({
+        wordRecords: words.map(w => toFeishuWordRecord(w, { username: canonicalUsername })),
+        assessmentRecords: assessments.map(a => toFeishuAssessmentRecord(a, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
+        displayEvents: displays.map(d => normalizeFormalDisplayEvent(d, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
+        userId: canonicalUsername, now,
+    }).map(({recordId, ...candidate}) => ({ ...candidate, meaningId: canonicalIds.get(recordId) }));
+    return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString() };
+}
+
+function chooseChallengeQueue({ selection, candidates, wordRows, limit }) {
+    if (!selection || !['random', 'custom'].includes(selection.mode) || !Array.isArray(selection.meaningIds)
+        || selection.meaningIds.length > limit || selection.meaningIds.some(id => typeof id !== 'string' || !id.trim())
+        || new Set(selection.meaningIds).size !== selection.meaningIds.length
+        || (selection.mode === 'random' && selection.meaningIds.length)) throw new Error('CHALLENGE_SELECTION_INVALID');
+    const ids = new Map(wordRows.map(row => [String(row.id), sourceRecordId(row)]));
+    if (selection.meaningIds.some(id => !ids.has(id))) throw new Error('CHALLENGE_SELECTION_INVALID');
+    const eligible = new Set(candidates.filter(w => w.eligible).map(w => w.recordId));
+    const selected = selection.meaningIds.map(id => ids.get(id));
+    if (selected.some(id => !eligible.has(id))) throw new Error('CHALLENGE_SELECTION_CHANGED');
+    const remaining = [...eligible].filter(id => !selected.includes(id));
+    for (let i = remaining.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(i + 1);
+        [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+    }
+    return [...selected, ...remaining].slice(0, limit);
+}
+
 async function generateQuizWithDataSource({
     username,
     level,
@@ -314,6 +352,7 @@ async function generateQuizWithDataSource({
     minAgeMs = 0,
     dataSource,
     mode = 'real',
+    selection = null,
     createId = () => crypto.randomUUID().split('-')[0],
 }) {
     if (!dataSource) throw new Error('DATA_SOURCE_REQUIRED');
@@ -349,7 +388,11 @@ async function generateQuizWithDataSource({
     const questionCacheRows = cacheRows.map((row) => toFeishuCacheRow(row, { username: canonicalUsername }));
     const wordRowsBySourceId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
 
-    const queue = buildQuizWordQueue({
+    const challengeCandidates = selection && mode === 'real'
+        ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now }) : null;
+    const queue = challengeCandidates ? chooseChallengeQueue({ selection, wordRows, limit,
+        candidates: challengeCandidates
+    }) : buildQuizWordQueue({
         wordRecords,
         cacheRows: questionCacheRows,
         assessmentRecords,
@@ -360,6 +403,12 @@ async function generateQuizWithDataSource({
         now,
         minAgeMs: effectiveMinAgeMs,
     });
+
+    if (challengeCandidates) limit = Math.min(limit, challengeCandidates.length);
+    if (selection && !limit) return { code: 'CHALLENGE_NO_ELIGIBLE_WORDS', questions: [], requiredCount: 0 };
+    if (challengeCandidates && queue.length < limit) return {
+        code: 'CHALLENGE_COOLDOWN', questions: [], requiredCount: limit, availableCount: queue.length,
+    };
 
     const questions = selectCachedQuestionsForWordQueue({
         cacheRows: questionCacheRows,
@@ -378,6 +427,7 @@ async function generateQuizWithDataSource({
         ...question,
         source: 'question_cache',
         correctAnswer: question.answer,
+        ...(selection ? { challengeSize: limit } : {}),
         selectedSenseFlow: hasSelectedSenseFlowFlag(wordRowsBySourceId.get(String(question.record_id || question.wordRecordId || '').trim())),
     }));
 
@@ -399,6 +449,14 @@ async function generateQuizWithDataSource({
 
     if (questions.length < limit) {
         if (mode === 'real') {
+            if (selection) {
+                const selectedIds = queue.map(id => String(wordRowsBySourceId.get(id)?.id));
+                const readyIds = new Set(questions.map(q => String(q.meaningId || '')));
+                const missingIds = selectedIds.filter(id => !readyIds.has(id));
+                await dataSource.ensureQuizQuestionSupply?.(username, missingIds);
+                return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds: selectedIds,
+                    requiredCount: limit, readyCount: questions.length, questions: [], source: 'question_cache' };
+            }
             const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
             return {
                 error: code === 'QUESTION_POOL_EXHAUSTED'
@@ -510,12 +568,31 @@ async function generateQuizWithDataSource({
         };
     }
 
+    let nextSupplyMeaningIds;
+    if (selection && mode === 'real') {
+        const nextHistory = mergeQuestionTextHistory(
+            buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
+            buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
+        );
+        for (const question of questions) {
+            const id = question.record_id || question.wordRecordId;
+            const stems = new Set(nextHistory.get(id) || []);
+            stems.add(question.context);
+            nextHistory.set(id, stems);
+        }
+        const nextReady = new Set(selectCachedQuestionsForWordQueue({
+            cacheRows: questionCacheRows, queue, userId: canonicalUsername, level: effectiveLevel,
+            roundType, requireReadyPair: true, limit, now, recentQuestionTextsByWord: nextHistory,
+        }).map(q => q.meaningId));
+        nextSupplyMeaningIds = questions.filter(q => !nextReady.has(q.meaningId)).map(q => q.meaningId);
+    }
     return {
         testId,
         mode,
         source: 'question_cache',
+        ...(selection ? { nextSupplyMeaningIds } : {}),
         level: effectiveLevel,
-        partialFormalChallenge: mode === 'real' ? false : undefined,
+        partialFormalChallenge: mode === 'real' ? questions.length < 10 : undefined,
         readyCount: mode === 'real' ? questions.length : undefined,
         requiredCount: mode === 'real' ? limit : undefined,
         diagnostics: mode === 'real'
@@ -749,6 +826,7 @@ async function submitQuizWithDataSource({
     return buildSubmitResult({ testId, results, correct, replacementRequired, masteryFeedback });
 }
 module.exports = {
+    getChallengeCandidatesWithDataSource,
     generateQuizWithDataSource,
     submitQuizWithDataSource,
     toFeishuWordRecord,

@@ -9,7 +9,7 @@ function quizMeaningId(question) {
 }
 
 function assertFormalQuizQuestions(questions) {
-    if (!Array.isArray(questions) || questions.length !== FORMAL_QUIZ_REQUIRED_COUNT) {
+    if (!hasCompleteQuestionCount(questions)) {
         throw new Error('FORMAL_QUIZ_INCOMPLETE');
     }
     if (questions.some(question => {
@@ -25,6 +25,12 @@ function assertFormalQuizQuestions(questions) {
     }
 }
 
+function hasCompleteQuestionCount(questions) {
+    if (!Array.isArray(questions) || !questions.length || questions.length > FORMAL_QUIZ_REQUIRED_COUNT) return false;
+    if (questions.every(q => q?.challengeSize === undefined)) return questions.length === FORMAL_QUIZ_REQUIRED_COUNT;
+    return questions.every(q => Number.isInteger(q?.challengeSize) && q.challengeSize === questions.length);
+}
+
 function isResumableQuizSession(session, requestedMode = 'real') {
     const normalizedMode = normalizeAssessmentMode(requestedMode);
     if (!session || normalizedMode !== 'real' || getAssessmentMode(session.test_id) !== 'real') return false;
@@ -34,7 +40,7 @@ function isResumableQuizSession(session, requestedMode = 'real') {
     if (sessionMode !== 'real' || (sessionSource && sessionSource !== 'question_cache')) return false;
 
     const questions = Array.isArray(session.questions) ? session.questions : [];
-    if (questions.length !== FORMAL_QUIZ_REQUIRED_COUNT) return false;
+    if (!hasCompleteQuestionCount(questions)) return false;
     if (questions.some(question => Number(question?.type) !== 1)) return false;
 
     const meaningIds = questions.map(quizMeaningId);
@@ -48,6 +54,7 @@ function isResumableQuizSession(session, requestedMode = 'real') {
 }
 
 module.exports = {
+    hasCompleteQuestionCount,
     FORMAL_QUIZ_REQUIRED_COUNT,
     assertFormalQuizQuestions,
     isResumableQuizSession,

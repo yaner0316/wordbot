@@ -13,8 +13,7 @@ const DEFAULT_CORS_ALLOWED_ORIGINS = Object.freeze([
 
 function isCompleteCacheOnlyFormalSession(session) {
     const questions = Array.isArray(session?.questions) ? session.questions : [];
-    return questions.length === FORMAL_QUIZ_REQUIRED_COUNT
-        && isResumableQuizSession(session)
+    return isResumableQuizSession(session)
         && questions.every(question => String(question?.source || '').trim().toLowerCase() === 'question_cache'
             && String(question?.cacheRecordId || '').trim());
 }
@@ -332,11 +331,11 @@ function createApp({
                     mode: 'real',
                     partialFormalChallenge: readyCount < FORMAL_QUIZ_REQUIRED_COUNT,
                     readyCount,
-                    requiredCount: FORMAL_QUIZ_REQUIRED_COUNT,
+                    requiredCount: readyCount,
                     diagnostics: {
                         fallbackUsed: false,
                         resumed: true,
-                        requiredCount: FORMAL_QUIZ_REQUIRED_COUNT,
+                        requiredCount: readyCount,
                         readyCount,
                         finalQuestionCount: readyCount,
                     },

@@ -25,6 +25,12 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 
 ## Learning and mastery invariants
 
+- The homepage offers random and self-selected formal challenges to children and parents. Selection is by owned meaning (word plus definition), across pending, recognized and consolidating meanings. Parents do not need to authorize the child's selection.
+- A challenge contains up to ten distinct eligible meanings. A user may specify zero to ten, and the server randomly fills the remaining places from the same eligible pool. Explicit choices are never silently replaced. Only a library containing fewer than ten non-mastered meanings permits a complete one-to-nine-question challenge. Cooling meanings remain part of that library count: neither cooldown nor cache shortages may reduce the intended size.
+- Every first-time formal challenge requires at least 18 hours from word entry. Previously displayed meanings also require at least 18 hours from their last formal display; eligibility uses the later of entry and display. All selection and creation paths enforce ownership, saved mastery and the user's current learning level.
+- A cache shortage preserves the chosen meanings, requests durable supply and keeps the challenge in a preparation state with automatic retries. Formal quality gates remain unchanged. Supply is prepared ahead of the next eligible challenge; elapsed time alone is not proof of readiness during infrastructure failures.
+- Complete short challenges persist assessment and mastery progress normally, but never add or deduct game minutes. Their stored questions carry the exact intended count so truncated legacy ten-question sessions are not mistaken for complete short challenges.
+
 - Initial selected-sense context and recognition review are preparation, not formal mastery evidence.
 - Automatic new mastery requires two consecutive correct formal assessments on two different normalized stored stems, separated by at least 18 hours and no more than 720 hours.
 - Before mastery, a formal wrong answer resets that meaning's consecutive sequence. Missing stems, cosmetic duplicates, preview/test/review rows, and duplicate submissions do not prove new mastery.

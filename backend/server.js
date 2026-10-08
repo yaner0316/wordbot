@@ -8,6 +8,7 @@ const { requireAdminToken, requireUserSession, requireParentSession, setSessionC
 const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getParentCredentialStatus } = require('./data-source');
+const { getChallengeCandidates } = require('./data-source');
 const { lookupDictionarySenses } = require('./dictionary-senses');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth, getLearningSupplyHealth } = require('./runtime-health');
 const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
@@ -480,14 +481,25 @@ app.use('/api/reviews', requireUserSession);
 const publicDir = path.join(__dirname, '..');
 app.use(express.static(publicDir));
 
+app.get('/api/quiz/candidates', async (req, res) => {
+    try {
+        const user = req.wordbotSession?.user || req.query.user;
+        if (!user) return res.status(400).json({ error: '缺少用户ID' });
+        res.json(await getChallengeCandidates(user));
+    } catch (error) {
+        res.status(500).json({ code: 'CHALLENGE_CANDIDATES_UNAVAILABLE', error: '暂时未能读取单词，请重试。' });
+    }
+});
+
 app.post('/api/quiz', async (req, res) => {
     try {
-        const { user, level, mode } = req.body;
+        const { user, level, mode, selection } = req.body;
         if (!user) return res.status(400).json({ error: '缺少用户ID' });
         const data = await generateQuiz(
             user,
             level || null,
-            normalizeAssessmentMode(mode || ASSESSMENT_MODE.REAL)
+            normalizeAssessmentMode(mode || ASSESSMENT_MODE.REAL),
+            ...(selection === undefined ? [] : [selection])
         );
         if (data.error) return res.status(503).json({
             error: data.error,
@@ -495,8 +507,15 @@ app.post('/api/quiz', async (req, res) => {
             source: data.source,
             diagnostics: data.diagnostics,
         });
-        res.json(data);
+        res.status(data.pending ? 202 : 200).json(data);
     } catch (e) {
+        if (String(e.message).startsWith('CHALLENGE_SELECTION_')) {
+            return res.status(409).json({ code: e.message, error: '单词状态已变化，请刷新选择。' });
+        }
+        if (req.body?.selection) {
+            const changed = /FORMAL_CHALLENGE_(MEANING_COOLDOWN|DISPLAY_COOLDOWN)/.test(String(e.message));
+            return res.status(changed ? 409 : 503).json({ code: changed ? 'CHALLENGE_SELECTION_CHANGED' : 'CHALLENGE_TEMPORARILY_UNAVAILABLE', error: changed ? '单词状态已变化，请刷新选择。' : '连接暂时中断，请保留选择后重试。' });
+        }
         res.status(500).json({ error: e.message });
     }
 });

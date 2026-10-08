@@ -1218,3 +1218,21 @@ test('review submit endpoint starts the next round prebuild in the background', 
         }]);
     });
 });
+
+test('new self-selection endpoint is child-readable and quiz selection survives a preparing response', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        getChallengeCandidates: async user => ({candidates:[{meaningId:'owned',eligible:true}],availableCount:1}),
+        generateQuiz: async (...args) => { calls.push(args); return {pending:true,code:'CHALLENGE_PREPARING',meaningIds:['owned'],requiredCount:1,questions:[]}; },
+    }));
+    await withServer(app, async baseUrl => {
+        const candidates = await fetch(`${baseUrl}/api/quiz/candidates?user=student`);
+        assert.equal(candidates.status,200);
+        assert.equal((await candidates.json()).availableCount,1);
+        const selection = {mode:'custom',meaningIds:['owned']};
+        const response = await fetch(`${baseUrl}/api/quiz`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:'student',mode:'real',selection})});
+        assert.equal(response.status,202);
+        assert.deepEqual(calls[0][3],selection);
+        assert.deepEqual((await response.json()).meaningIds,['owned']);
+    });
+});
