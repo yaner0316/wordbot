@@ -1409,10 +1409,13 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         ? generationCheckpoint
         : { variants: [] };
     if (!Array.isArray(checkpoint.variants)) checkpoint.variants = [];
-    const excludedStems = new Set((word.excludedQuestionStems || []).map(normalizeQuestionStem));
-    const contextWasDisplayed = context => excludedStems.has(normalizeQuestionStem(blankWordInContext(context, wordText)));
+    const excludedStems = new Set([
+        ...(word.excludedQuestionStems || []),
+        ...(approvedVariants || []).map(variant => variant?.question_text || variant?.questionText),
+    ].map(normalizeQuestionStem).filter(Boolean));
+    const contextIsExcluded = context => excludedStems.has(normalizeQuestionStem(blankWordInContext(context, wordText)));
     const resumableVariants = checkpoint.variants
-        .filter(variant => variant && !variant.row && variant.context && !contextWasDisplayed(variant.context))
+        .filter(variant => variant && !variant.row && variant.context && !contextIsExcluded(variant.context))
         .sort((left, right) => Number(left.slot || 0) - Number(right.slot || 0));
     const persistVariant = async variant => {
         const index = checkpoint.variants.findIndex(item => Number(item?.slot) === Number(variant.slot));
@@ -1433,12 +1436,12 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     let firstContext = resumableVariants[0]?.context || (level === ELEMENTARY_LEVEL
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '');
-    if ((!hasWholeWord(firstContext, wordText) || contextWasDisplayed(firstContext)) && typeof generateContext === 'function') {
+    if ((!hasWholeWord(firstContext, wordText) || contextIsExcluded(firstContext)) && typeof generateContext === 'function') {
         const previousContext = firstContext;
         firstContext = '';
         for (let attempt = 0; attempt < 3 && !firstContext; attempt++) {
             const candidate = await generateContext(wordText, meaning, level, previousContext).catch(() => '');
-            if (hasWholeWord(candidate, wordText) && !contextWasDisplayed(candidate)) firstContext = candidate;
+            if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate)) firstContext = candidate;
         }
     }
     if (!hasWholeWord(firstContext, wordText)) { reportRejection('context_generation_failed'); return []; }
@@ -1493,7 +1496,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             for (let attempt = 0; attempt < 3 && !context; attempt++) {
                 const candidate = await generateContext(wordText, meaning, level, previousContext).catch(() => '');
                 const candidateKey = normalizeQuestionStem(candidate);
-                if (hasWholeWord(candidate, wordText) && !contextWasDisplayed(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
+                if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
             }
         }
         if (!hasWholeWord(context, wordText)) break;
