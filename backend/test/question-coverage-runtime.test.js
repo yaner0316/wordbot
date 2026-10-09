@@ -11,6 +11,7 @@ function createClient() {
         words: [{ id: 'word-1', user_id: 'user-1', word: 'bank', mastery_status: 'pending', question_generation_version: 2 }],
         question_cache: [],
         question_generation_jobs: [],
+        quiz_display_events: [],
     };
     const calls = [];
     return {

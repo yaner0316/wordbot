@@ -212,6 +212,16 @@ select
       and trigger.tgenabled <> 'D'
   ) as enqueue_trigger,
   exists (
+    select 1 from pg_catalog.pg_trigger as trigger
+    join pg_catalog.pg_proc as proc on proc.oid = trigger.tgfoid
+    where trigger.tgrelid = to_regclass('public.quiz_display_events')
+      and trigger.tgname = 'quiz_display_replenish' and trigger.tgtype = 5
+      and not trigger.tgisinternal and trigger.tgenabled <> 'D'
+      and not proc.prosecdef and proc.proconfig @> array['search_path=pg_catalog']
+      and proc.prosrc like '%enqueue_question_generation_job_if_needed%'
+      and proc.prosrc like '%cache_backfill%'
+  ) as display_replenishment_trigger,
+  exists (
     select 1
     from pg_catalog.pg_class as index_class
     join pg_catalog.pg_namespace as namespace on namespace.oid = index_class.relnamespace
@@ -415,6 +425,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260910_question_coverage_reconciliation.sql'),
   path.resolve(__dirname, '..', 'migrations', '20260910_question_generation_checkpoints.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261005_custom_challenges.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261009_display_replenishment.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -495,6 +506,7 @@ const EXPECTED_STATE = Object.freeze({
   rpc_enqueue_job_if_needed_strict_ai_audit_contract: true,
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
+  display_replenishment_trigger: true,
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
@@ -576,6 +588,8 @@ async function applyQuestionGenerationMigrations({
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20260908_question_generation_fair_claim.sql')
       : missing.length === 1 && missing[0] === 'rpc_custom_challenge_count_contract'
         ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261005_custom_challenges.sql')
+      : missing.length === 1 && missing[0] === 'display_replenishment_trigger'
+        ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261009_display_replenishment.sql')
       : MIGRATION_PATHS;
     for (const migrationPath of paths) {
       const sql = await readFile(migrationPath, 'utf8');

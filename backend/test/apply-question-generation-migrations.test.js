@@ -84,6 +84,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260910_question_coverage_reconciliation.sql',
       '20260910_question_generation_checkpoints.sql',
       '20261005_custom_challenges.sql',
+      '20261009_display_replenishment.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -227,6 +228,7 @@ const COMPLETE_STATE = Object.freeze({
   rpc_enqueue_job_if_needed_strict_ai_audit_contract: true,
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
+  display_replenishment_trigger: true,
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
@@ -436,6 +438,15 @@ test('an already complete database is only inspected in a read-only transaction'
   assert.match(harness.events[2], /question-generation-migration-state/);
   assert.equal(harness.events[3], 'query:COMMIT');
   assert.equal(harness.events[4], 'end');
+});
+
+test('an existing deployment missing only display replenishment applies only that migration', async () => {
+  const harness=createDatabaseHarness({states:[{...COMPLETE_STATE,display_replenishment_trigger:false},COMPLETE_STATE]});
+  const readPaths=[];
+  const result=await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,
+    readFile:async file=>{readPaths.push(path.basename(file));return '-- display replenishment';}});
+  assert.deepEqual(readPaths,['20261009_display_replenishment.sql']);
+  assert.equal(result.status,'applied');
 });
 
 test('an incomplete database is inspected, migrated in fixed order, and verified again', async () => {

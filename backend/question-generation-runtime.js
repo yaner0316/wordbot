@@ -4,6 +4,7 @@ const { createQuestionGenerationJobStore } = require('./question-generation-job'
 const { createQuestionGenerationService } = require('./question-generation-service');
 const { createQuestionGenerationWorker } = require('./question-generation-worker');
 const { normalizeLevel } = require('./learning-level');
+const { getCacheQuestionReadinessIssues } = require('./question-cache');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 
@@ -182,12 +183,19 @@ function createSupabaseWordLoader({ client } = {}) {
             .select('stem').eq('user_id', exactUserId).eq('meaning_id', exactWordId)
             .gt('history_expires_at', new Date().toISOString());
         throwSupabaseError(displayError, 'questionGeneration.loadDisplayHistory');
+        const {data: cached, error: cacheError} = await supabase.from(CACHE_TABLE).select('*')
+            .eq('user_id', exactUserId).eq('word_id', exactWordId).eq('round_type', 'primary');
+        throwSupabaseError(cacheError, 'questionGeneration.loadExistingCache');
+        const level = normalizeLevel(user?.learning_level);
         return {
             ...data,
             excludedQuestionStems: (displays || []).map(row=>row.stem),
+            cachedVariants: (cached || []).filter(row => row.level === level && !getCacheQuestionReadinessIssues({
+                ...row, user:exactUserId, word:data.word, word_record_id:exactWordId, context_cn:row.context_zh,
+            }, {requireAiAudit:true}).length),
             // Formal question stems and quality gates follow the child's
             // current learning level, never the word's historical level.
-            level: normalizeLevel(user?.learning_level),
+            level,
         };
     };
 }

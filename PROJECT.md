@@ -15,7 +15,8 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 
 ## Formal-question supply invariants
 
-- Every coverage target must eventually have at least two distinct, current-policy, AI-approved type-1 formal questions at the user's current learning level.
+- Every coverage target must maintain two distinct, current-policy, AI-approved type-1 formal questions at the user's current learning level whose stems are absent from that meaning's active display history. A ready cache row or a completed generation job alone does not prove this fresh-question reserve exists.
+- Recording a formal display durably enqueues replacement work in the same database transaction. Replenishment starts after consumption, while the meaning is cooling, without requiring the child to open another challenge. Mastered/deleted meanings remain excluded by the enqueue and worker guards. Existing fresh approved siblings and valid partial work are reused; generate only the missing supply.
 - Distinctness requires different normalized stems and fingerprints. The approved pair must also satisfy the current distractor-overlap, option, Chinese-meaning, exact context-translation, and semantic single-answer rules.
 - A formal quiz is cache-first and fail-closed: it uses only valid cached questions and never silently falls back to live generation or an unapproved/stale row.
 - Coverage is continuously reconciled. Missing, stale, wrong-level, invalid, or incomplete supply creates or revives durable generation work without requiring a user or operator to notice it first.
