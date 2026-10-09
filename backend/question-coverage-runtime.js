@@ -35,13 +35,14 @@ async function loadAllRows(client, table, columns) {
 
 function createSupabaseCoverageSnapshotReader(client) {
     return async function loadSnapshot() {
-        const [users, words, cacheRows, jobs] = await Promise.all([
+        const [users, words, cacheRows, jobs, displayEvents] = await Promise.all([
             loadAllRows(client, 'users', 'id,learning_level'),
             loadAllRows(client, 'words', 'id,user_id,word,mastery_status,question_generation_version'),
             loadAllRows(client, 'question_cache', 'id,user_id,word_id,source_word_record_id,level,round_type,quality_status,cache_state,variant_slot,question_type,question_text,context_zh,options,option_meanings,answer,correct_meaning,question_fingerprint,ai_audit_status,source_version'),
             loadAllRows(client, 'question_generation_jobs', 'id,user_id,word_id,word_version,status'),
+            loadAllRows(client, 'quiz_display_events', 'id,user_id,meaning_id,stem,history_expires_at'),
         ]);
-        return { users, words, cacheRows, jobs };
+        return { users, words, cacheRows, jobs, displayEvents };
     };
 }
 

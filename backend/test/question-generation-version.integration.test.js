@@ -232,6 +232,21 @@ async function createApprovedFormalChallenge(db) {
     return question.rows[0];
 }
 
+test('each formal display durably requests replenishment in the same transaction', async () => {
+    const db=await createDatabase();
+    try {
+        await insertFormalWords(db);
+        await insertFormalCacheRows(db);
+        await db.exec("update question_generation_jobs set status='ready'");
+        await db.query('select public.create_formal_quiz_challenge($1::uuid,$2,$3,$4::jsonb,$5::timestamptz)',
+            [USER_ID,'real-replenish','middle',JSON.stringify(formalChallengeQuestions()),FORMAL_NOW]);
+        const jobs=await db.query("select status from question_generation_jobs where word_id <> $1",[WORD_ID]);
+        assert.equal(jobs.rows.length,10);
+        assert.ok(jobs.rows.every(job=>job.status==='pending'));
+        assert.equal((await db.query(VERIFICATION_SQL)).rows[0].display_replenishment_trigger,true);
+    } finally {await db.close();}
+});
+
 test('migration verification SQL executes against the real versioned PGlite schema', async () => {
     const db = await createDatabase();
     try {

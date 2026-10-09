@@ -30,6 +30,8 @@ Never use startup-time implicit DDL. Never delete caches, rewrite assessments, r
 
 ## Question-supply operations
 
+The 20261009_display_replenishment migration adds an AFTER INSERT trigger on quiz_display_events. It requests the existing idempotent durable generation RPC in the display transaction, without changing assessment history or granting child roles access to generation tables. The verifier checks the trigger and applies only this migration when it is the sole missing contract. Coverage reconciliation also compares ready cache stems to each user's meaning-specific unexpired display history; health readiness no longer counts consumed stems as reserve. A newly mastered word is still excluded by the existing enqueue/claim guards.
+
 The normal path is automatic:
 
 1. The coverage controller scans existing non-mastered meanings against the user's current learning level and current quality policy.

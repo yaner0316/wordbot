@@ -1,6 +1,38 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('importing a cached sibling preserves partial work even when its slot is occupied', async () => {
+    const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+    const sibling={question_text:'She deposited money at the _____.',options:['bank','shore','desk','road'],answer:'A'};
+    const partial={slot:1,context:'The bank approved our loan.',contextTranslation:'银行批准了我们的贷款。',distractors:['tree','coin','sky']};
+    const service=createQuestionGenerationService({
+        loadWord:async()=>({id:'w',word:'bank',cachedVariants:[{...sibling,question_fingerprint:fingerprintQuestion(sibling,'w')}]}),
+        loadCheckpoint:async()=>({word:'bank',meaning:'["",""]',variants:[partial]}),
+        validateCandidate:()=>[],
+        generateCandidates:async request=>{
+            const restored=request.generationCheckpoint.variants.find(v=>!v.row);
+            assert.deepEqual(restored,{...partial,slot:2});
+            return [{question_text:'The _____ approved our loan.',options:['bank','tree','coin','sky'],answer:'A'}];
+        },
+        publishReadyVariants:async()=>{},
+    });
+    await service.process({word_id:'w',user_id:'u'});
+});
+
+test('replenishment reuses a fresh approved cache sibling when no durable checkpoint exists', async () => {
+    const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+    const sibling={question_text:'She deposited money at the _____.',options:['bank','shore','desk','road'],answer:'A'};
+    let requested;
+    const service=createQuestionGenerationService({
+      loadWord:async()=>({id:'w',word:'bank',cachedVariants:[{...sibling,question_fingerprint:fingerprintQuestion(sibling,'w')}]}),
+      validateCandidate:()=>[],generateCandidates:async request=>{requested=request.requiredCount;return [{question_text:'The _____ approved our loan.',options:['bank','tree','coin','sky'],answer:'A'}];},
+      publishReadyVariants:async()=>{},
+    });
+    const result=await service.process({word_id:'w',user_id:'u'});
+    assert.equal(requested,1);assert.equal(result.variants.length,2);
+    assert.ok(result.variants.some(row=>row.question_text===sibling.question_text));
+});
+
 test('replenishment cannot republish a checkpoint stem already shown to the child', async () => {
     const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
     const old={question_text:'She visited the _____ yesterday.',options:['bank','desk','road','hill'],answer:'A'};

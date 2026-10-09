@@ -52,6 +52,15 @@ function cache(slot, overrides = {}) {
         ...overrides,
     };
 }
+test('coverage treats a displayed stem as consumed even while its cache row remains ready', () => {
+    const user={id:'user-1',learning_level:'小学'};
+    const snapshot={users:[user],words:[word()],cacheRows:[cache(1),cache(2)],
+      displayEvents:[{user_id:'user-1',meaning_id:'word-1',stem:'  THE   _____ opens early on weekdays. ',history_expires_at:'2099-01-01'}]};
+    assert.equal(planQuestionCoverage(snapshot).summary.ready,0);
+    assert.equal(planQuestionCoverage(snapshot).targets.length,1);
+    snapshot.displayEvents[0].user_id='other';
+    assert.equal(planQuestionCoverage(snapshot).summary.ready,1);
+});
 
 test('coverage targets every existing non-mastered meaning regardless of learning stage', () => {
     for (const masteryStatus of [null, 'pending', 'unseen', 'recognized', 'consolidating']) {

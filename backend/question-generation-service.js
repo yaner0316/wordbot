@@ -152,6 +152,24 @@ function createQuestionGenerationService({
                 return savedVariant;
             });
             if (restoredInvalidRow) await saveCheckpoint({ job, word, checkpoint });
+            for (const variant of word.cachedVariants || []) {
+                if (variantsByFingerprint.size >= required) break;
+                const fingerprint = String(variant.question_fingerprint || '');
+                if (!fingerprint || candidateIssues(variant).length || variantsByFingerprint.has(fingerprint)) continue;
+                if ([...variantsByFingerprint.values()].some(existing =>
+                    normalizeText(existing.question_text) === normalizeText(variant.question_text)
+                    || distractorOverlap(candidateDistractors(existing), candidateDistractors(variant)) > 1)) continue;
+                variantsByFingerprint.set(fingerprint, variant);
+            }
+            // Preserve imported approved siblings in the same durable checkpoint.
+            if (word.cachedVariants?.length && variantsByFingerprint.size) {
+                const rows = [...variantsByFingerprint.values()].map((row,index)=>rowCheckpoint(row,index+1,word.word));
+                const partials = checkpoint.variants
+                    .filter(variant => !checkpointRow(variant)?.question_fingerprint)
+                    .map((variant, index) => ({ ...variant, slot: rows.length + index + 1 }));
+                checkpoint.variants = [...rows, ...partials];
+                await saveCheckpoint({job,word,checkpoint});
+            }
             for (let attempt = 1; attempt <= attemptsLimit && variantsByFingerprint.size < required; attempt += 1) {
                 const candidates = await generateCandidates({
                     job,
