@@ -2838,6 +2838,19 @@ function createRebuildCoverageAdapter(client, options = {}) {
     });
 }
 
+test('cache builder replaces a displayed entry context before spending on translation or audit', async () => {
+    const contexts=[];
+    const rows=await buildCacheQuestionRowsForWord({
+        user:{id:'user-1'},word:{id:'fresh',user_id:'user-1',word:'lucky',meaning_zh:'幸运的',context_en:'She felt lucky before the game.',excludedQuestionStems:['She felt _____ before the game.']},
+        level:MIDDLE, requiredCount:1,
+        generateContext:async()=> 'They were lucky to find the lost book.',
+        generateDistractors:async request=>{contexts.push(request.context);return null;},
+    });
+    assert.deepEqual(rows,[]);
+    assert.ok(contexts.length>0);
+    assert.ok(contexts.every(context=>!context.includes('before the game')));
+});
+
 test('new cache generation fails closed when semantic audit is unavailable', async () => {
     const word = rebuildCoverageWord('semantic-audit', 'lucky');
     const client = createFakeSupabase({

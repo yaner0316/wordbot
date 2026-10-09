@@ -119,6 +119,11 @@ function createQuestionGenerationService({
                 error.code = 'WORD_NOT_FOUND';
                 throw error;
             }
+            const excludedStems = new Set((word.excludedQuestionStems || []).map(normalizeText));
+            const candidateIssues = candidate => [
+                ...validationIssues(validateCandidate, candidate, word),
+                ...(excludedStems.has(normalizeText(candidate?.question_text || candidate?.questionText)) ? ['context_already_displayed'] : []),
+            ];
 
             const checkpoint = normalizeGenerationCheckpoint(await loadCheckpoint({ job, word }), {
                 wordVersion: word.word_version ?? job?.word_version,
@@ -133,7 +138,7 @@ function createQuestionGenerationService({
                 const variant = checkpointRow(savedVariant);
                 const fingerprint = String(variant?.question_fingerprint || '').trim();
                 if (!fingerprint) return savedVariant;
-                const issues = validationIssues(validateCandidate, variant, word);
+                const issues = candidateIssues(variant);
                 if (issues.length) {
                     restoredInvalidRow = true;
                     for (const issue of issues) rejectionReasons[issue] = (rejectionReasons[issue] || 0) + 1;
@@ -167,7 +172,7 @@ function createQuestionGenerationService({
                     },
                 });
                 for (const candidate of candidates || []) {
-                    const issues = validationIssues(validateCandidate, candidate, word);
+                    const issues = candidateIssues(candidate);
                     if (issues.length) {
                         for (const issue of issues) rejectionReasons[issue] = (rejectionReasons[issue] || 0) + 1;
                         continue;

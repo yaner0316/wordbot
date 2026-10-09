@@ -325,7 +325,7 @@ async function getChallengeCandidatesWithDataSource({ username, dataSource, now 
     return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString() };
 }
 
-function chooseChallengeQueue({ selection, candidates, wordRows, limit }) {
+function chooseChallengeQueue({ selection, candidates, wordRows, limit, readyRecordIds = new Set(), now = Date.now() }) {
     if (!selection || !['random', 'custom'].includes(selection.mode) || !Array.isArray(selection.meaningIds)
         || selection.meaningIds.length > limit || selection.meaningIds.some(id => typeof id !== 'string' || !id.trim())
         || new Set(selection.meaningIds).size !== selection.meaningIds.length
@@ -340,6 +340,14 @@ function chooseChallengeQueue({ selection, candidates, wordRows, limit }) {
         const j = crypto.randomInt(i + 1);
         [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
     }
+    const day = time => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(time));
+    const yesterday = day(now - 24 * 60 * 60 * 1000);
+    const priorities = new Map(candidates.map(candidate => [candidate.recordId,
+        candidate.lastDisplayedAt && day(candidate.lastDisplayedAt) === yesterday ? 0 : candidate.lastDisplayedAt ? 1 : 2]));
+    // Preserve explicit choices. Random review priority comes first; within each
+    // priority choose usable cached stems before unrelated jobs still building.
+    remaining.sort((left,right) => (selection.mode === 'random' ? priorities.get(left)-priorities.get(right) : 0)
+        || Number(readyRecordIds.has(right))-Number(readyRecordIds.has(left)));
     return [...selected, ...remaining].slice(0, limit);
 }
 
@@ -390,8 +398,17 @@ async function generateQuizWithDataSource({
 
     const challengeCandidates = selection && mode === 'real'
         ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now }) : null;
+    const recentQuestionTextsByWord = mergeQuestionTextHistory(
+        buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
+        buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
+    );
+    const readyRecordIds = challengeCandidates ? new Set(selectCachedQuestionsForWordQueue({
+        cacheRows: questionCacheRows, queue: challengeCandidates.filter(w=>w.eligible).map(w=>w.recordId),
+        userId: canonicalUsername, level: effectiveLevel, roundType, requireReadyPair:true,
+        limit: challengeCandidates.length, recentQuestionTextsByWord, now,
+    }).map(question=>question.record_id)) : new Set();
     const queue = challengeCandidates ? chooseChallengeQueue({ selection, wordRows, limit,
-        candidates: challengeCandidates
+        candidates: challengeCandidates, readyRecordIds, now
     }) : buildQuizWordQueue({
         wordRecords,
         cacheRows: questionCacheRows,
@@ -418,10 +435,7 @@ async function generateQuizWithDataSource({
         roundType,
         requireReadyPair: true,
         limit,
-        recentQuestionTextsByWord: mergeQuestionTextHistory(
-            buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
-            buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
-        ),
+        recentQuestionTextsByWord,
         now,
     }).map((question) => ({
         ...question,

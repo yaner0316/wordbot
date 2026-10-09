@@ -28,6 +28,20 @@ function generate(f, meaningIds = [], mode = 'custom') {
   return generateQuizWithDataSource({ username: 'child', level: '中学', mode: 'real', now: NOW,
     dataSource: f.dataSource, selection: { mode, meaningIds }, createId: () => 'custom-test' });
 }
+test('random challenge prioritizes yesterday displayed words after cooldown', async () => {
+  const f = fixture(25);
+  for (const w of f.words.slice(15)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-20*HOUR).toISOString(),counts_for_cooldown:true});
+  const quiz = await generate(f, [], 'random');
+  assert.deepEqual(new Set(quiz.questions.map(q=>q.meaningId)), new Set(f.words.slice(15).map(w=>w.id)));
+});
+test('random and custom fill use ready questions before waiting on unrelated missing cache', async () => {
+  for (const mode of ['random','custom']) {
+    const f=fixture(20,Array.from({length:10},(_,i)=>`word-${i}`));
+    const quiz=await generate(f,mode==='custom'?['word-19']:[],mode);
+    assert.equal(quiz.questions.length,10);
+    assert.equal(quiz.pending,undefined);
+  }
+});
 for (const count of [0, 5, 10]) test(`preserves ${count} chosen meanings, fills to ten without duplicates`, async () => {
   const f = fixture();
   const selected = Array.from({length: count}, (_, i) => `word-${i + 2}`);

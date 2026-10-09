@@ -259,7 +259,7 @@ function buildChallengeCandidates({ wordRecords = [], assessmentRecords = [], di
             const saved = fieldValue(record.fields?.Status).trim().toLowerCase();
             const status = ['recognized', 'consolidating'].includes(saved) ? saved : 'pending';
             return { recordId: record.record_id, word: fieldValue(record.fields?.Word),
-                meaning: fieldValue(record.fields?.CN_Meaning), status,
+                meaning: fieldValue(record.fields?.CN_Meaning), status, lastDisplayedAt: lastDisplay,
                 eligible: Boolean(enteredAt) && now >= endsAt,
                 cooldownEndsAt: endsAt > now ? new Date(endsAt).toISOString() : null };
         });

@@ -23,6 +23,7 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
         words: clone(words),
         users: clone(users),
         question_cache: clone(cache),
+        quiz_display_events: [],
     };
     const calls = [];
     let sequence = 100;
@@ -422,6 +423,19 @@ test('word loader requires both job user_id and word_id', async () => {
             { type: 'eq', column: 'user_id', value: 'user-2' },
         ],
     ]);
+});
+
+test('word loader excludes only the same user and meaning active display history', async () => {
+    const fake=createFakeSupabase({words:[{id:'w',user_id:'u',word:'bank'}]});
+    const future=new Date(Date.now()+86400000).toISOString();
+    fake.state.quiz_display_events=[
+        {user_id:'u',meaning_id:'w',stem:'shown',history_expires_at:future},
+        {user_id:'other',meaning_id:'w',stem:'private',history_expires_at:future},
+        {user_id:'u',meaning_id:'other',stem:'other sense',history_expires_at:future},
+        {user_id:'u',meaning_id:'w',stem:'expired',history_expires_at:'2020-01-01'},
+    ];
+    const word=await createSupabaseWordLoader({client:fake.client})('w','u');
+    assert.deepEqual(word.excludedQuestionStems,['shown']);
 });
 
 test('word loader inherits a missing word level from the user learning level', async () => {

@@ -1,6 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('replenishment cannot republish a checkpoint stem already shown to the child', async () => {
+    const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+    const old={question_text:'She visited the _____ yesterday.',options:['bank','desk','road','hill'],answer:'A'};
+    const fresh={question_text:'The _____ approved our family loan.',options:['bank','tree','coin','shore'],answer:'A'};
+    const word={id:'w',word:'bank',level:'中学',meaning_en:'finance',excludedQuestionStems:[old.question_text]};
+    let requests=0;
+    const service=createQuestionGenerationService({
+        loadWord:async()=>word,
+        loadCheckpoint:async()=>({word:'bank',level:'中学',meaning:'["finance",""]',variants:[old,fresh].map(row=>({...row,question_fingerprint:fingerprintQuestion(row,'w')}))}),
+        validateCandidate:()=>[],
+        generateCandidates:async()=>{requests++;return [old,{question_text:'A new _____ opened near school.',options:['bank','tea','sky','cup'],answer:'A'}];},
+        publishReadyVariants:async()=>{},
+    });
+    const result=await service.process({word_id:'w',user_id:'u'});
+    assert.equal(requests,1);
+    assert.ok(result.variants.every(row=>row.question_text!==old.question_text));
+});
+
 test('service publishes two distinct quality-approved variants for one meaning', async () => {
     const { createQuestionGenerationService } = require('../question-generation-service');
     const published = [];

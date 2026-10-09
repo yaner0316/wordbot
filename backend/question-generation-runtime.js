@@ -178,8 +178,13 @@ function createSupabaseWordLoader({ client } = {}) {
             .eq('id', exactUserId)
             .maybeSingle();
         throwSupabaseError(userError, 'questionGeneration.loadUserLevel');
+        const {data: displays, error: displayError} = await supabase.from('quiz_display_events')
+            .select('stem').eq('user_id', exactUserId).eq('meaning_id', exactWordId)
+            .gt('history_expires_at', new Date().toISOString());
+        throwSupabaseError(displayError, 'questionGeneration.loadDisplayHistory');
         return {
             ...data,
+            excludedQuestionStems: (displays || []).map(row=>row.stem),
             // Formal question stems and quality gates follow the child's
             // current learning level, never the word's historical level.
             level: normalizeLevel(user?.learning_level),
