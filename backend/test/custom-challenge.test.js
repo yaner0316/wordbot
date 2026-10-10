@@ -123,3 +123,11 @@ test('cooling words do not shrink a library of twelve to a short quiz', async ()
   assert.equal(quiz.availableCount, 5);
   assert.deepEqual(quiz.questions, []);
 });
+
+test('pending challenge names only missing words with safe generation status and retains exact ten choices',async()=>{
+ const f=fixture(12,['word-0']);f.dataSource.ensureQuizQuestionSupply=async(u,ids)=>({words:ids.map(id=>({meaningId:id,state:'retry_wait',retryAt:'2026-10-05T05:00:00Z',last_error_detail:'private-provider-details'}))});
+ const ids=f.words.slice(0,10).map(w=>w.id);const result=await generate(f,ids);
+ assert.equal(result.readyCount,9);assert.deepEqual(result.meaningIds,ids);
+ assert.deepEqual(result.missingWords,[{meaningId:'word-0',word:'target0',state:'retry_wait',retryAt:'2026-10-05T05:00:00Z'}]);
+ assert.ok(!JSON.stringify(result).includes('private-provider-details'));assert.ok(!JSON.stringify(result.missingWords).includes('释义'));
+});

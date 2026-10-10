@@ -958,3 +958,46 @@ test('generation claim spreads a batch across users while preserving due and ver
         assert.equal((await db.query("select * from public.claim_question_generation_jobs('worker-b', 10, 60000)")).rows.length, 0);
     } finally { await db.close(); }
 });
+
+test('challenge demand advances long backoff once, preserves checkpoints, and wins within-user priority',async()=>{
+ const db=await createDatabase();try{
+  await db.query("select public.enqueue_question_generation_job_if_needed($1,$2,'cache_backfill')",[USER_ID,WORD_ID]);
+  await db.query("update public.question_generation_jobs set status='retry_wait',attempt_count=22,next_attempt_at=now()+interval '1 hour',generation_checkpoint='{\"variants\":[{\"slot\":1,\"context\":\"saved context\"}]}'::jsonb where word_id=$1",[WORD_ID]);
+  const second='33333333-3333-4333-8333-333333333333';await db.query("insert into public.words(id,user_id,word,meaning_en,level)values($1,$2,'pear','fruit','middle')",[second,USER_ID]);
+  await db.query("update public.question_generation_jobs set next_attempt_at=now()-interval '1 day' where word_id=$1",[second]);
+  const result=await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]]);
+  assert.equal(result.rows[0].attempt_count,22);assert.equal(result.rows[0].generation_checkpoint.variants[0].context,'saved context');assert.ok(new Date(result.rows[0].next_attempt_at).getTime()<=Date.now());
+  await db.query("update public.question_generation_jobs set next_attempt_at=now()+interval '30 minutes' where word_id=$1",[WORD_ID]);
+  const repeated=await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]]);
+  assert.ok(new Date(repeated.rows[0].next_attempt_at).getTime()>Date.now()+20*60000);
+  await db.query("update public.question_generation_jobs set next_attempt_at=now() where word_id=$1",[WORD_ID]);
+  const claimed=await db.query("select * from public.claim_question_generation_jobs('urgent-worker',1,60000)");assert.equal(claimed.rows[0].word_id,WORD_ID);
+  const token=claimed.rows[0].lease_token;await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]]);
+  const leased=await db.query('select * from public.question_generation_jobs where word_id=$1',[WORD_ID]);assert.equal(leased.rows[0].lease_token,token);assert.equal(leased.rows[0].status,'generating');
+ }finally{await db.close();}
+});
+test('challenge demand rejects foreign or oversized requests and keeps RPC service-role only',async()=>{
+ const db=await createDatabase();try{
+  await assert.rejects(db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,['99999999-9999-4999-8999-999999999999']]),/CHALLENGE_SELECTION_INVALID/);
+  await assert.rejects(db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,Array(11).fill(WORD_ID)]),/CHALLENGE_SELECTION_INVALID/);
+  for(const role of ['anon','authenticated']){const r=await db.query("select has_function_privilege($1,'public.request_challenge_question_supply(uuid,uuid[])','EXECUTE') as allowed",[role]);assert.equal(r.rows[0].allowed,false);}
+  await db.query("update public.words set mastery_status='mastered' where id=$1",[WORD_ID]);const r=await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]]);assert.equal(r.rows.length,0);
+ }finally{await db.close();}
+});
+
+test('challenge demand preserves the edit fence and cross-user turn after urgent work',async()=>{
+ const db=await createDatabase();try{
+  await fenceWord(db);
+  assert.equal((await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]])).rows.length,0);
+  const fenced=(await db.query('select * from public.question_generation_jobs where word_id=$1',[WORD_ID])).rows[0];
+  assert.equal(new Date(fenced.next_attempt_at).getUTCFullYear(),9999);
+  await db.query('select * from public.finalize_word_question_generation_edit($1,$2)',[USER_ID,WORD_ID]);
+  const otherUser='88888888-8888-4888-8888-888888888888';
+  await db.query("insert into public.users(id,username)values($1,'other')",[otherUser]);
+  await db.query("insert into public.words(id,user_id,word,meaning_en,level)values($1,$2,'pear','fruit','middle')",[formalWordId(91),otherUser]);
+  await db.query('select * from public.request_challenge_question_supply($1,$2::uuid[])',[USER_ID,[WORD_ID]]);
+  const first=(await db.query("select * from public.claim_question_generation_jobs('one',1,60000)")).rows[0];
+  const second=(await db.query("select * from public.claim_question_generation_jobs('two',1,60000)")).rows[0];
+  assert.equal(new Set([first.user_id,second.user_id]).size,2);
+ }finally{await db.close();}
+});

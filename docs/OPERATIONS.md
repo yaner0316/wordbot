@@ -81,6 +81,12 @@ Before release, record branch/base and intended SHA, focused and full test count
 
 Rollback code through the normal repository/deploy path. Database rollback is a separate reviewed operation: prefer forward-compatible corrective migrations and preserve evidence. Do not claim a release complete until the live SHA and affected production flow match `PROJECT.md`'s definition of done.
 
+
+## Selected challenge demand (2026-10-10)
+
+Apply `20261010_challenge_demand_priority.sql` through the existing question-generation migration runner before deploying its API adapter. An otherwise current schema applies only this migration; the verifier checks columns, RPC ACL/search path, bounded demand and claim priority. `request_challenge_question_supply(uuid, uuid[])` is service-role-only and accepts up to ten unique owned IDs. It advances pending/retry backoff once per five minutes, prioritizes within that user for two minutes, and preserves leases/checkpoints/attempt counts/edit fences. Other users retain fair claim rotation. No answer history or mastery rewrite is required. The UI stops automatic waiting after two minutes; background retries continue under their normal quality gates.
+
 ### Account defaults and historical cache references
 
 New account registration persists the existing default learning level so coverage reconciliation and display replenishment have a canonical level. It does not start the level-change cooldown or overwrite existing account settings. Learning-level changes retire cached rows instead of deleting them because formal challenges retain foreign-key references to the original cache; historical question snapshots remain readable. No schema migration or existing-user backfill is required for this code change.
+

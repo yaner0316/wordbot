@@ -467,9 +467,16 @@ async function generateQuizWithDataSource({
                 const selectedIds = queue.map(id => String(wordRowsBySourceId.get(id)?.id));
                 const readyIds = new Set(questions.map(q => String(q.meaningId || '')));
                 const missingIds = selectedIds.filter(id => !readyIds.has(id));
-                await dataSource.ensureQuizQuestionSupply?.(username, missingIds);
+                const supply = await dataSource.ensureQuizQuestionSupply?.(username, missingIds);
+                const states = new Map((supply?.words || []).map(word => [word.meaningId, word]));
+                const missingWords = missingIds.map(meaningId => {
+                    const status = states.get(meaningId);
+                    return { meaningId, word: wordRows.find(word => String(word.id) === meaningId)?.word || '',
+                        state: ['queued', 'generating', 'retry_wait', 'unavailable'].includes(status?.state) ? status.state : 'queued',
+                        retryAt: typeof status?.retryAt === 'string' && Number.isFinite(Date.parse(status.retryAt)) ? status.retryAt : null };
+                });
                 return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds: selectedIds,
-                    requiredCount: limit, readyCount: questions.length, questions: [], source: 'question_cache' };
+                    requiredCount: limit, readyCount: questions.length, missingWords, questions: [], source: 'question_cache' };
             }
             const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
             return {

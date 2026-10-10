@@ -336,7 +336,7 @@ function loadSupabaseDataSource() {
             await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);
             if (quiz.nextSupplyMeaningIds?.length && typeof supabaseData.ensureQuizQuestionSupply === 'function') {
-                try { await supabaseData.ensureQuizQuestionSupply(user, quiz.nextSupplyMeaningIds); }
+                try { await supabaseData.ensureQuizQuestionSupply(user, quiz.nextSupplyMeaningIds, { urgent: false }); }
                 catch { console.warn('[custom-challenge] advance supply enqueue will retry on the next preparation request'); }
             }
             delete quiz.nextSupplyMeaningIds;

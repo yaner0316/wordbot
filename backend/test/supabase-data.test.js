@@ -4516,3 +4516,14 @@ test('option meanings already translated by the gate are not paid for a second t
     // Only the still-unknown word costs a provider call.
     assert.deepEqual(requested, [['pear']]);
 });
+
+test('challenge demand adapter uses canonical user and exposes only safe generation states',async()=>{
+ const client=createFakeSupabase({users:[{id:'user-1',username:'child',username_key:'child'}]});
+ const calls=[];client.rpc=async(name,args)=>{calls.push({name,args});return {data:[
+  {word_id:'one',status:'retry_wait',next_attempt_at:'2026-10-10T13:00:00Z',lease_token:'private',last_error_detail:'provider-private'},
+  {word_id:'two',status:'validating',generation_checkpoint:{secret:'internal'}}
+ ],error:null};};
+ const result=await createSupabaseDataAdapter(client).ensureQuizQuestionSupply('CHILD',['one','two','three']);
+ assert.deepEqual(calls,[{name:'request_challenge_question_supply',args:{p_user_id:'user-1',p_word_ids:['one','two','three']}}]);
+ assert.deepEqual(result,{words:[{meaningId:'one',state:'retry_wait',retryAt:'2026-10-10T13:00:00Z'},{meaningId:'two',state:'generating',retryAt:null},{meaningId:'three',state:'unavailable',retryAt:null}]});
+});
