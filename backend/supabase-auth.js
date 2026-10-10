@@ -1,6 +1,7 @@
 'use strict';
 
 const { createAuthService, usernameKey } = require('./auth-service');
+const { DEFAULT_LEARNING_LEVEL } = require('./learning-level');
 
 const USER_COLUMNS = [
     'id',
@@ -103,7 +104,10 @@ function createSupabaseAccountRepository(client) {
         },
 
         async addAccountRecord(fields) {
-            const { error } = await client.from('users').insert(toUserWrite(fields));
+            const { error } = await client.from('users').insert({
+                ...toUserWrite(fields),
+                learning_level: DEFAULT_LEARNING_LEVEL,
+            });
             if (error) throw authDatabaseError('create Supabase user failed', error);
         },
 

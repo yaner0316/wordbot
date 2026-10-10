@@ -1314,7 +1314,7 @@ test('rebuildQuestionCacheForUser writes ready elementary cache rows to Supabase
     ).length, 20);
 });
 
-test('updateUserLearningSettings updates Supabase user level and removes stale cache', async () => {
+test('updateUserLearningSettings updates Supabase user level and retires stale cache while preserving history references', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
     const HIGH = String.fromCharCode(0x9ad8, 0x4e2d);
     const client = createFakeSupabase({
@@ -1345,7 +1345,9 @@ test('updateUserLearningSettings updates Supabase user level and removes stale c
     assert.equal(result.settings.learningLevel, ELEMENTARY);
     assert.equal(client.db.users[0].learning_level, ELEMENTARY);
     assert.ok(client.db.users[0].level_changed_at);
-    assert.equal(client.db.question_cache.length, 0);
+    assert.equal(client.db.question_cache.length, 1);
+    assert.equal(client.db.question_cache[0].id, 'cache-1');
+    assert.equal(client.db.question_cache[0].cache_state, 'retired');
 });
 
 test('updateUserLearningSettings repairs missing migrated user level despite cooldown timestamp', async () => {
@@ -1378,7 +1380,9 @@ test('updateUserLearningSettings repairs missing migrated user level despite coo
     assert.equal(result.settings.learningLevel, HIGH);
     assert.equal(client.db.users[0].learning_level, HIGH);
     assert.ok(client.db.users[0].level_changed_at);
-    assert.equal(client.db.question_cache.length, 0);
+    assert.equal(client.db.question_cache.length, 1);
+    assert.equal(client.db.question_cache[0].id, 'cache-1');
+    assert.equal(client.db.question_cache[0].cache_state, 'retired');
 });
 test('updateUserLearningSettings repairs mistaken elementary level when migrated words are unassigned', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
@@ -1419,7 +1423,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when migrated
     assert.equal(result.success, true);
     assert.equal(result.settings.learningLevel, HIGH);
     assert.equal(client.db.users[0].learning_level, HIGH);
-    assert.equal(client.db.question_cache.length, 0);
+    assert.equal(client.db.question_cache.length, 1);
+    assert.equal(client.db.question_cache[0].id, 'cache-1');
+    assert.equal(client.db.question_cache[0].cache_state, 'retired');
 });
 test('updateUserLearningSettings repairs mistaken elementary level when migrated words already target high', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
@@ -1460,7 +1466,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when migrated
     assert.equal(result.success, true);
     assert.equal(result.settings.learningLevel, HIGH);
     assert.equal(client.db.users[0].learning_level, HIGH);
-    assert.equal(client.db.question_cache.length, 0);
+    assert.equal(client.db.question_cache.length, 1);
+    assert.equal(client.db.question_cache[0].id, 'cache-1');
+    assert.equal(client.db.question_cache[0].cache_state, 'retired');
 });
 test('updateUserLearningSettings repairs mistaken elementary level when high words dominate', async () => {
     const ELEMENTARY = String.fromCharCode(0x5c0f, 0x5b66);
@@ -1512,7 +1520,9 @@ test('updateUserLearningSettings repairs mistaken elementary level when high wor
     assert.equal(result.success, true);
     assert.equal(result.settings.learningLevel, HIGH);
     assert.equal(client.db.users[0].learning_level, HIGH);
-    assert.equal(client.db.question_cache.length, 0);
+    assert.equal(client.db.question_cache.length, 1);
+    assert.equal(client.db.question_cache[0].id, 'cache-1');
+    assert.equal(client.db.question_cache[0].cache_state, 'retired');
 });
 test('quiz session persistence saves and restores unexpired Supabase sessions', async () => {
     const client = seededClient();

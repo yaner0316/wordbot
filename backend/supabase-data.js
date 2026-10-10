@@ -1041,7 +1041,10 @@ async function updateUserLearningSettingsWithClient(client, username, requestedL
         .single();
     ensureNoError(error, 'updateUserLearningSettings');
     if (changed) {
-        await deleteQuestionCacheRowsWithClient(client, data.username, null);
+        // Historical challenges retain foreign-key references to these rows.
+        const { error: retirementError } = await client.from('question_cache')
+            .update({ cache_state: 'retired' }).eq('user_id', user.id);
+        ensureNoError(retirementError, 'updateUserLearningSettings.retireCache');
     }
     return {
         success: true,
