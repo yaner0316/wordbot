@@ -80,3 +80,7 @@ Publish the frontend branch before backend CI resolves its pinned web-contract r
 Before release, record branch/base and intended SHA, focused and full test counts, migration apply state, CI/deploy result, live backend SHA, and the affected real-user persistence/readback result.
 
 Rollback code through the normal repository/deploy path. Database rollback is a separate reviewed operation: prefer forward-compatible corrective migrations and preserve evidence. Do not claim a release complete until the live SHA and affected production flow match `PROJECT.md`'s definition of done.
+
+### Account defaults and historical cache references
+
+New account registration persists the existing default learning level so coverage reconciliation and display replenishment have a canonical level. It does not start the level-change cooldown or overwrite existing account settings. Learning-level changes retire cached rows instead of deleting them because formal challenges retain foreign-key references to the original cache; historical question snapshots remain readable. No schema migration or existing-user backfill is required for this code change.

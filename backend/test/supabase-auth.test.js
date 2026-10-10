@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const { DEFAULT_LEARNING_LEVEL } = require('../learning-level');
 const { hashPassword } = require('../auth-service');
 const { createSupabaseAuthAdapter } = require('../supabase-auth');
 
@@ -111,6 +112,8 @@ test('register writes a Supabase user and supports case-insensitive child login'
     assert.equal(db.rows.length, 1);
     assert.equal(db.rows[0].username, 'Draggy');
     assert.equal(db.rows[0].username_key, 'draggy');
+    assert.equal(db.rows[0].learning_level, DEFAULT_LEARNING_LEVEL, 'new accounts must be eligible for automatic question coverage');
+    assert.equal(db.rows[0].level_changed_at ?? null, null, 'initial default must not start a level-change cooldown');
     assert.ok(db.rows[0].password_hash);
     assert.ok(db.rows[0].password_salt);
     assert.equal(Object.values(db.rows[0]).includes('secret1'), false);
@@ -183,6 +186,7 @@ test('register updates an existing credential-free user while preserving stored 
         id: 'user-draggy',
         username: 'Draggy',
         username_key: 'draggy',
+        learning_level: '高中',
         password_hash: null,
         password_salt: null,
     }] });
@@ -193,6 +197,7 @@ test('register updates an existing credential-free user while preserving stored 
     assert.deepEqual(await auth.register({ username: 'DRAGGY', password: 'secret1' }), { user: 'Draggy' });
     assert.equal(db.rows.length, 1);
     assert.equal(db.rows[0].username, 'Draggy');
+    assert.equal(db.rows[0].learning_level, '高中');
     assert.ok(db.rows[0].password_hash);
     assert.match(db.rows[0].auth_created_at, /^\d{4}-\d{2}-\d{2}T/);
 });
