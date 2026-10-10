@@ -80,3 +80,7 @@ Publish the frontend branch before backend CI resolves its pinned web-contract r
 Before release, record branch/base and intended SHA, focused and full test counts, migration apply state, CI/deploy result, live backend SHA, and the affected real-user persistence/readback result.
 
 Rollback code through the normal repository/deploy path. Database rollback is a separate reviewed operation: prefer forward-compatible corrective migrations and preserve evidence. Do not claim a release complete until the live SHA and affected production flow match `PROJECT.md`'s definition of done.
+
+## Selected challenge demand (2026-10-10)
+
+Apply `20261010_challenge_demand_priority.sql` through the existing question-generation migration runner before deploying its API adapter. An otherwise current schema applies only this migration; the verifier checks columns, RPC ACL/search path, bounded demand and claim priority. `request_challenge_question_supply(uuid, uuid[])` is service-role-only and accepts up to ten unique owned IDs. It advances pending/retry backoff once per five minutes, prioritizes within that user for two minutes, and preserves leases/checkpoints/attempt counts/edit fences. Other users retain fair claim rotation. No answer history or mastery rewrite is required. The UI stops automatic waiting after two minutes; background retries continue under their normal quality gates.

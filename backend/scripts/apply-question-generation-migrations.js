@@ -38,6 +38,7 @@ with claim_proc as (
   group by quality.oid, proc.prosecdef, proc.proconfig, proc.prosrc
 ), rpc_specs(name, signature) as (
   values
+    ('request_challenge_question_supply', 'public.request_challenge_question_supply(uuid,uuid[])'),
     ('claim_question_generation_jobs', 'public.claim_question_generation_jobs(text,integer,bigint)'),
     ('renew_question_generation_job', 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)'),
     ('publish_question_generation_variants', 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)'),
@@ -75,6 +76,18 @@ with claim_proc as (
   group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
+  (select signature from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_signature,
+  (select security_definer from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_security_definer,
+  (select public_execute from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_public_execute,
+  (select anon_execute from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_service_role_execute,
+  (select safe_search_path from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_safe_search_path,
+  (select count(*) = 2 from pg_catalog.pg_attribute where attrelid = to_regclass('public.question_generation_jobs')
+    and attname in ('demand_requested_at', 'demand_priority_until') and atttypid = 'timestamptz'::regtype and not attisdropped) as challenge_demand_columns,
+  coalesce((select prosrc like '%job.demand_priority_until > v_now%' from pg_catalog.pg_proc where oid = (select oid from claim_proc)), false) as challenge_demand_claim_priority,
+  coalesce((select prosrc like '%interval ''5 minutes''%' and prosrc like '%interval ''2 minutes''%' and prosrc like '%9999-01-01%'
+    from pg_catalog.pg_proc where oid = to_regprocedure('public.request_challenge_question_supply(uuid,uuid[])')), false) as challenge_demand_bounded_contract,
   to_regclass('public.question_generation_jobs') is not null as jobs_table,
   to_regclass('public.quiz_challenges') is not null as formal_challenges_table,
   to_regclass('public.quiz_challenge_questions') is not null as formal_challenge_questions_table,
@@ -426,9 +439,11 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20260910_question_generation_checkpoints.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261005_custom_challenges.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261009_display_replenishment.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261010_challenge_demand_priority.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
+  'request_challenge_question_supply',
   'claim_question_generation_jobs',
   'renew_question_generation_job',
   'publish_question_generation_variants',
@@ -507,6 +522,11 @@ const EXPECTED_STATE = Object.freeze({
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
   display_replenishment_trigger: true,
+  challenge_demand_columns: true,
+  challenge_demand_claim_priority: true,
+  challenge_demand_bounded_contract: true,
+  rpc_request_challenge_question_supply_safe_search_path: true,
+
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   ...Object.fromEntries(RPC_EXPECTATION_KEYS.map(key => [
     key,
@@ -584,7 +604,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
+    const paths = missing.every(key => key.startsWith('challenge_demand_') || key.startsWith('rpc_request_challenge_question_supply_'))
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261010_challenge_demand_priority.sql')
+      : missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20260908_question_generation_fair_claim.sql')
       : missing.length === 1 && missing[0] === 'rpc_custom_challenge_count_contract'
         ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261005_custom_challenges.sql')

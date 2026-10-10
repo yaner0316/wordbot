@@ -15,6 +15,7 @@ const {
 } = require('../scripts/apply-question-generation-migrations');
 
 const RPC_SIGNATURES = Object.freeze({
+  request_challenge_question_supply: 'public.request_challenge_question_supply(uuid,uuid[])',
   claim_question_generation_jobs: 'public.claim_question_generation_jobs(text,integer,bigint)',
   renew_question_generation_job: 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)',
   publish_question_generation_variants: 'public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)',
@@ -85,6 +86,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20260910_question_generation_checkpoints.sql',
       '20261005_custom_challenges.sql',
       '20261009_display_replenishment.sql',
+      '20261010_challenge_demand_priority.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -229,6 +231,11 @@ const COMPLETE_STATE = Object.freeze({
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
   display_replenishment_trigger: true,
+  challenge_demand_columns: true,
+  challenge_demand_claim_priority: true,
+  challenge_demand_bounded_contract: true,
+  rpc_request_challenge_question_supply_safe_search_path: true,
+
   rpc_replace_formal_quiz_question_ai_audit_contract: true,
   backfill_hardening_revision: true,
   rpc_old_claim_signature_absent: true,
@@ -875,7 +882,9 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(masteryReconciliationSql, /is distinct from/i);
   assert.match(enqueueAclSql, /revoke all on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*service_role/i);
   assert.match(enqueueAclSql, /grant execute on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*to service_role/i);
-  const rpcSql = `${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}\n${checkpointSql}`;
+  const demandSql = fs.readFileSync(MIGRATION_PATHS.at(-1), 'utf8');
+  assert.match(demandSql, /^\s*begin;/i); assert.match(demandSql, /commit;\s*$/i);
+  const rpcSql = `${demandSql}\n${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}\n${checkpointSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');
@@ -1115,4 +1124,11 @@ test('a database missing only custom challenge support applies only the new migr
   });
   assert.equal(result.status, 'applied');
   assert.deepEqual(readPaths, ['20261005_custom_challenges.sql']);
+});
+
+test('existing deployment missing challenge demand applies only the new migration',async()=>{
+ const missing={...COMPLETE_STATE,challenge_demand_columns:false,challenge_demand_claim_priority:false,challenge_demand_bounded_contract:false,rpc_request_challenge_question_supply_signature:false};
+ const harness=createDatabaseHarness({states:[missing,COMPLETE_STATE]});const readPaths=[];
+ await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- challenge demand';}});
+ assert.deepEqual(readPaths,['20261010_challenge_demand_priority.sql']);
 });

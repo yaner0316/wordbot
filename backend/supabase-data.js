@@ -1639,6 +1639,22 @@ async function enqueueQuestionGenerationJobWithConfirmation(client, { userId, wo
     }
 }
 
+async function requestChallengeQuestionSupplyWithClient(client, username, meaningIds) {
+    const user = await requireUserByUsername(client, username);
+    const { data, error } = await client.rpc('request_challenge_question_supply', {
+        p_user_id: user.id, p_word_ids: meaningIds,
+    });
+    ensureNoError(error, 'challengeQuestionSupply');
+    const jobs = new Map((data || []).map(job => [String(job.word_id), job]));
+    return { words: meaningIds.map(meaningId => {
+        const job = jobs.get(meaningId);
+        const state = job?.status === 'pending' ? 'queued'
+            : ['generating', 'validating', 'repairing'].includes(job?.status) ? 'generating'
+            : job?.status === 'retry_wait' ? 'retry_wait' : 'unavailable';
+        return { meaningId, state, retryAt: state === 'retry_wait' ? job.next_attempt_at : null };
+    }) };
+}
+
 async function requestQuestionCacheRebuildForUserWithClient(client, username, meaningIds = null) {
     const user = await requireUserByUsername(client, username);
     const words = await getWordsForUserWithClient(client, username);
@@ -3425,7 +3441,9 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
             updateUserLearningSettingsWithClient(client, username, requestedLevel),
         getWordsForUser: (username, level) => getWordsForUserWithClient(client, username, level),
         getQuizWordsForUser: (username, level) => getQuizWordsForUserWithClient(client, username, level),
-        ensureQuizQuestionSupply: (username, ids) => requestQuestionCacheRebuildForUserWithClient(client, username, ids),
+        ensureQuizQuestionSupply: (username, ids, { urgent = true } = {}) => urgent
+            ? requestChallengeQuestionSupplyWithClient(client, username, ids)
+            : requestQuestionCacheRebuildForUserWithClient(client, username, ids),
         getWord: (username, word) => getWordWithClient(client, username, word),
         getWordByRecordId: (recordId, username) => getWordByRecordIdWithClient(client, recordId, username),
         listUserWords: (username, options) => listUserWordsWithClient(client, username, options),
