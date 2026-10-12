@@ -195,7 +195,7 @@ function createFakeSupabase(seed = {}, options = {}) {
             if (filter.type === 'eq' && filter.column === 'session_state') return JSON.stringify(row.session_state) === filter.value;
             if (filter.type === 'eq') return row[filter.column] === filter.value;
             if (filter.type === 'in') return filter.values.includes(row[filter.column]);
-            if (filter.type === 'is') return row[filter.column] === filter.value;
+            if (filter.type === 'is') return (row[filter.column] ?? null) === filter.value;
             if (filter.type === 'gt') return row[filter.column] > filter.value;
             if (filter.type === 'lt') return row[filter.column] < filter.value;
             if (filter.type === 'lte') return row[filter.column] <= filter.value;
@@ -432,6 +432,23 @@ function createFakeSupabase(seed = {}, options = {}) {
             if (options.failRpcNameOnce === name) {
                 options.failRpcNameOnce = null;
                 return { data: null, error: new Error(`forced ${name} failure`) };
+            }
+            if (name === 'archive_words') {
+                const ids = args.p_record_ids;
+                const rows = ids.map(id => db.words.find(row => row.user_id === args.p_user_id && (row.id === id || row.feishu_record_id === id)));
+                if (rows.some(row => !row)) return {data: null, error: new Error('WORD_NOT_FOUND')};
+                let deleted = 0;
+                for (const row of new Set(rows)) {
+                    if (row.deleted_at) continue;
+                    row.deleted_at = new Date().toISOString();
+                    row.question_generation_version = Number(row.question_generation_version || 1) + 1;
+                    db.question_generation_jobs = db.question_generation_jobs.filter(job => job.word_id !== row.id);
+                    for (const cache of db.question_cache) {
+                        if (cache.word_id === row.id) cache.cache_state = 'retired';
+                    }
+                    deleted++;
+                }
+                return {data: {success: true, deleted, recordIds: ids}, error: null};
             }
             if (name === 'fence_word_question_generation') {
                 const word = db.words.find(row => row.id === args.p_word_id && row.user_id === args.p_user_id);
@@ -3306,7 +3323,7 @@ test('rebuildQuestionCacheForUser confirms a false enqueue response against an e
     assert.equal(client.queries.includes('question_generation_jobs'), true);
 });
 
-test('deleteWord removes only the owned meaning and its unreferenced cache', async () => {
+test('deleteWord archives only the owned meaning and retires its supply', async () => {
     const client = seededClient();
     client.db.quiz_challenge_questions = [];
     client.db.quiz_display_events = [];
@@ -3324,11 +3341,11 @@ test('deleteWord removes only the owned meaning and its unreferenced cache', asy
     });
 
     assert.deepEqual(result, { success: true, recordId: 'rec-word-2' });
-    assert.equal(client.db.words.some(row => row.id === 'word-2'), false);
-    assert.equal(client.db.question_cache.some(row => row.id === 'cache-word-2'), false);
+    assert.ok(client.db.words.find(row => row.id === 'word-2').deleted_at);
+    assert.equal(client.db.question_cache.find(row => row.id === 'cache-word-2').cache_state, 'retired');
 });
 
-test('deleteWord refuses to remove a meaning referenced by formal challenge history', async () => {
+test('deleteWord archives a meaning referenced by formal history without erasing it', async () => {
     const client = seededClient();
     client.db.quiz_challenge_questions = [{
         id: 'challenge-question-1', meaning_id: 'word-1', cache_question_id: 'cache-1',
@@ -3338,8 +3355,9 @@ test('deleteWord refuses to remove a meaning referenced by formal challenge hist
         recordId: 'rec-word-1',
     });
 
-    assert.equal(result.success, false);
-    assert.equal(result.code, 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY');
+    assert.equal(result.success, true);
+    assert.ok(client.db.words.find(row => row.id === 'word-1').deleted_at);
+    assert.equal(client.db.quiz_challenge_questions.length, 1);
     assert.equal(client.db.words.some(row => row.id === 'word-1'), true);
 });
 
@@ -4526,4 +4544,45 @@ test('challenge demand adapter uses canonical user and exposes only safe generat
  const result=await createSupabaseDataAdapter(client).ensureQuizQuestionSupply('CHILD',['one','two','three']);
  assert.deepEqual(calls,[{name:'request_challenge_question_supply',args:{p_user_id:'user-1',p_word_ids:['one','two','three']}}]);
  assert.deepEqual(result,{words:[{meaningId:'one',state:'retry_wait',retryAt:'2026-10-10T13:00:00Z'},{meaningId:'two',state:'generating',retryAt:null},{meaningId:'three',state:'unavailable',retryAt:null}]});
+});
+
+test('deleted meanings leave the current library, quiz and stats but retain historical word lookup', async () => {
+    const client = seededClient();
+    Object.assign(client.db.question_cache[0], {quality_status:'ready',question_fingerprint:'history-only'});
+    client.db.assessments.push({id:'past',user_id:'user-1',word_id:'word-1',test_id:'real-past',word_snapshot:'Apple',assessed_at:'2026-10-01T00:00:00Z',question_type:'1',question_text:'I ate an _____.',options:['A. apple'],correct_answer:'A',submitted_answer:'A|sure',is_correct:'correct'});
+    const before = await createSupabaseDataAdapter(client).getQuizHistory('qiuqiu');
+    client.db.words[0].deleted_at = '2026-10-12T00:00:00Z';
+    const adapter = createSupabaseDataAdapter(client);
+    assert.equal((await adapter.getWordsForUser('qiuqiu')).length, 0);
+    assert.equal((await adapter.getQuizWordsForUser('qiuqiu')).length, 0);
+    assert.equal((await adapter.listUserWords('qiuqiu')).total, 0);
+    assert.equal((await adapter.getStats('qiuqiu')).totalMeanings, 0);
+    assert.equal((await adapter.getStats('qiuqiu')).totalTests, 1);
+    assert.equal((await adapter.getQuestionCache('qiuqiu')).length, 0);
+    assert.deepEqual(await adapter.getQuizHistory('qiuqiu'), before);
+    assert.equal(client.db.words.filter(row => row.id === 'word-1').length, 1);
+});
+
+test('in-flight mastery persistence cannot modify an archived meaning or recreate its job', async () => {
+    const client = createFakeSupabase({
+        users:[{id:'user-1',username:'qiuqiu',username_key:'qiuqiu'}],
+        words:[{id:'word-1',user_id:'user-1',word:'apple',mastery_status:'pending'}],
+    }, {beforeOperation:({table,operation,db})=>{
+        if(table==='words'&&operation==='update')db.words[0].deleted_at='2026-10-12T00:00:00Z';
+    }});
+    const updated=await createSupabaseDataAdapter(client).updateWordMastery('qiuqiu','apple','recognized');
+    assert.equal(updated.length,0);
+    assert.equal(client.db.words[0].mastery_status,'pending');
+    assert.equal(client.db.question_generation_jobs.length,0);
+});
+
+test('deletion racing a mastery fence lets the old assessment finish without restoring the word',async()=>{
+    const client=seededClient();const originalRpc=client.rpc.bind(client);
+    client.rpc=async(name,args)=>{
+        if(name==='fence_word_question_generation') {client.db.words[0].deleted_at='2026-10-12T00:00:00Z';return {data:null,error:null};}
+        return originalRpc(name,args);
+    };
+    const result=await createSupabaseDataAdapter(client).updateWordMastery('qiuqiu','Apple','mastered');
+    assert.deepEqual(result,[]);
+    assert.equal(client.db.question_generation_jobs.length,0);
 });

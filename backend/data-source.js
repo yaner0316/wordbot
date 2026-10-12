@@ -618,6 +618,7 @@ function loadSupabaseDataSource() {
         addWord,
         updateWord: (username, word, fields) => supabaseData.updateWord(username, word, fields),
         deleteWord: (username, word, options) => supabaseData.deleteWord(username, word, options),
+        deleteWords: (username, recordIds) => supabaseData.deleteWords(username, recordIds),
         updateMultiDefinition: (username, words) => supabaseData.updateMultiDefinition(username, words),
         validateWords: (targetUser, words) => supabaseData.validateWords(targetUser, words),
         addWords,

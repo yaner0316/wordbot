@@ -13,6 +13,12 @@ const {
 
 const NOW = '2026-08-03T12:00:00.000Z';
 
+test('worker loader stops an already claimed archived meaning before AI generation', async () => {
+    const fake = createFakeSupabase({words:[{id:'archived',user_id:'user-1',word:'bank',deleted_at:NOW}]});
+    assert.equal(await createSupabaseWordLoader({client:fake.client})('archived','user-1'),null);
+    assert.equal(fake.calls.some(call => call.table === 'users'),false);
+});
+
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }

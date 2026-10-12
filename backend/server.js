@@ -5,7 +5,7 @@ const express = require('express');
 const path = require('path');
 const { normalizeUser } = require('./session-auth');
 const { requireAdminToken, requireUserSession, requireParentSession, setSessionCookie, sessionStore } = require('./auth-middleware');
-const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
+const { TEST_TABLE, WORD_TABLE, OPTION_IDS, registerUser, loginUser, verifyParentLogin, setParentCredentials, resetChildPassword, generateQuiz, submitAnswers, getActiveFormalQuizChallenge, updateQuizSessionProgress, prebuildWrongQuestionCache, createReviewRound, getActiveReviewRound, submitReviewRound, deferReviewRound, getReviewSummary, getGameState, saveGameState, getStats, getAssessmentsForUser, addWord, getAllUsers, getAllStats, getUserLearningSettings, updateUserLearningSettings, getQuestionCacheStatus, getQuestionCacheDiagnostics, requestQuestionCacheRebuildForUser, rebuildQuestionCacheForUser, deleteQuestionCacheRows, validateWords, addWords, updateMultiDefinition, getWord, updateWord, deleteWord, deleteWords, deleteUserTestData, getWordByRecordId, listUserWords, getReviewWords, markWordForReview, clearWordReview, getRecords, getQuizHistory, backfillTranslations } = require('./data-source');
 const { createApp } = require('./http-app');
 const { getParentCredentialStatus } = require('./data-source');
 const { getChallengeCandidates } = require('./data-source');
@@ -178,6 +178,7 @@ function isDueUnderClaimRules(job, nowMs) {
 
 function isWordEligibleForJob(word, job) {
     if (!word || String(word.id) !== String(job?.word_id)) return false;
+    if (word.deleted_at) return false;
     if (String(word.user_id) !== String(job?.user_id)) return false;
     if (String(word.question_generation_version) !== String(job?.word_version)) return false;
     if (word.mastery_status === null || word.mastery_status === undefined || word.mastery_status === 'mastered') return false;
@@ -207,7 +208,7 @@ function createQuestionGenerationEligibleDueCounter({ client = supabase, now = (
             const ids = wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_PAGE_SIZE);
             const { data, error } = await client
                 .from('words')
-                .select('id,user_id,question_generation_version,mastery_status,word')
+                .select('id,user_id,question_generation_version,mastery_status,word,deleted_at')
                 .in('id', ids)
                 .order('id', { ascending: true })
                 .limit(QUESTION_GENERATION_HEALTH_PAGE_SIZE);
@@ -231,7 +232,7 @@ function createQuestionGenerationQueueSummaryReader({ client = supabase, now = (
             .filter(row => CLAIMABLE_JOB_STATUSES.has(row.status) || LEASED_JOB_STATUSES.has(row.status))
             .map(row => row.word_id).filter(Boolean))];
         for (let offset = 0; offset < wordIds.length; offset += QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE) {
-            const { data, error } = await client.from('words').select('id,user_id,word,mastery_status,question_generation_version')
+            const { data, error } = await client.from('words').select('id,user_id,word,mastery_status,question_generation_version,deleted_at')
                 .in('id', wordIds.slice(offset, offset + QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE))
                 .order('id', { ascending: true }).limit(QUESTION_GENERATION_HEALTH_WORD_BATCH_SIZE);
             throwHealthQueryError(error);
@@ -460,7 +461,7 @@ const SESSION_ONLY_ADMIN_PATHS = new Set([
     '/reviewWords/clear',      // 清除当前用户复习词标记
 ]);
 app.use('/api/admin', (req, res, next) => {
-    const parentWritePaths = new Set(['/userSettings', '/addWord', '/addWords', '/cleanup', '/reviewWords/mark', '/reviewWords/clear']);
+    const parentWritePaths = new Set(['/userSettings', '/addWord', '/addWords', '/cleanup', '/reviewWords/mark', '/reviewWords/clear', '/words/delete']);
     if (req.method !== 'GET' && parentWritePaths.has(req.path)) return requireParentSession(req, res, next);
     if (SESSION_ONLY_ADMIN_PATHS.has(req.path)) {
         return requireUserSession(req, res, next);
@@ -903,13 +904,26 @@ app.post('/api/admin/reviewWords/clear', async (req, res) => {
     }
 });
 
+app.post('/api/admin/words/delete', async (req, res) => {
+    const { recordIds, userId = '' } = req.body || {};
+    if (!Array.isArray(recordIds) || recordIds.length < 1 || recordIds.length > 100
+        || recordIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) {
+        return res.status(400).json({ code: 'WORD_SELECTION_INVALID', error: '请选择 1 至 100 个有效词义' });
+    }
+    try {
+        const data = await deleteWords(userId || req.wordbotSession?.user || '', recordIds);
+        return res.json(data);
+    } catch (error) {
+        return res.status(error.code === 'WORD_NOT_FOUND' ? 404 : 500).json({code: error.code || 'WORD_DELETE_FAILED', error: error.message});
+    }
+});
+
 app.delete('/api/word', async (req, res) => {
     try {
         const { userId = '', word = '', recordId = '' } = req.query;
         const effectiveUserId = userId || req.wordbotSession?.user || '';
         if (!recordId && (!effectiveUserId || !word)) return res.status(400).json({ error: '缺少参数' });
         const data = await deleteWord(effectiveUserId, word, { recordId });
-        if (data?.code === 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY') return res.status(409).json(data);
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });

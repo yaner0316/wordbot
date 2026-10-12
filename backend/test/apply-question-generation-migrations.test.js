@@ -15,6 +15,7 @@ const {
 } = require('../scripts/apply-question-generation-migrations');
 
 const RPC_SIGNATURES = Object.freeze({
+  archive_words: 'public.archive_words(uuid,text[])',
   request_challenge_question_supply: 'public.request_challenge_question_supply(uuid,uuid[])',
   claim_question_generation_jobs: 'public.claim_question_generation_jobs(text,integer,bigint)',
   renew_question_generation_job: 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)',
@@ -87,6 +88,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261005_custom_challenges.sql',
       '20261009_display_replenishment.sql',
       '20261010_challenge_demand_priority.sql',
+      '20261012_parent_word_archive.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -171,6 +173,11 @@ test('missing DATABASE_URL fails before a database client is constructed', async
 });
 
 const COMPLETE_STATE = Object.freeze({
+  archive_words_safe_search_path: true,
+  archive_words_column: true,
+  archive_words_active_view: true,
+  archive_words_challenge_guard: true,
+  archive_words_claim_guard: true,
   claim_fair_user_rotation: true,
   jobs_table: true,
   formal_challenges_table: true,
@@ -882,9 +889,10 @@ test('approved SQL files are transactional and idempotent', () => {
   assert.match(masteryReconciliationSql, /is distinct from/i);
   assert.match(enqueueAclSql, /revoke all on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*service_role/i);
   assert.match(enqueueAclSql, /grant execute on function public\.enqueue_question_generation_job_if_needed\(uuid, uuid, text\)[\s\S]*to service_role/i);
-  const demandSql = fs.readFileSync(MIGRATION_PATHS.at(-1), 'utf8');
+  const demandSql = fs.readFileSync(MIGRATION_PATHS.find(file => file.endsWith('20261010_challenge_demand_priority.sql')), 'utf8');
+  const archiveSql = fs.readFileSync(MIGRATION_PATHS.find(file => file.endsWith('20261012_parent_word_archive.sql')), 'utf8');
   assert.match(demandSql, /^\s*begin;/i); assert.match(demandSql, /commit;\s*$/i);
-  const rpcSql = `${demandSql}\n${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}\n${checkpointSql}`;
+  const rpcSql = `${archiveSql}\n${demandSql}\n${claimSql}\n${versionSql}\n${formalSql}\n${badQuestionSql}\n${masteryReconciliationSql}\n${formalAiAuditSql}\n${checkpointSql}`;
   const compactRpcSql = rpcSql.replace(/\s+/g, '');
   for (const [name, signature] of Object.entries(RPC_SIGNATURES)) {
     const [, signatureWithoutSchema] = signature.split('public.');

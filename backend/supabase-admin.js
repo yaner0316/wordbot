@@ -135,7 +135,7 @@ function createSupabaseAdminAdapter(client) {
         const usersById = new Map(users.map(user => [user.id, user]));
         const rows = await fetchAllRows(
             () => {
-                let query = client.from('words').select(WORD_COLUMNS);
+                let query = client.from('words').select(WORD_COLUMNS).is('deleted_at', null);
                 if (targetUser) query = query.eq('user_id', targetUser.id);
                 return query.order('entered_at', { ascending: true }).order('id', { ascending: true });
             },
@@ -160,7 +160,7 @@ function createSupabaseAdminAdapter(client) {
         for (const column of ['feishu_record_id', 'id']) {
             const { data, error } = await client
                 .from('words')
-                .select('id, feishu_record_id, user_id')
+                .select('id, feishu_record_id, user_id').is('deleted_at', null)
                 .eq(column, normalizedRecordId)
                 .eq('user_id', user.id)
                 .maybeSingle();

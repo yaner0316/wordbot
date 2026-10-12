@@ -9,6 +9,46 @@ const SUPABASE_CLIENT_PATH = path.join(BACKEND_DIR, 'supabase-client.js');
 const QUESTION_GENERATION_BOOTSTRAP_PATH = path.join(BACKEND_DIR, 'question-generation-bootstrap.js');
 const FEISHU_PATH = path.join(BACKEND_DIR, 'feishu.js');
 
+test('parent batch delete validates IDs and passes the owned scope to the adapter', async () => {
+    const calls = [];
+    const app = loadServerWithFeishu(createFakeFeishu({
+        deleteWords: async (...args) => { calls.push(args); return { success: true, deleted: 2 }; },
+    }));
+    await withServer(app, async base => {
+        const send = body => fetch(`${base}/api/admin/words/delete`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        assert.equal((await send({userId:'student',recordIds:[]})).status,400);
+        assert.equal((await send({userId:'student',recordIds:['valid',{}]})).status,400);
+        assert.equal((await send({userId:'student',recordIds:Array.from({length:101},(_,i)=>`id-${i}`)})).status,400);
+        assert.equal(calls.length,0);
+        const result = await send({userId:'student',recordIds:['meaning-one','meaning-two']});
+        assert.equal(result.status,200);
+        assert.deepEqual(calls,[['student',['meaning-one','meaning-two']]]);
+    });
+});
+
+test('batch delete requires a parent session and rejects another child scope', async () => {
+    const calls=[];
+    await withEnv({NODE_ENV:'test',WORDBOT_SESSION_SECRET:'archive-contract-session'}, async()=>{
+        const app=loadServerWithFeishu(createFakeFeishu({
+            loginUser:async input=>({success:true,user:input.username}),
+            verifyParentLogin:async input=>({success:true,user:input.user}),
+            deleteWords:async (...args)=>{calls.push(args);return {success:true,deleted:1};},
+        }));
+        process.env.NODE_ENV='production';
+        const {sessionStore}=require('../auth-middleware');
+        await withServer(app,async base=>{
+            const send=(cookie,userId='student')=>fetch(`${base}/api/admin/words/delete`,{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({userId,recordIds:['owned']})});
+            assert.equal((await send('')).status,401);
+            const child=sessionStore.cookie(sessionStore.issue('student','user'));
+            assert.equal((await send(child)).status,403);
+            const parent=sessionStore.cookie(sessionStore.issue('student','parent'));
+            assert.equal((await send(parent,'other-child')).status,403);
+            assert.equal((await send(parent)).status,200);
+        });
+    });
+    assert.deepEqual(calls,[['student',['owned']]]);
+});
+
 async function withServer(app, run) {
     const server = app.listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));

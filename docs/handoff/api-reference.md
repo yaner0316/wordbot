@@ -33,7 +33,9 @@
 - `POST /api/admin/cleanup`：清理本人测试模式记录，需家长会话。
 - `GET /api/admin/users`、`GET /api/admin/stats`：管理级接口，需 admin token。
 
-`POST /api/quiz/session/progress` 在试卷已结束或不活跃时返回 `409 QUIZ_SESSION_INACTIVE`；并发保存的旧 `baseRevision` 会返回 `409 QUIZ_PROGRESS_CONFLICT`。涉及单词删除时，如正式历史阻止删除，也会以 `409 WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY` 拒绝。收到 409 时保留本机草稿并按响应代码刷新或处理确认流程；不要以盲目重试覆盖其他设备的较新状态。
+`POST /api/quiz/session/progress` 在试卷已结束或不活跃时返回 `409 QUIZ_SESSION_INACTIVE`；并发保存的旧 `baseRevision` 会返回 `409 QUIZ_PROGRESS_CONFLICT`。收到 409 时保留本机草稿并按响应代码刷新或处理确认流程；不要以盲目重试覆盖其他设备的较新状态。
+
+`DELETE /api/word` 将一个具体词义归档，不再因正式历史引用而拒绝；历史成绩与快照保留。新增 `POST /api/admin/words/delete` 同样要求家长会话，接受 `{userId, recordIds: string[]}`，每次 1–100 个 ID，可使用 canonical UUID 或旧记录 ID。服务端整批验证当前孩子归属，外部/不存在 ID 返回 `404 WORD_NOT_FOUND`，非法数组返回 `400 WORD_SELECTION_INVALID`；成功返回 `{success:true, deleted, recordIds}`，其中 `deleted` 是本次新归档数量，重复请求可为 0。超过 100 项由前端分批提交，失败保留未完成选择。列表仍返回原 `entered_at`，前端以亚洲/上海时间显示。
 
 `GET /api/admin/questionCache/status?userId=<当前用户>` 的 `status.learning` 区分总词义、已掌握、冷却、等待识别复习、缺录入时间和可选词义数量，并提供 `nextCooldownEndsAt`。该时间只表示最早冷却结束，不保证届时已有十道可用题；正式开考仍由现有可选题数决定。查询失败不等于题数为零。
 

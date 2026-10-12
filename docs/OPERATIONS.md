@@ -1,5 +1,13 @@
 # WordBot Operations
 
+## Parent library archive (2026-10-12)
+
+`20261012_parent_word_archive.sql` must be applied by the existing migration runner before deploying this backend and its paired frontend. It adds `words.deleted_at`, a service-only `active_words` invoker view, and `archive_words(uuid,text[])`. Existing live eligibility RPC definitions now read the active view; historical reads retain `words`. The migration preserves existing function ACLs, explicitly restricts the new RPC to service_role, and never changes historical assessments. When later migrations add word columns used by these RPCs, refresh `active_words` in the same migration.
+
+Archival locks all owned meanings in a stable order, advances the generation version, retires every cache row and cancels jobs in one transaction. Retired caches remain available for legacy history hydration; archival never physically deletes them. It is repeatable and rejects any foreign/missing ID before changing anything. The verifier detects the added column, active view, RPC ACL/search path and challenge/claim guards; when only this contract is missing, it applies only this migration. Do not remove `deleted_at` or deploy old live-query code as a rollback: that would make archived meanings reappear. Use a forward corrective migration while retaining historical rows.
+
+Development validation uses local synthetic data and PGlite. Production application/deployment and real-account deletion require their existing explicit authorization; local test success does not establish that the feature is live.
+
 ## Supported environment
 
 - Node.js: `>=22 <25`
