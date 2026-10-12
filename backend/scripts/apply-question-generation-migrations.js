@@ -77,6 +77,7 @@ with claim_proc as (
   group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
+  coalesce((select prosrc like '%to_jsonb(owned_word)%' and prosrc not like '%to_jsonb(word)%' from pg_catalog.pg_proc where oid=to_regprocedure('public.archive_words(uuid,text[])')),false) as archive_words_legacy_id_lookup,
   (select signature from rpc_state where name = 'archive_words') as rpc_archive_words_signature,
   (select security_definer from rpc_state where name = 'archive_words') as rpc_archive_words_security_definer,
   (select public_execute from rpc_state where name = 'archive_words') as rpc_archive_words_public_execute,
@@ -453,6 +454,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261009_display_replenishment.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261010_challenge_demand_priority.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive_legacy_ids.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -485,6 +487,7 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 
 const EXPECTED_STATE = Object.freeze({
   archive_words_safe_search_path: true,
+  archive_words_legacy_id_lookup: true,
   archive_words_column: true,
   archive_words_active_view: true,
   archive_words_challenge_guard: true,
@@ -623,8 +626,10 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.every(key => key.startsWith('archive_words_') || key.startsWith('rpc_archive_words_'))
-      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261012_parent_word_archive.sql')
+    const paths = missing.length === 1 && missing[0] === 'archive_words_legacy_id_lookup'
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261012_parent_word_archive_legacy_ids.sql')
+      : missing.every(key => key.startsWith('archive_words_') || key.startsWith('rpc_archive_words_'))
+      ? MIGRATION_PATHS.filter(file => ['20261012_parent_word_archive.sql', '20261012_parent_word_archive_legacy_ids.sql'].includes(path.basename(file)))
       : missing.every(key => key.startsWith('challenge_demand_') || key.startsWith('rpc_request_challenge_question_supply_'))
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261010_challenge_demand_priority.sql')
       : missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
