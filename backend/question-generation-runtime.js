@@ -172,7 +172,7 @@ function createSupabaseWordLoader({ client } = {}) {
             .eq('user_id', exactUserId)
             .maybeSingle();
         throwSupabaseError(error, 'questionGeneration.loadWord');
-        if (!data) return null;
+        if (!data || data.deleted_at) return null;
         const { data: user, error: userError } = await supabase
             .from('users')
             .select('learning_level')

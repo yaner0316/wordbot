@@ -1001,3 +1001,66 @@ test('challenge demand preserves the edit fence and cross-user turn after urgent
   assert.equal(new Set([first.user_id,second.user_id]).size,2);
  }finally{await db.close();}
 });
+
+
+test('parent archive is atomic, repeatable, preserves formal history and excludes new supply', async () => {
+    const db = await createDatabase();
+    try {
+        await db.exec('alter table words add column if not exists feishu_record_id text');
+        await insertFormalWords(db);
+        await insertFormalCacheRows(db);
+        await db.query('select create_formal_quiz_challenge($1,$2,$3,$4::jsonb,$5)',
+            [USER_ID, 'parent-archive-history', 'middle', JSON.stringify(formalChallengeQuestions()), FORMAL_NOW]);
+        await insertFormalCacheRow(db,{index:1,cacheQuestionId:formalCacheId('0001',1),cacheState:'retired'});
+        const before = await db.query('select question_snapshot from quiz_challenge_questions order by ordinal');
+        await assert.rejects(db.query('select archive_words($1,$2::text[])', [USER_ID, [formalWordId(1), 'missing']]), /WORD_NOT_FOUND/);
+        assert.equal((await db.query('select deleted_at from words where id=$1',[formalWordId(1)])).rows[0].deleted_at, null);
+        const result = await db.query('select archive_words($1,$2::text[]) as result', [USER_ID, [formalWordId(1), formalWordId(2)]]);
+        assert.equal(result.rows[0].result.deleted, 2);
+        const again = await db.query('select archive_words($1,$2::text[]) as result', [USER_ID, [formalWordId(1), formalWordId(2)]]);
+        assert.equal(again.rows[0].result.deleted, 0);
+        assert.equal((await db.query('select count(*)::int as n from active_words where id=any($1::uuid[])',[[formalWordId(1),formalWordId(2)]])).rows[0].n, 0);
+        assert.deepEqual((await db.query('select question_snapshot from quiz_challenge_questions order by ordinal')).rows, before.rows);
+        assert.equal((await db.query('select cache_state from question_cache where id=$1',[formalCacheId('0000',1)])).rows[0].cache_state, 'retired');
+        assert.equal((await db.query('select cache_state from question_cache where id=$1',[formalCacheId('0001',1)])).rows[0].cache_state, 'retired');
+        assert.equal((await db.query('select count(*)::int as n from question_generation_jobs where word_id=any($1::uuid[])',[[formalWordId(1),formalWordId(2)]])).rows[0].n,0);
+        assert.equal((await db.query('select enqueue_question_generation_job_if_needed($1,$2,$3) as ok',[USER_ID,formalWordId(1),'coverage_reconcile'])).rows[0].ok,false);
+        await assert.rejects(db.query('select create_formal_quiz_challenge($1,$2,$3,$4::jsonb,$5)',
+            [USER_ID, 'parent-archive-forbidden', 'middle', JSON.stringify(formalChallengeQuestions()), '2026-08-26T00:00:00Z']), /MEANING/);
+        // Re-running the migration cannot restore a deleted word or reset its history.
+        await db.exec(await fs.readFile(MIGRATION_PATHS[MIGRATION_PATHS.length - 1], 'utf8'));
+        assert.equal((await db.query('select count(*)::int as n from active_words where id=$1',[formalWordId(1)])).rows[0].n,0);
+        await db.exec('set role anon');
+        await assert.rejects(db.query('select archive_words($1,$2::text[])',[USER_ID,[WORD_ID]]), /permission denied/);
+        await assert.rejects(db.query('select * from active_words'), /permission denied/);
+    } finally { await db.close(); }
+});
+
+test('archive rejects foreign IDs, fences an in-flight worker and permits fresh re-entry', async () => {
+    const db = await createDatabase();
+    try {
+        const otherUser = '99999999-1111-4111-8111-111111111111';
+        const otherWord = '99999999-2222-4222-8222-222222222222';
+        await db.query('insert into users(id,username) values($1,$2)',[otherUser,'other-child']);
+        await db.query("insert into words(id,user_id,word,meaning_en,level) values($1,$2,'apple','a fruit','middle')",[otherWord,otherUser]);
+        await assert.rejects(db.query('select archive_words($1,$2::text[])',[USER_ID,[WORD_ID,otherWord]]),/WORD_NOT_FOUND/);
+        assert.equal((await db.query('select deleted_at from words where id=$1',[WORD_ID])).rows[0].deleted_at,null);
+        await fenceWord(db);
+        await db.query('select finalize_word_question_generation_edit($1,$2)',[USER_ID,WORD_ID]);
+        const claim = await db.query("select * from claim_question_generation_jobs('archive-worker',10,60000)");
+        const job=claim.rows.find(row=>row.word_id===WORD_ID);
+        assert.ok(job);
+        await db.query('select archive_words($1,$2::text[])',[USER_ID,[WORD_ID]]);
+        const stale=await db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[job.id,'archive-worker',job.word_version,job.lease_token,variantsJson()]);
+        assert.equal(stale.rows.length,0);
+        assert.equal((await db.query('select count(*)::int n from question_cache where word_id=$1',[WORD_ID])).rows[0].n,0);
+        assert.equal((await db.query('select count(*)::int n from question_generation_jobs where word_id=$1',[WORD_ID])).rows[0].n,0);
+        await db.query("insert into words(id,user_id,word,meaning_en,level) values($1,$2,'apple','a fruit','middle')",[formalWordId(99),USER_ID]);
+        const active=await db.query("select id from active_words where user_id=$1 and word='apple'",[USER_ID]);
+        assert.deepEqual(active.rows,[{id:formalWordId(99)}]);
+        assert.equal((await db.query('select deleted_at from words where id=$1',[otherWord])).rows[0].deleted_at,null);
+        const verified=(await db.query(VERIFICATION_SQL)).rows[0];
+        for(const key of ['archive_words_column','archive_words_active_view','archive_words_challenge_guard','archive_words_claim_guard','archive_words_safe_search_path','rpc_archive_words_signature','rpc_archive_words_service_role_execute']) assert.equal(verified[key],true,key);
+        for(const key of ['rpc_archive_words_public_execute','rpc_archive_words_anon_execute','rpc_archive_words_authenticated_execute']) assert.equal(verified[key],false,key);
+    } finally {await db.close();}
+});

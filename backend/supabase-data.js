@@ -326,7 +326,7 @@ async function getWordsForUserWithClient(client, username, level) {
         () => {
             let query = client
                 .from('words')
-                .select('*')
+                .select('*').is('deleted_at', null)
                 .eq('user_id', user.id)
                 .order('entered_at', { ascending: true })
                 .order('id', { ascending: true });
@@ -359,7 +359,7 @@ async function getQuizWordsForUserWithClient(client, username, level) {
         () => {
             let query = client
                 .from('words')
-                .select('*')
+                .select('*').is('deleted_at', null)
                 .eq('user_id', user.id)
                 .order('entered_at', { ascending: true })
                 .order('id', { ascending: true });
@@ -740,7 +740,7 @@ async function getWordsByIdWithClient(client, wordIds) {
         rows.push(...await fetchAllRows(
             () => client
                 .from('words')
-                .select('id, feishu_record_id, word, meaning_zh, context_zh, user_id, mastery_status, question_generation_version')
+                .select('id, feishu_record_id, word, meaning_zh, context_zh, user_id, mastery_status, question_generation_version, deleted_at')
                 .in('id', uniqueIds.slice(offset, offset + 100)),
             'getQuestionCache.words'
         ));
@@ -986,7 +986,7 @@ async function isMigratedUnassignedVocabularyLevelRepair(client, user, currentLe
     const rows = await fetchAllRows(
         () => client
             .from('words')
-            .select('id, level')
+            .select('id, level').is('deleted_at', null)
             .eq('user_id', user.id)
             .order('entered_at', { ascending: true })
             .order('id', { ascending: true }),
@@ -1153,7 +1153,7 @@ async function getQuestionCacheWithClient(client, username, level, roundType) {
     );
     const fingerprintedRows = rows.filter(row => String(row.question_fingerprint || '').trim());
     const wordsById = await getWordsByIdWithClient(client, fingerprintedRows.map((row) => row.word_id));
-    return fingerprintedRows.map((row) => {
+    return fingerprintedRows.filter(row => !wordsById.get(row.word_id)?.deleted_at).map((row) => {
         const word = wordsById.get(row.word_id);
         return {
             ...row,
@@ -2167,6 +2167,7 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     const reviewRows = [];
     for (const row of sourceRows) {
         const word = await getWordInfoForReview(client, user.id, row);
+        if (word.deleted_at) continue;
         const shouldReviewInitial = !parentReviewId && row.assessment_kind === 'initial_context' && hasSelectedSenseFlowFlag(word);
         if (!isCorrectAssessmentRow(row) || shouldReviewInitial) reviewRows.push({ row, word, selectedSense: shouldReviewInitial });
     }
@@ -2280,6 +2281,7 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
     const replacementPairs = [];
     for (const assessment of rows) {
         const word = await getWordInfoForReview(client, user.id, assessment);
+        if (word.deleted_at) continue;
         const level = normalizeOptionalLearningLevel(assessment.level || word.level);
         let context = '';
         for (let attempt = 0; attempt < 2 && !context; attempt++) {
@@ -2483,6 +2485,7 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     const updated = [];
     const conditionalRecovery = Object.prototype.hasOwnProperty.call(options, 'expectedUpdatedAt');
     for (const row of rows) {
+        if (row.deleted_at) continue;
         if (conditionalRecovery && (!options.expectedUpdatedAt || row.updated_at !== options.expectedUpdatedAt)) continue;
         // Formal submissions cannot revoke saved mastery; deliberate parent edits use updateWord.
         if (row.mastery_status === 'mastered' && masteryStatus !== 'mastered') {
@@ -2490,7 +2493,10 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
             continue;
         }
         const crossesMasteryBoundary = (row.mastery_status === 'mastered') !== (masteryStatus === 'mastered');
-        if (crossesMasteryBoundary && !conditionalRecovery) await fenceWordQuestionGeneration(client, user.id, row.id);
+        if (crossesMasteryBoundary && !conditionalRecovery) {
+            const version = await fenceWordQuestionGeneration(client, user.id, row.id, { allowMissing: true });
+            if (version === null || version === undefined) continue;
+        }
         const payload = {
             mastery_status: masteryStatus,
             updated_at: new Date().toISOString(),
@@ -2501,15 +2507,17 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
         let update = client
             .from('words')
             .update(payload)
-            .eq('id', row.id);
+            .eq('id', row.id)
+            .is('deleted_at', null);
         if (conditionalRecovery) update = update.eq('user_id', user.id).eq('updated_at', options.expectedUpdatedAt);
-        const { data, error } = conditionalRecovery
-            ? await update.select('*').maybeSingle()
-            : await update.select('*').single();
+        const { data, error } = await update.select('*').maybeSingle();
         ensureNoError(error, 'updateWordMastery');
-        if (conditionalRecovery && !data) continue;
+        if (!data) continue;
         // The fence changes updated_at itself, so recovery must win its CAS first.
-        if (crossesMasteryBoundary && conditionalRecovery) await fenceWordQuestionGeneration(client, user.id, row.id);
+        if (crossesMasteryBoundary && conditionalRecovery) {
+            const version = await fenceWordQuestionGeneration(client, user.id, row.id, { allowMissing: true });
+            if (version === null || version === undefined) continue;
+        }
         if (crossesMasteryBoundary || masteryStatus === 'mastered') {
             await finalizeWordQuestionGenerationEdit(client, user.id, row.id);
         }
@@ -2518,13 +2526,13 @@ async function updateWordMasteryWithClient(client, username, word, newMasterySta
     return updated;
 }
 
-async function fenceWordQuestionGeneration(client, userId, wordId) {
+async function fenceWordQuestionGeneration(client, userId, wordId, { allowMissing = false } = {}) {
     const { data, error } = await client.rpc('fence_word_question_generation', {
         p_user_id: userId,
         p_word_id: wordId,
     });
     ensureNoError(error, 'updateWord.fenceQuestionGeneration');
-    if (data === null || data === undefined) throw new Error('updateWord.fenceQuestionGeneration: word was not fenced');
+    if (!allowMissing && (data === null || data === undefined)) throw new Error('updateWord.fenceQuestionGeneration: word was not fenced');
     return data;
 }
 
@@ -2544,6 +2552,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     const qualityOrPosChanged = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'qualityFlags', 'qualityNote'].some(has);
     if (!editable.some(has)) throw new Error('WORD_UPDATE_FIELDS_REQUIRED');
     const [row] = await resolveWordRows(client, user.id, word, fields);
+    if (row.deleted_at) throw new Error('WORD_NOT_FOUND');
     const questionGenerationChanged = qualityOrPosChanged || (has('status')
         && (row.mastery_status === 'mastered' || normalizeMasteryStatus(fields.status) === 'mastered'));
     if (questionGenerationChanged) await fenceWordQuestionGeneration(client, user.id, row.id);
@@ -2685,30 +2694,37 @@ async function updateMultiDefinitionWithClient(client, username, words) {
     return { success: true, updated: selected.length };
 }
 
-async function hasFormalWordReferences(client, wordId) {
-    for (const table of ['quiz_challenge_questions', 'quiz_display_events']) {
-        const { data, error } = await client.from(table).select('id').eq('meaning_id', wordId).limit(1).maybeSingle();
-        ensureNoError(error, `deleteWord.${table}`);
-        if (data) return true;
+async function deleteWordsWithClient(client, username, recordIds) {
+    if (!Array.isArray(recordIds) || recordIds.length < 1 || recordIds.length > 100
+        || recordIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 200)) {
+        const error = new Error('请选择 1 至 100 个有效词义');
+        error.code = 'WORD_SELECTION_INVALID';
+        throw error;
     }
-    return false;
+    const user = await requireUserByUsername(client, username);
+    const { data, error } = await client.rpc('archive_words', {
+        p_user_id: user.id, p_record_ids: [...new Set(recordIds.map(id => id.trim()))],
+    });
+    if (error) {
+        const failure = new Error(error.message?.includes('WORD_NOT_FOUND') ? '所选词义不存在或不属于当前孩子' : '删除失败，请稍后重试');
+        failure.code = error.message?.includes('WORD_NOT_FOUND') ? 'WORD_NOT_FOUND' : 'WORD_DELETE_FAILED';
+        throw failure;
+    }
+    if (data?.success !== true) throw new Error('删除未确认，请重试');
+    return data;
 }
 
 async function deleteWordWithClient(client, username, word, options = {}) {
-    const user = await requireUserByUsername(client, username);
-    const [row] = await resolveWordRows(client, user.id, word, options);
-    if (await hasFormalWordReferences(client, row.id)) {
-        return {
-            success: false,
-            code: 'WORD_DELETE_BLOCKED_BY_FORMAL_HISTORY',
-            error: 'Cannot delete a meaning referenced by formal challenge history',
-            recordId: row.feishu_record_id || row.id,
-        };
+    let recordId = String(options.recordId || '').trim();
+    if (!recordId) {
+        const user = await requireUserByUsername(client, username);
+        const rows = await resolveWordRows(client, user.id, word, options);
+        const row = rows.find(item => !item.deleted_at);
+        if (!row) throw new Error('WORD_NOT_FOUND');
+        recordId = row.feishu_record_id || row.id;
     }
-    await fenceWordQuestionGeneration(client, user.id, row.id);
-    const { error } = await client.from('words').delete().eq('id', row.id).eq('user_id', user.id).select('id');
-    ensureNoError(error, 'deleteWord.words');
-    return { success: true, recordId: row.feishu_record_id || row.id };
+    await deleteWordsWithClient(client, username, [recordId]);
+    return { success: true, recordId };
 }
 async function ensurePartOfSpeechRows(client, codes) {
     const uniqueCodes = [...new Set(codes)];
@@ -3482,6 +3498,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         creditGameReward: (username, testId, reward) => creditGameRewardWithClient(client, username, testId, reward),
         updateWord: (username, word, fields) => updateWordWithClient(client, username, word, fields),
         deleteWord: (username, word, options) => deleteWordWithClient(client, username, word, options),
+        deleteWords: (username, recordIds) => deleteWordsWithClient(client, username, recordIds),
         updateMultiDefinition: (username, words) => updateMultiDefinitionWithClient(client, username, words),
         validateWords: (targetUser, words) => validateWordsWithClient(client, targetUser, words),
         saveGameState: (username, value) => saveGameStateWithClient(client, username, value),
@@ -3579,6 +3596,7 @@ module.exports = {
     creditGameReward: defaultAdapter.creditGameReward,
     updateWord: defaultAdapter.updateWord,
     deleteWord: defaultAdapter.deleteWord,
+    deleteWords: defaultAdapter.deleteWords,
     updateMultiDefinition: defaultAdapter.updateMultiDefinition,
     validateWords: defaultAdapter.validateWords,
     saveGameState: defaultAdapter.saveGameState,

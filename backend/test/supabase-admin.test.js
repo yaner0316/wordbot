@@ -40,6 +40,8 @@ function createFakeSupabase(seed = {}, { errors = {} } = {}) {
             return this;
         }
 
+        is(column, value) { this.filters.push({ column, value, isNull: true }); return this; }
+
         order(column, options = {}) {
             this.orders.push({ column, ascending: options.ascending !== false });
             return this;
@@ -75,7 +77,7 @@ function createFakeSupabase(seed = {}, { errors = {} } = {}) {
             });
             if (errors[this.table]) return { data: null, error: errors[this.table] };
             let rows = (db[this.table] || []).filter(row =>
-                this.filters.every(filter => row[filter.column] === filter.value)
+                this.filters.every(filter => (filter.isNull ? row[filter.column] ?? null : row[filter.column]) === filter.value)
             );
             for (const order of this.orders.slice().reverse()) {
                 rows = rows.slice().sort((left, right) => {

@@ -38,6 +38,7 @@ with claim_proc as (
   group by quality.oid, proc.prosecdef, proc.proconfig, proc.prosrc
 ), rpc_specs(name, signature) as (
   values
+    ('archive_words', 'public.archive_words(uuid,text[])'),
     ('request_challenge_question_supply', 'public.request_challenge_question_supply(uuid,uuid[])'),
     ('claim_question_generation_jobs', 'public.claim_question_generation_jobs(text,integer,bigint)'),
     ('renew_question_generation_job', 'public.renew_question_generation_job(uuid,text,bigint,uuid,bigint)'),
@@ -76,6 +77,17 @@ with claim_proc as (
   group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
+  (select signature from rpc_state where name = 'archive_words') as rpc_archive_words_signature,
+  (select security_definer from rpc_state where name = 'archive_words') as rpc_archive_words_security_definer,
+  (select public_execute from rpc_state where name = 'archive_words') as rpc_archive_words_public_execute,
+  (select anon_execute from rpc_state where name = 'archive_words') as rpc_archive_words_anon_execute,
+  (select authenticated_execute from rpc_state where name = 'archive_words') as rpc_archive_words_authenticated_execute,
+  (select service_role_execute from rpc_state where name = 'archive_words') as rpc_archive_words_service_role_execute,
+  (select safe_search_path from rpc_state where name = 'archive_words') as archive_words_safe_search_path,
+  exists(select 1 from pg_catalog.pg_attribute where attrelid=to_regclass('public.words') and attname='deleted_at' and atttypid='timestamptz'::regtype and not attisdropped) as archive_words_column,
+  coalesce((select definition like '%deleted_at IS NULL%' from pg_catalog.pg_views where schemaname='public' and viewname='active_words'),false) as archive_words_active_view,
+  coalesce((select prosrc like '%public.active_words%' from pg_catalog.pg_proc where oid=to_regprocedure('public.create_formal_quiz_challenge(uuid,text,text,jsonb,timestamptz)')),false) as archive_words_challenge_guard,
+  coalesce((select prosrc like '%public.active_words%' from pg_catalog.pg_proc where oid=(select oid from claim_proc)),false) as archive_words_claim_guard,
   (select signature from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_signature,
   (select security_definer from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_security_definer,
   (select public_execute from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_public_execute,
@@ -440,9 +452,11 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261005_custom_challenges.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261009_display_replenishment.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261010_challenge_demand_priority.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
+  'archive_words',
   'request_challenge_question_supply',
   'claim_question_generation_jobs',
   'renew_question_generation_job',
@@ -470,6 +484,11 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 }));
 
 const EXPECTED_STATE = Object.freeze({
+  archive_words_safe_search_path: true,
+  archive_words_column: true,
+  archive_words_active_view: true,
+  archive_words_challenge_guard: true,
+  archive_words_claim_guard: true,
   jobs_table: true,
   formal_challenges_table: true,
   formal_challenge_questions_table: true,
@@ -604,7 +623,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.every(key => key.startsWith('challenge_demand_') || key.startsWith('rpc_request_challenge_question_supply_'))
+    const paths = missing.every(key => key.startsWith('archive_words_') || key.startsWith('rpc_archive_words_'))
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261012_parent_word_archive.sql')
+      : missing.every(key => key.startsWith('challenge_demand_') || key.startsWith('rpc_request_challenge_question_supply_'))
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261010_challenge_demand_priority.sql')
       : missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20260908_question_generation_fair_claim.sql')

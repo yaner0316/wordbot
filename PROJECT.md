@@ -10,7 +10,7 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 
 - The learning and cache unit is one user's one meaning, identified by canonical `user_id + meaning_id` (`words.id`; older code may call it `word_id`). Different meanings of the same spelling remain independent.
 - The user account's current selected learning level controls every generated and selected formal question. A meaning's historical entry level is metadata, not an eligibility filter and not a generation level.
-- A deleted meaning is absent. Every existing meaning that is not mastered is a coverage target, including unseen, recognized, consolidating, pending, and legacy status variants.
+- A deleted meaning is absent from the current library, progress totals, new challenges, reviews and generation coverage. Parent deletion archives the meaning with `deleted_at`, preserving its identity, past assessments, scores and immutable challenge snapshots. Existing challenges remain readable/submittable; submission never restores the archived meaning. Re-entering the same spelling creates a new meaning and entry time. Every active meaning that is not mastered is a coverage target, including unseen, recognized, consolidating, pending, and legacy status variants.
 - Production persistence is Supabase. Compatibility adapters may translate legacy shapes at boundaries, but may not become a second source of truth.
 
 ## Formal-question supply invariants
@@ -50,6 +50,7 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 - The server is authoritative for identity, role, quiz state, grading, mastery, and rewards.
 - Leaving the parent console for a child-facing page, including browser-back navigation, must first downgrade the server session to the child role and clear in-memory parent credentials. Reloading a remembered account must confirm this downgrade before loading the child homepage. If downgrade cannot be confirmed, remain on the parent page and offer a retry; an explicit unauthenticated response clears the expired local identity and returns to login. Navigation alone must not leave parent authority active.
 - Children may add their own words/meanings through the supported learning entry (`POST /api/words`), perform the explicitly supported learning flow, and read their allowed state. Editing or deleting existing words/meanings, user settings, destructive cleanup, and review-flag changes are parent-only writes.
+- Parent word management supports selecting individual meanings and all currently loaded rows. Deletion requires confirmation, verifies ownership for the entire request and is idempotent; a request contains at most 100 IDs and the UI splits larger selections into batches. On partial failure, completed batches stay deleted and remaining selections stay available for retry. The entry timestamp appears beside the word in Asia/Shanghai time; missing timestamps are displayed as unknown, never replaced with an edit time.
 - Cross-device writes use server revisions or compare-and-swap semantics. Duplicate submissions are idempotent.
 - Child-facing errors are actionable but do not disclose provider payloads, credentials, internal job rows, or other users' data.
 
