@@ -3,6 +3,7 @@
 const { usernameKey } = require('./auth-service');
 const { hasChineseSentenceTranslation } = require('./context-sentence-translation');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { isConciseChineseMeaning } = require('./chinese-meaning');
 const { translateSupabaseContext, translateSupabaseWords } = require('./supabase-translations');
 
 const PAGE_SIZE = 1000;
@@ -170,7 +171,7 @@ function createSupabaseMaintenanceAdapter(client, options = {}) {
             for (const row of batch) {
                 const source = String(row.meaning_en).trim();
                 const translation = translatedValue(translations, source);
-                if (!hasMeaningfulChineseMeaning(translation)) {
+                if (!hasMeaningfulChineseMeaning(translation) || !isConciseChineseMeaning(translation)) {
                     cnSkipped++;
                     continue;
                 }

@@ -308,3 +308,16 @@ test('backfillTranslations skips a failed context translation and continues with
     assert.equal(fake.db.words[0].context_zh, null);
     assert.equal(fake.db.words[1].context_zh, '第二个句子的完整中文译文。');
 });
+
+
+test('translation backfill skips verbose word definitions but can still save full sentence translations', async () => {
+    const fake = createFakeSupabase({ users: [{ id: 'user-q', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{ id: 'word-q', user_id: 'user-q', meaning_en: 'a resident', meaning_zh: null, context_en: '', context_zh: null }] });
+    const adapter = createSupabaseMaintenanceAdapter(fake.client, {
+        translateWords: async () => ({ 'a resident': '城市或城镇的居民，尤指拥有法律承认的权利或义务的居民' }),
+    });
+    const result = await adapter.backfillTranslations('qiuqiu');
+    assert.equal(result.cnFilled, 0);
+    assert.equal(result.cnSkipped, 1);
+    assert.equal(fake.db.words[0].meaning_zh, null);
+});

@@ -24,6 +24,12 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 - Approved partial work and valid intermediate stage artifacts are durable. Retry resumes at the first missing or invalid stage. A changed input invalidates that stage and its downstream dependents only; it does not rerun unrelated valid upstream work or discard an independently approved variant.
 - Publishing is atomic at the selectable-pair boundary. Incomplete artifacts are not selectable, while the last valid active pair remains available until its replacement pair is ready.
 
+## Chinese meaning labels
+
+- Saved Chinese meaning labels use short translation words/phrases, usually 2–8 characters and at most 20 characters including punctuation. Preserve the selected concept; use a short qualifier when needed. Do not store definition paragraphs, examples or encyclopedia explanations as the Chinese label.
+- Multiple concepts already present in a legacy label are retained as separate short phrases; shortening never creates, merges or deletes meaning identities. The original English definition remains intact. Immutable historical assessment text is not rewritten for presentation changes.
+- Automatic translation, new word creation, parent edits and translation backfills enforce the same cap. An oversized provider value fails quality validation instead of being truncated or saved; a manual oversized label receives an actionable validation error.
+
 ## Learning and mastery invariants
 
 - The homepage offers random and self-selected formal challenges to children and parents. Selection uses owned meanings across pending, recognized and consolidating meanings. The picker hides definitions and groups equal spellings: choosing a word chooses all its non-mastered meanings together, each counting as one question. Parents do not need to authorize the child's selection.
