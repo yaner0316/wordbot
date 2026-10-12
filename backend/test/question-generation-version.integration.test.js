@@ -1003,11 +1003,44 @@ test('challenge demand preserves the edit fence and cross-user turn after urgent
 });
 
 
+test('archive upgrade handles 52 mixed legacy and UUID IDs without relaxing ownership', async () => {
+    const db = await createDatabase();
+    try {
+        await db.exec('alter table words add column if not exists feishu_record_id text');
+        await db.query('update words set feishu_record_id=$1 where id=$2', ['rec-legacy-base', WORD_ID]);
+        await db.query(`insert into words(id,user_id,word,meaning_en,level,feishu_record_id)
+            select gen_random_uuid(),$1,'sample-'||n,'sample meaning','middle',
+                case when n % 2 = 0 then 'rec-legacy-'||n else null end
+            from generate_series(1,51) n`, [USER_ID]);
+        const requested = (await db.query('select coalesce(feishu_record_id,id::text) as id from words where user_id=$1 order by id',[USER_ID])).rows.map(row=>row.id);
+        assert.equal(requested.length,52);
+        const oldMigration = MIGRATION_PATHS.find(file=>file.endsWith('20261012_parent_word_archive.sql'));
+        const fixMigration = MIGRATION_PATHS.find(file=>file.endsWith('20261012_parent_word_archive_legacy_ids.sql'));
+        await db.exec(await fs.readFile(oldMigration,'utf8'));
+        assert.equal((await db.query(VERIFICATION_SQL)).rows[0].archive_words_legacy_id_lookup,false);
+        await assert.rejects(db.query('select archive_words($1,$2::text[])',[USER_ID,requested]), /WORD_NOT_FOUND/);
+        assert.equal((await db.query('select count(*)::int n from words where deleted_at is not null')).rows[0].n,0);
+        await db.exec(await fs.readFile(fixMigration,'utf8'));
+        assert.equal((await db.query(VERIFICATION_SQL)).rows[0].archive_words_legacy_id_lookup,true);
+        const otherUser='99999999-1111-4111-8111-111111111111';
+        await db.query('insert into users(id,username) values($1,$2)',[otherUser,'other-child']);
+        await db.query("insert into words(id,user_id,word,meaning_en,level,feishu_record_id) values(gen_random_uuid(),$1,'outside','another child','middle','rec-foreign')",[otherUser]);
+        await assert.rejects(db.query('select archive_words($1,$2::text[])',[USER_ID,[requested[0],'rec-foreign']]), /WORD_NOT_FOUND/);
+        assert.equal((await db.query('select count(*)::int n from words where deleted_at is not null')).rows[0].n,0);
+        assert.equal((await db.query('select archive_words($1,$2::text[]) result',[USER_ID,requested])).rows[0].result.deleted,52);
+        await db.exec(await fs.readFile(fixMigration,'utf8'));
+        assert.equal((await db.query('select archive_words($1,$2::text[]) result',[USER_ID,requested])).rows[0].result.deleted,0);
+        assert.equal((await db.query('select count(*)::int n from active_words where user_id=$1',[USER_ID])).rows[0].n,0);
+        assert.equal((await db.query('select count(*)::int n from active_words where user_id=$1',[otherUser])).rows[0].n,1);
+    } finally { await db.close(); }
+});
+
 test('parent archive is atomic, repeatable, preserves formal history and excludes new supply', async () => {
     const db = await createDatabase();
     try {
         await db.exec('alter table words add column if not exists feishu_record_id text');
         await insertFormalWords(db);
+        await db.query('update words set feishu_record_id=$1 where id=$2', ['rec-legacy-history', formalWordId(1)]);
         await insertFormalCacheRows(db);
         await db.query('select create_formal_quiz_challenge($1,$2,$3,$4::jsonb,$5)',
             [USER_ID, 'parent-archive-history', 'middle', JSON.stringify(formalChallengeQuestions()), FORMAL_NOW]);
@@ -1015,7 +1048,7 @@ test('parent archive is atomic, repeatable, preserves formal history and exclude
         const before = await db.query('select question_snapshot from quiz_challenge_questions order by ordinal');
         await assert.rejects(db.query('select archive_words($1,$2::text[])', [USER_ID, [formalWordId(1), 'missing']]), /WORD_NOT_FOUND/);
         assert.equal((await db.query('select deleted_at from words where id=$1',[formalWordId(1)])).rows[0].deleted_at, null);
-        const result = await db.query('select archive_words($1,$2::text[]) as result', [USER_ID, [formalWordId(1), formalWordId(2)]]);
+        const result = await db.query('select archive_words($1,$2::text[]) as result', [USER_ID, ['rec-legacy-history', formalWordId(2)]]);
         assert.equal(result.rows[0].result.deleted, 2);
         const again = await db.query('select archive_words($1,$2::text[]) as result', [USER_ID, [formalWordId(1), formalWordId(2)]]);
         assert.equal(again.rows[0].result.deleted, 0);

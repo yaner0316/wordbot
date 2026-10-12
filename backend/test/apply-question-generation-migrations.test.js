@@ -89,6 +89,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261009_display_replenishment.sql',
       '20261010_challenge_demand_priority.sql',
       '20261012_parent_word_archive.sql',
+      '20261012_parent_word_archive_legacy_ids.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -173,6 +174,7 @@ test('missing DATABASE_URL fails before a database client is constructed', async
 });
 
 const COMPLETE_STATE = Object.freeze({
+  archive_words_legacy_id_lookup: true,
   archive_words_safe_search_path: true,
   archive_words_column: true,
   archive_words_active_view: true,
@@ -1132,6 +1134,14 @@ test('a database missing only custom challenge support applies only the new migr
   });
   assert.equal(result.status, 'applied');
   assert.deepEqual(readPaths, ['20261005_custom_challenges.sql']);
+});
+
+test('existing archive deployment applies only legacy ID repair', async () => {
+  const harness = createDatabaseHarness({states:[{...COMPLETE_STATE,archive_words_legacy_id_lookup:false},COMPLETE_STATE]});
+  const readPaths=[];
+  const result=await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- legacy ID repair';}});
+  assert.equal(result.status,'applied');
+  assert.deepEqual(readPaths,['20261012_parent_word_archive_legacy_ids.sql']);
 });
 
 test('existing deployment missing challenge demand applies only the new migration',async()=>{
