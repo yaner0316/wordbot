@@ -21,6 +21,7 @@ const {
     generateElementaryTemplateContext,
 } = require('./elementary-context');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
+const { normalizeChineseMeaning } = require('./chinese-meaning');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
@@ -2551,6 +2552,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     const editable = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'status', 'qualityFlags', 'qualityNote'];
     const qualityOrPosChanged = ['word', 'meaning', 'cnMeaning', 'pos', 'context', 'distractors', 'qualityFlags', 'qualityNote'].some(has);
     if (!editable.some(has)) throw new Error('WORD_UPDATE_FIELDS_REQUIRED');
+    const normalizedCnMeaning = has('cnMeaning') ? normalizeChineseMeaning(fields.cnMeaning) : null;
     const [row] = await resolveWordRows(client, user.id, word, fields);
     if (row.deleted_at) throw new Error('WORD_NOT_FOUND');
     const questionGenerationChanged = qualityOrPosChanged || (has('status')
@@ -2560,7 +2562,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     const payload = { updated_at: new Date().toISOString() };
     if (has('word')) payload.word = normalizeGenerationWord(fields.word);
     if (has('meaning')) payload.meaning_en = fields.meaning;
-    if (has('cnMeaning')) payload.meaning_zh = fields.cnMeaning;
+    if (has('cnMeaning')) payload.meaning_zh = normalizedCnMeaning;
     if (has('context')) payload.context_en = fields.context;
     if (has('distractors')) payload.distractors = fields.distractors;
     if (has('status')) payload.mastery_status = normalizeMasteryStatus(fields.status);
@@ -2758,14 +2760,15 @@ async function addWordWithClient(client, input) {
     const translatedMeaning = input.selectedSenseFlow && !input.meaningZh && !input.cnMeaning && typeof input.translateMeaning === 'function'
         ? await input.translateMeaning(meaning)
         : '';
-    if (input.selectedSenseFlow && !String(input.meaningZh || input.cnMeaning || translatedMeaning || '').trim()) {
+    const normalizedMeaningZh = normalizeChineseMeaning(input.meaningZh || input.cnMeaning || translatedMeaning);
+    if (input.selectedSenseFlow && !normalizedMeaningZh) {
         throw new Error('SELECTED_SENSE_TRANSLATION_REQUIRED');
     }
     const row = {
         user_id: user.id,
         word,
         meaning_en: meaning,
-        meaning_zh: input.meaningZh || input.cnMeaning || translatedMeaning || null,
+        meaning_zh: normalizedMeaningZh || null,
         context_en: input.context || input.contextEn || null,
         context_zh: input.contextZh || null,
         level: normalizeOptionalLearningLevel(input.level || user.learning_level),

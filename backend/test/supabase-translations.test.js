@@ -96,3 +96,20 @@ test('sentence translation retries one invalid provider envelope before succeedi
     assert.equal(translated, '我午饭后吃了一个苹果。');
     assert.equal(calls, 2);
 });
+
+
+test('word translation rejects a long definition instead of saving or truncating it', async () => {
+    await assert.rejects(translateSupabaseWords(['citizen'], {
+        request: async () => JSON.stringify({ citizen: '城市或城镇的居民，尤指拥有法律承认的权利或义务的居民' }),
+    }), error => error.code === 'TRANSLATION_QUALITY_INVALID');
+});
+
+test('word translation keeps concise multi-sense labels and gives the provider a short-phrase limit', async () => {
+    const label = '首领；（纹章）上部；主要部分、顶部';
+    const result = await translateSupabaseWords(['chief'], { request: async prompt => {
+        assert.match(prompt, /2.{0,3}8/);
+        assert.match(prompt, /20/);
+        return JSON.stringify({ chief: label });
+    } });
+    assert.deepEqual(result, { chief: label });
+});

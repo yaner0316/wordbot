@@ -100,3 +100,8 @@ Apply `20261010_challenge_demand_priority.sql` through the existing question-gen
 
 New account registration persists the existing default learning level so coverage reconciliation and display replenishment have a canonical level. It does not start the level-change cooldown or overwrite existing account settings. Learning-level changes retire cached rows instead of deleting them because formal challenges retain foreign-key references to the original cache; historical question snapshots remain readable. No schema migration or existing-user backfill is required for this code change.
 
+
+
+### Concise Chinese label normalization (2026-10-13)
+
+The user explicitly authorized shortening legacy Chinese label prose while retaining each concept. This cleanup uses a fixed locally reviewed plan, an original-row snapshot and per-row receipts. Conditional updates require the same word ID, owner, old Chinese label, English definition, edit timestamp and active state. Only meaning_zh and updated_at change. English definitions, saved mastery, entry time, meaning identities, immutable assessments and generation versions are preserved. This semantics-preserving label-only operation does not invalidate caches or request new model generation. Ordinary parent meaning changes continue to use the existing generation fence. Keep learner plans and snapshots local; they are not release artifacts.

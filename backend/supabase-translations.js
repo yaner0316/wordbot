@@ -1,4 +1,5 @@
 const https = require('https');
+const { isConciseChineseMeaning } = require('./chinese-meaning');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
@@ -83,6 +84,8 @@ async function translateSupabaseWords(words, options = {}) {
     const prompt = [
         'Translate these English vocabulary words into concise Simplified Chinese:',
         JSON.stringify(uniqueWords),
+        'Use short Chinese translation words or phrases, usually 2–8 characters, at most 20 characters per value including punctuation.',
+        'Preserve the supplied sense; if the source contains multiple concepts, summarize each with a short phrase separated by Chinese semicolons. Do not add meanings, full definition sentences, examples or encyclopedia details. Never truncate a phrase.',
         'Return only one JSON object mapping each original word to its Chinese meaning.',
     ].join('\n');
     const request = typeof options.request === 'function' ? options.request : callMiniMax;
@@ -99,7 +102,7 @@ async function translateSupabaseWords(words, options = {}) {
             throw translationError('TRANSLATION_RESPONSE_INVALID', 'Word translation response contained invalid JSON', error);
         }
         const translated = Object.fromEntries(uniqueWords.map(word => [word, String(parsed?.[word] || '').trim()]));
-        if (uniqueWords.some(word => !hasMeaningfulChineseMeaning(translated[word]))) {
+        if (uniqueWords.some(word => !hasMeaningfulChineseMeaning(translated[word]) || !isConciseChineseMeaning(translated[word]))) {
             throw translationError('TRANSLATION_QUALITY_INVALID', 'Word translation response was incomplete or non-Chinese');
         }
         return translated;

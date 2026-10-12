@@ -4586,3 +4586,35 @@ test('deletion racing a mastery fence lets the old assessment finish without res
     assert.deepEqual(result,[]);
     assert.equal(client.db.question_generation_jobs.length,0);
 });
+
+
+test('long Chinese meaning cannot enter the word library or its generation queue', async () => {
+    const client = seededClient();
+    const beforeWords = structuredClone(client.db.words);
+    const beforeJobs = structuredClone(client.db.question_generation_jobs);
+    await assert.rejects(createRawSupabaseDataAdapter(client).addWord({
+        username: 'qiuqiu', word: 'citizen', meaning: 'a resident or national',
+        cnMeaning: '城市或城镇的居民，尤指拥有法律承认的权利或义务的居民',
+    }), error => error.code === 'CHINESE_MEANING_TOO_LONG');
+    assert.deepEqual(client.db.words, beforeWords);
+    assert.deepEqual(client.db.question_generation_jobs, beforeJobs);
+});
+
+test('a long parent edit fails before the question-generation fence or any word write', async () => {
+    const client = seededClient();
+    const before = structuredClone(client.db);
+    const adapter = createRawSupabaseDataAdapter(client);
+    await assert.rejects(adapter.updateWord('qiuqiu', 'apple', {
+        cnMeaning: '这是一种通常在树上生长而且可以作为食物食用的水果',
+    }), error => error.code === 'CHINESE_MEANING_TOO_LONG');
+    assert.deepEqual(client.db, before);
+});
+
+test('word creation preserves a qualified concise label without changing meaning identity', async () => {
+    const client = seededClient();
+    const adapter = createRawSupabaseDataAdapter(client);
+    const label = '首领；（纹章）上部；主要部分、顶部';
+    const result = await adapter.addWord({ username: 'qiuqiu', word: 'chief', meaning: 'a leader or upper part', cnMeaning: label });
+    assert.equal(result.meaning_zh, label);
+    assert.equal(result.meaning_en, 'a leader or upper part');
+});
