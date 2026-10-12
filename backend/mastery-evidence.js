@@ -88,16 +88,27 @@ function formalFlagValue(value) {
     return ['true', '1', 'yes'].includes(normalized);
 }
 
-function isFormalAssessment(record) {
+function isRealContextAssessment(record) {
     const fields = record?.fields || {};
     const testId = fieldValue(fields.test_id).trim();
     if (!/^real(?:-|$)/.test(testId) || /^real-(?:review|preview|test)/.test(testId)) return false;
     const kind = fieldValue(fields.assessment_kind).trim().toLowerCase();
-    if (['review', 'test', 'preview', 'initial_context'].includes(kind)) return false;
+    if (['review', 'test', 'preview'].includes(kind)) return false;
     const rawFlag = fields.is_real_assessment !== undefined
         ? fields.is_real_assessment
         : record?.is_real_assessment;
     return formalFlagValue(rawFlag) !== false;
+}
+
+function isFormalAssessment(record) {
+    return isRealContextAssessment(record)
+        && fieldValue(record?.fields?.assessment_kind).trim().toLowerCase() !== 'initial_context';
+}
+
+function isSubmittedInitialContext(record) {
+    return isRealContextAssessment(record)
+        && fieldValue(record?.fields?.assessment_kind).trim().toLowerCase() === 'initial_context'
+        && fieldValue(record?.fields?.is_correct).trim() !== '';
 }
 
 function isSubmittedFormalQuiz(record) {
@@ -140,7 +151,9 @@ function evaluateMeaningMastery(records, isCorrectValue) {
         && latestCorrectIntervalMs >= 18 * 60 * 60 * 1000
         && latestCorrectIntervalMs <= 720 * 60 * 60 * 1000;
     const correctAfterLastWrongCount = correctAttempts.length;
-    const stage = attempts.length === 0 ? 'unseen' : mastered ? 'mastered' : correctAfterLastWrongCount >= 1 ? 'consolidating' : 'recognized';
+    // Initial learning establishes participation, but cannot supply a formal mastery success.
+    const hasLearned = attempts.length > 0 || records.some(isSubmittedInitialContext);
+    const stage = !hasLearned ? 'unseen' : mastered ? 'mastered' : correctAfterLastWrongCount >= 1 ? 'consolidating' : 'recognized';
     return { mastered, stage, evidenceCount: correctAttempts.length, uncertainCorrectCount: uncertainCorrect.length, correctAfterLastWrongCount, latestCorrectIntervalMs, distinctDays, distinctTypes };
 }
 function strongestStage(stages) {
