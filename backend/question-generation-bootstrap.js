@@ -27,6 +27,7 @@ function createDefaultCandidateBuilderOptions() {
         generateContext: generateReplacementContextWithAI,
         semanticAudit: auditUniqueAnswer,
         requireSemanticAudit: true,
+        requireTeachingAnalysis: true,
     };
 }
 

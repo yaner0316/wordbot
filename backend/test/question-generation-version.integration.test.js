@@ -45,6 +45,9 @@ create table public.assessments (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references public.users(id) on delete cascade,
     parent_review_id text,
+    question_text text,
+    options jsonb not null default '[]'::jsonb,
+    correct_answer text,
     review_status text
 );
 
@@ -120,8 +123,8 @@ function variantsJson({ aiAuditStatus = 'approved' } = {}) {
     ]);
 }
 
-async function createDatabase() {
-    const db = new PGlite();
+async function createDatabase(directory) {
+    const db = new PGlite(directory);
     await db.exec(BASE_SCHEMA_SQL);
     for (const migrationPath of MIGRATION_PATHS) {
         await db.exec(await fs.readFile(migrationPath, 'utf8'));
@@ -135,6 +138,49 @@ async function fenceWord(db) {
         [USER_ID, WORD_ID]
     );
 }
+test('teaching migration preserves legacy rows and persists publish/challenge/assessment snapshots across disk reopen',async()=>{
+ const os=require('node:os'),path=require('node:path');
+ const base=process.env.WORDBOT_FIX_EVIDENCE_DIR || (process.platform==='win32' ? path.join(__dirname,'.pglite-tmp') : os.tmpdir());
+ await fs.mkdir(base,{recursive:true});
+ const directory=await fs.mkdtemp(path.join(base,'wordbot-teaching-'));
+ let db=await createDatabase(directory);
+ try {
+  await insertFormalWords(db,1);await insertFormalCacheRow(db,{index:1,cacheQuestionId:formalCacheId('0000',1)});
+  const legacy=(await db.query('select to_jsonb(c) value from question_cache c where word_id=$1',[formalWordId(1)])).rows;
+  await db.exec(await fs.readFile(MIGRATION_PATHS.at(-1),'utf8'));
+  await db.exec(await fs.readFile(MIGRATION_PATHS.at(-1),'utf8'));
+  assert.deepEqual((await db.query('select to_jsonb(c) value from question_cache c where word_id=$1',[formalWordId(1)])).rows,legacy);
+  await db.query("select enqueue_question_generation_job_if_needed($1,$2,'cache_backfill')",[USER_ID,WORD_ID]);
+  const job=(await db.query("select * from claim_question_generation_jobs('teaching-worker',1,60000)")).rows[0];
+  const make=(index)=>{
+   const options=index?['A. apple','B. orange','C. pen','D. desk']:['A. apple','B. pear','C. chair','D. book'];
+   const meanings=index?['苹果','橙子','钢笔','书桌']:['苹果','梨','椅子','书'];
+   return {source_word_record_id:'rec-apple',level:'middle',question_type:'1',question_text:index?'She picked an _____ from the apple tree behind her house.':'The _____ for this pie came from an apple tree behind our house.',context_zh:index?'她从屋后的苹果树上摘了一个苹果。':'这个派所用的苹果来自我们屋后的苹果树。',options,answer:'A',option_meanings:meanings,correct_meaning:'苹果',ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1',question_fingerprint:'teaching-'+index,teaching_analysis:{schemaVersion:1,clue:'apple tree',clueReason:'苹果树是句中明确的水果来源。',correctWord:'apple',correctReason:'苹果树结的是苹果，所以对应苹果。',options:options.map((opt,i)=>({word:opt.slice(3),fits:i===0,meaning:meanings[i],reason:i===0?'苹果对应句中明确的苹果树来源。':'这个选项不是句中苹果树所结的果实。'}))}};
+  };
+  const variants=[make(0),make(1)];
+  const pub=(await db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[job.id,'teaching-worker',job.word_version,job.lease_token,JSON.stringify(variants)])).rows[0];
+  assert.equal(pub.published,2);
+  const cache=(await db.query("select * from question_cache where word_id=$1 and cache_state='active'",[WORD_ID])).rows[0];
+  assert.deepEqual(cache.teaching_analysis,variants[0].teaching_analysis);
+  const snapshot={challengeSize:2,meaning_id:WORD_ID,cache_question_id:cache.id,stem:cache.question_text,context:cache.question_text,question_fingerprint:cache.question_fingerprint,type:1,options:cache.options,answer:cache.answer,optionMeanings:cache.option_meanings,contextCN:cache.context_zh,correctMeaning:'苹果',teachingAnalysis:cache.teaching_analysis};
+  await db.query("update words set entered_at='2026-08-20T00:00:00Z' where id=$1",[WORD_ID]);
+  const legacySnapshot={...formalQuestionSnapshot(1),challengeSize:2};
+  await assert.rejects(db.query('select create_formal_quiz_challenge($1,$2,$3,$4::jsonb,$5::timestamptz)',[USER_ID,'real-missing-teaching','middle',JSON.stringify([{...snapshot,teachingAnalysis:null},legacySnapshot]),FORMAL_NOW]),/FORMAL_TEACHING_SNAPSHOT_REQUIRED/);
+  await db.query('select create_formal_quiz_challenge($1,$2,$3,$4::jsonb,$5::timestamptz)',[USER_ID,'real-teaching','middle',JSON.stringify([snapshot,legacySnapshot]),FORMAL_NOW]);
+  await db.query('insert into assessments(user_id,question_text,options,correct_answer,teaching_analysis) values($1,$2,$3::jsonb,$4,$5::jsonb)',[USER_ID,cache.question_text,JSON.stringify(cache.options),'A',JSON.stringify(cache.teaching_analysis)]);
+  const before=(await db.query("select (select jsonb_agg(teaching_analysis) from question_cache where word_id=$1) cache,(select jsonb_agg(question_snapshot) from quiz_challenge_questions) challenges,(select jsonb_agg(teaching_analysis) from assessments) assessments",[WORD_ID])).rows[0];
+  console.log('teaching persistence: snapshots saved, closing disk database');
+  await db.close();console.log('teaching persistence: reopening disk database');db=new PGlite(directory);
+  const after=(await db.query("select (select jsonb_agg(teaching_analysis) from question_cache where word_id=$1) cache,(select jsonb_agg(question_snapshot) from quiz_challenge_questions) challenges,(select jsonb_agg(teaching_analysis) from assessments) assessments",[WORD_ID])).rows[0];
+  assert.deepEqual(after,before);
+  console.log('teaching persistence: disk reopen snapshot equality passed');
+  const verified=(await db.query(VERIFICATION_SQL)).rows[0];
+  for(const key of ['teaching_analysis_cache_column','teaching_analysis_assessment_column','teaching_analysis_publish_contract','teaching_analysis_challenge_trigger']) assert.equal(verified[key],true,key);
+  const permission=(await db.query("select has_function_privilege('anon','public.is_valid_teaching_analysis(jsonb,text,jsonb,text)','execute') anon,has_function_privilege('authenticated','public.is_valid_teaching_analysis(jsonb,text,jsonb,text)','execute') authenticated,has_function_privilege('service_role','public.is_valid_teaching_analysis(jsonb,text,jsonb,text)','execute') service,(select prosecdef from pg_proc where oid='public.is_valid_teaching_analysis(jsonb,text,jsonb,text)'::regprocedure) definer")).rows[0];
+  assert.deepEqual(permission,{anon:false,authenticated:false,service:true,definer:false});
+  if(process.env.WORDBOT_FIX_EVIDENCE_DIR) await fs.writeFile(path.join(process.env.WORDBOT_FIX_EVIDENCE_DIR,'persistent-teaching.json'),JSON.stringify({passed:true,scope:'synthetic disk PGlite, real migration/RPC/constraints; no production export',checks:['idempotent-no-legacy-rewrite','atomic-publisher-persists-analysis','challenge-rejects-missing-snapshot','disk-close-reopen-equal','schema-verifier','service-only-invoker-permissions'],permission,snapshot:after},null,2));
+ } finally {await db.close();await fs.rm(directory,{recursive:true,force:true});}
+});
 
 function formalWordId(index) {
     return `33333333-3333-4333-8333-${String(index).padStart(12, '0')}`;

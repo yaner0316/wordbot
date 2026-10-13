@@ -19,12 +19,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reviewed Web contract for bounded selected-challenge preparation.
+      # Reviewed Web contract for challenge readiness, teaching snapshots and history reviews.
       - name: Check out production frontend contract
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: 3e7b89606b05df720298a3b6103d30cb863194db
+          ref: 49a86e225982d683de7655ab92e872d8e5aaed56
           path: web-contract
           persist-credentials: false
 

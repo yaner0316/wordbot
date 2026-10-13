@@ -75,3 +75,13 @@ test('English-only output never becomes a selectable sense and retries are bound
 test('unknown words return a distinct not-found error', async () => {
     await assert.rejects(lookupDictionarySenses('zzqqxx', { request: async () => '[]' }), /DICTIONARY_SENSES_NOT_FOUND/);
 });
+test('sense lookup retains distinct real example sentences and rejects a missing-target example', async () => {
+  const senses = await lookupDictionarySenses('take care of', { request: async () => JSON.stringify([
+    {partOfSpeech:'phrase',definition:'look after a person',cnMeaning:'照顾',example:'I take care of my little sister after school.',exampleCN:'放学后我照顾妹妹。'},
+    {partOfSpeech:'phrase',definition:'deal with a task',cnMeaning:'处理',example:'I take care of the paperwork before lunch.',exampleCN:'午饭前我处理文书工作。'},
+    {partOfSpeech:'phrase',definition:'watch out',cnMeaning:'当心',example:'This is a sentence about another word.',exampleCN:'这是另一个词的句子。'},
+  ]) });
+  assert.equal(senses[0].example, 'I take care of my little sister after school.');
+  assert.equal(senses[1].example, 'I take care of the paperwork before lunch.');
+  assert.equal(senses[2].example, undefined);
+});

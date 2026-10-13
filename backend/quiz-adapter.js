@@ -104,6 +104,7 @@ function toFeishuAssessmentRecord(row, { username, sourceRecordIdByWordId = new 
             options: JSON.stringify(row.options || []),
             context_cn: row.context_zh || row.context_cn || '',
             option_meanings: JSON.stringify(row.option_meanings || []),
+            teaching_analysis: row.teaching_analysis || null,
             test_time: assessedAt,
             level: normalizeOptionalLevel(row.level),
             source: row.source || '',
@@ -738,6 +739,7 @@ async function submitQuizWithDataSource({
                 answer: correctAnswer,
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
                 optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
+                teachingAnalysis: question.teachingAnalysis || null,
             });
             continue;
         }
@@ -761,6 +763,7 @@ async function submitQuizWithDataSource({
                 answer: correctAnswer,
                 translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
                 optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
+                teachingAnalysis: question.teachingAnalysis || null,
             });
             continue;
         }
@@ -785,6 +788,7 @@ async function submitQuizWithDataSource({
             correctAnswer,
             contextZh: question.contextCN || question.context_cn || question.contextTranslation || '',
             optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
+                teachingAnalysis: question.teachingAnalysis || null,
             assessmentKind: getSelectedSenseContextStage(
                 wordRowsByRecordId.get(sourceWordRecordId),
                 baseAssessmentRows.filter(row => String(row.source_word_record_id || '').trim() === sourceWordRecordId)
@@ -806,6 +810,7 @@ async function submitQuizWithDataSource({
             answer: correctAnswer,
             translation: String(question.contextCN || question.context_cn || question.contextTranslation || '').trim(),
             optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
+                teachingAnalysis: question.teachingAnalysis || null,
         });
     }
 

@@ -292,6 +292,9 @@ function defaultValidateCandidate(candidate, word) {
     if (candidate?.round_type && candidate.round_type !== 'primary') issues.push('round_type_not_primary');
     if (candidate?.word_id && String(candidate.word_id) !== String(word?.id)) issues.push('word_id_mismatch');
     if (candidate?.user_id && String(candidate.user_id) !== String(word?.user_id)) issues.push('user_id_mismatch');
+    if (String(candidate?.source_version || '').split('|').includes('teaching-analysis-v1')) {
+        issues.push(...require('./teaching-analysis').getTeachingAnalysisIssues({context:candidate.question_text,options:candidate.options,answer:candidate.answer},candidate.teaching_analysis));
+    }
     const questionType = Number(candidate?.question_type || candidate?.questionType);
     if (questionType === 1 && String(candidate?.ai_audit_status || '').trim().toLowerCase() !== 'approved') {
         issues.push('ai_audit_not_approved');

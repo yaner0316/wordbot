@@ -8,7 +8,7 @@ function normalizeLookupWord(value) {
     return word;
 }
 
-function normalizeDictionarySenses(entries) {
+function normalizeDictionarySenses(entries, word = '') {
     const seen = new Set();
     const seenDefinitions = new Set();
     const senses = [];
@@ -17,6 +17,13 @@ function normalizeDictionarySenses(entries) {
         const definition = String(entry?.definition || '').trim();
         const partOfSpeech = String(entry?.partOfSpeech || '').trim();
         const usageNote = String(entry?.usageNote || '').trim();
+        const example = String(entry?.example || '').trim();
+        const exampleCN = String(entry?.exampleCN || '').trim();
+        const target = word.toLowerCase().replace(/\s+/g,' ');
+        const hasExample = example.length >= 12 && example.length <= 240 && /[.!?]$/.test(example)
+            && !/[<>\u3400-\u9fff]/.test(example) && /[\u3400-\u9fff]/.test(exampleCN)
+            && exampleCN.length <= 180 && !/[<>]/.test(exampleCN)
+            && (!target || (` ${example.toLowerCase().replace(/[^a-z '-]/g,' ').replace(/\s+/g,' ')} `).includes(` ${target} `));
         const definitionKey = `${partOfSpeech}:${definition.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()}`;
         if (!/^[\u3400-\u9fff，、；（）·]{1,20}$/.test(cnMeaning) || !definition || definition.length > 280 || seen.has(cnMeaning)) continue;
         if (!/^(noun|verb|adjective|adverb|preposition|pronoun|conjunction|interjection|determiner|phrase)$/.test(partOfSpeech)) continue;
@@ -25,6 +32,7 @@ function normalizeDictionarySenses(entries) {
         seenDefinitions.add(definitionKey);
         senses.push({ partOfSpeech, definition, cnMeaning,
             ...(/^[\u3400-\u9fff，。、“”；：（）·？！\s]{1,60}$/.test(usageNote) ? { usageNote } : {}),
+            ...(hasExample ? {example,exampleCN} : {}),
         });
         if (senses.length === 8) break;
     }
@@ -41,6 +49,7 @@ async function lookupDictionarySenses(word, { request = requestChineseSenses } =
         '中文只写简洁释义，不加英文、词性、编号、例句或解释句。合并重复义项。不是有效英文词或无法确定含义时返回空数组，不要猜测或纠正拼写。',
         '同一个概念的近义中文译法只保留一项，不得把同义译词拆成多个义项；指人和指能力等真正不同的概念仍要区分。中文必须独立可懂，避免脱离搭配就不清楚的泛化译词；必要时用简短限定词，不列罕见或仅固定搭配才成立的孤立释义。',
         '每项另提供usageNote：全中文的简短用法提示，最多60字，解释这个意思指什么、与相近义项有何不同。不要重复中文释义，不包含英文。',
+        '每项提供example和exampleCN：真实自然的英文完整例句（含原词或短语）和准确中文翻译，体现该义项与相近义项的区别。不使用占位句或定义模板；无法确定自然用法时省略例句。',
         '例如bank: [{"cnMeaning":"银行","definition":"a financial institution","partOfSpeech":"noun"},{"cnMeaning":"河岸","definition":"the land along a river","partOfSpeech":"noun"}]',
     ].join('\n');
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -48,7 +57,7 @@ async function lookupDictionarySenses(word, { request = requestChineseSenses } =
         let parsed;
         try { parsed = JSON.parse(String(raw).replace(/^```(?:json)?\s*|\s*```$/gi, '').trim()); } catch { continue; }
         if (Array.isArray(parsed) && !parsed.length) throw new Error('DICTIONARY_SENSES_NOT_FOUND');
-        const senses = normalizeDictionarySenses(parsed);
+        const senses = normalizeDictionarySenses(parsed, normalized);
         if (senses.length) return senses;
     }
     throw new Error('DICTIONARY_LOOKUP_FAILED');

@@ -14,6 +14,21 @@ const {
 const { getOverlappingOptionPairs } = require('../option-meaning-distinctness');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
+test('submitted teaching analysis stays the original historical snapshot when cache analysis later changes',async()=>{
+ const analysis={schemaVersion:1,clue:'borrowed books',clueReason:'借阅图书是句中给出的关键线索。',correctWord:'library',correctReason:'图书馆提供图书借阅服务。',options:[
+  {word:'library',fits:true,meaning:'图书馆',reason:'图书馆提供句中所需的借书服务。'},
+  {word:'cafeteria',fits:false,meaning:'食堂',reason:'食堂提供饭菜，与借阅图书服务不同。'},
+  {word:'gymnasium',fits:false,meaning:'体育馆',reason:'体育馆用于运动，与借阅图书服务不同。'},
+  {word:'auditorium',fits:false,meaning:'礼堂',reason:'礼堂用于集会，与借阅图书服务不同。'},
+ ]};
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words:[{id:'w',feishu_record_id:'w',user_id:'u',word:'library',meaning_zh:'图书馆'}]});
+ const adapter=createSupabaseDataAdapter(client);
+ await adapter.submitAssessment({username:'child',word:'library',wordRecordId:'w',testId:'real-snapshot',questionType:1,questionText:'We borrowed books from the _____ yesterday.',contextCN:'昨天我们从图书馆借了书。',options:['A. library','B. cafeteria','C. gymnasium','D. auditorium'],optionMeanings:['图书馆','食堂','体育馆','礼堂'],correctAnswer:'A',yourAnswer:'D',correctness:'wrong',teachingAnalysis:analysis});
+ client.db.question_cache.push({id:'different-cache',user_id:'u',word_id:'w',teaching_analysis:{clue:'changed'}});
+ const history=await adapter.getQuizHistory('child','real');
+ assert.deepEqual(history[0].questions[0].teachingAnalysis,analysis);
+ assert.equal(history[0].correct,0);assert.equal(history[0].total,1);
+});
 
 function createSupabaseDataAdapter(client, options = {}) {
     const requestedTranslateWords = options.translateWords || (async words =>
@@ -36,6 +51,37 @@ const MIDDLE = String.fromCharCode(0x4e2d, 0x5b66);
 const contextualDistractorsForTest = async ({ excludedDistractors = [] }) => excludedDistractors.length
     ? ['delta', 'echo', 'foxtrot']
     : ['alpha', 'bravo', 'charlie'];
+
+test('history review resumes latest wrong round, deduplicates meanings, excludes archives and finishes once', async()=>{
+    const words=[{id:'w',user_id:'u',word:'library',meaning_zh:'图书馆',mastery_status:'recognized'}, {id:'gone',user_id:'u',word:'apple',meaning_zh:'苹果',deleted_at:'2026-10-12T00:00:00Z'}];
+    const source={user_id:'u',test_id:'real-source',question_type:'1',word_id:'w',source_word_record_id:'w',word_snapshot:'library',submitted_answer:'B',correct_answer:'A',is_correct:'wrong',assessed_at:'2026-10-10T00:00:00Z'};
+    const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words,assessments:[{...source,id:'s1'},{...source,id:'s2'},{...source,id:'s3',word_id:'gone',source_word_record_id:'gone',word_snapshot:'apple'}]});
+    const adapter=createSupabaseDataAdapter(client);
+    const original=structuredClone(client.db.assessments);
+    const first=await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+    assert.equal(first.questions.length,1);
+    const retry=await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+    assert.equal(retry.reviewId,first.reviewId);
+    await adapter.submitReviewRound({userId:'child',reviewId:first.reviewId,answers:[{text:'图书馆',confidence:'sure'}]});
+    const completed=await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+    assert.equal(completed.complete,true);
+    assert.equal(completed.reason,'review_complete');
+    assert.deepEqual(client.db.assessments.slice(0,3),original);
+});
+test('archive during a review maps the surviving answer to its own stored row only',async()=>{
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words:[{id:'first',user_id:'u',word:'apple',meaning_zh:'苹果'},{id:'second',user_id:'u',word:'library',meaning_zh:'图书馆'}],assessments:['first','second'].map((id,i)=>({id:'s'+i,user_id:'u',test_id:'real-source',word_id:id,source_word_record_id:id,question_type:'1',word_snapshot:id,is_correct:'wrong',submitted_answer:'B',correct_answer:'A',assessed_at:'2026-10-10T00:00:0'+i+'Z'}))});
+ const adapter=createSupabaseDataAdapter(client),original=structuredClone(client.db.assessments);
+ const initial=await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+ client.db.words[0].deleted_at='2026-10-13T00:00:00Z';
+ const archivedReview=structuredClone(client.db.assessments.find(row=>row.test_id===initial.reviewId&&row.word_id==='first'));
+ const resumed=await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+ assert.deepEqual(resumed.questions.map(q=>q.recordId),['second']);
+ const submitted=await adapter.submitReviewRound({userId:'child',reviewId:resumed.reviewId,answers:[{text:'图书馆',confidence:'sure'}]});
+ assert.equal(submitted.correct,1);assert.equal(submitted.total,1);
+ assert.deepEqual(client.db.assessments.find(row=>row.test_id===initial.reviewId&&row.word_id==='first'),archivedReview);
+ assert.equal(client.db.assessments.find(row=>row.test_id===initial.reviewId&&row.word_id==='second').submitted_answer,'图书馆');
+ assert.deepEqual(client.db.assessments.slice(0,2),original);
+});
 
 test('Supabase data adapter exposes database-backed child authentication', async () => {
     const salt = '00112233445566778899aabbccddeeff';
@@ -1744,6 +1790,7 @@ test('concurrent review generation returns one active round', async () => {
 test('review active, defer, and summary flows use Supabase assessment metadata', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
+        words: [{id:'word-1',feishu_record_id:'rec-word-1',user_id:'user-1',word:'apple',meaning_zh:'苹果'}],
         assessments: [{ id: 'review-row-1', user_id: 'user-1', source_word_record_id: 'rec-word-1', test_id: 'real-review-r1', source_test_id: 'real-source', word_snapshot: 'Apple', question_type: '4', correct_answer: 'apple', submitted_answer: null, is_correct: null, assessed_at: '2026-07-21T00:00:00.000Z', review_status: 'active', assessment_kind: 'review' }],
     });
     const adapter = createSupabaseDataAdapter(client, {
@@ -1762,7 +1809,7 @@ test('review active, defer, and summary flows use Supabase assessment metadata',
 test('submitReviewRound scores Supabase type-four review rows', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
-        words: [],
+        words: [{id:'word-1',feishu_record_id:'rec-word-1',user_id:'user-1',word:'apple',meaning_zh:'苹果'}],
         assessments: [{
             id: 'review-row-1',
             user_id: 'user-1',

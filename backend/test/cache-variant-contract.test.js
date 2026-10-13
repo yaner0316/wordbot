@@ -15,6 +15,20 @@ const word = {
     distractors: ['pear', 'desk', 'chair'],
 };
 const translateWords = async values => Object.fromEntries(values.map(value => [value, value === 'apple' ? '苹果' : '干扰项']));
+test('legacy partial audit missing teaching resumes only the audit and persists the new analysis',async()=>{
+ const saved=[],options=['A. apple','B. pear','C. chair','D. book'];
+ let audits=0,contexts=0,translations=0,distractors=0;
+ const filled='The child picked an apple from the tree used to grow apples.';
+ const rows=await buildCacheQuestionRowsForWord({user,word:{...word,context_en:filled},level:LEVEL,requiredCount:1,allowPartialCandidates:true,requireSemanticAudit:true,requireTeachingAnalysis:true,
+  generationCheckpoint:{variants:[{slot:1,context:filled,distractors:['pear','chair','book'],optionWords:['apple','pear','chair','book'],options,answer:'A',optionMeanings:['苹果','梨','椅子','书'],contextTranslation:'这个孩子从结苹果的树上摘了一个苹果。',localValidated:true,audit:{approved:true,status:'approved',validLetters:['A']}}]},
+  saveGenerationCheckpoint:async value=>saved.push(structuredClone(value)),
+  generateContext:async()=>{contexts++;return filled;},generateDistractors:async()=>{distractors++;return ['pear','chair','book'];},
+  translateWords:async()=>{translations++;return {};},translateContext:async()=>{translations++;return '';},
+  semanticAudit:async q=>{audits++;return {approved:true,status:'approved',validLetters:[q.answer],teachingAnalysis:{schemaVersion:1,clue:'grow apples',clueReason:'树上结苹果是句中明确的来源。',correctWord:'apple',correctReason:'这种树结的是苹果，因此要填苹果。',options:q.options.map((opt,i)=>({word:opt.slice(3),fits:i===0,meaning:['苹果','梨','椅子','书'][i],reason:i===0?'苹果对应句中明确的果实来源。':'这个选项不符合句中明确的果实来源。'}))}};}
+ });
+ assert.equal(rows.length,1);assert.equal(audits,1);assert.equal(contexts,0);assert.equal(translations,0);assert.equal(distractors,0);
+ assert.equal(rows[0].teaching_analysis.schemaVersion,1);assert.match(rows[0].source_version,/teaching-analysis-v1/);assert.equal(saved.at(-1).variants[0].row.teaching_analysis.schemaVersion,1);
+});
 
 const translateContext = async context => context.includes('packed')
     ? '\u8fd9\u4e2a\u5b69\u5b50\u4e3a\u957f\u9014\u65c5\u884c\u88c5\u4e86\u4e00\u4e2a\u82f9\u679c\u3002'

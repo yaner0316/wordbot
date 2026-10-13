@@ -54,6 +54,12 @@ function makeTraversalRows(count, usedCount = 0, overrides = {}) {
         ...overrides,
     }));
 }
+test('new teaching policy cannot supply a missing or contradictory snapshot while legacy policy stays compatible',()=>{
+    const legacy=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2'});
+    assert.equal(getCacheQuestionReadinessIssues(legacy,{requireAiAudit:true}).length,0);
+    const current={...legacy,source_version:legacy.source_version+'|teaching-analysis-v1'};
+    assert.ok(getCacheQuestionReadinessIssues(current,{requireAiAudit:true}).includes('teaching_analysis_missing'));
+});
 test('builds an update payload for a replacement fill-in cache question', () => {
     const fields = buildCacheQuestionFields({
         question: {

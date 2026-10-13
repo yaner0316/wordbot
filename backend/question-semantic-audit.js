@@ -1,4 +1,5 @@
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
+const { teachingAnalysisFromAudit } = require('./teaching-analysis');
 
 const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
 
@@ -40,7 +41,9 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
         'Judge each option in the exact sentence, not merely its dictionary meaning.',
         'Reject the question if any other option can plausibly complete the sentence in ordinary child-facing English.',
         'Do not accept a merely better answer: approve only when every other option is clearly wrong in this exact context.',
-        'Return JSON only: {"validLetters":["A"],"certain":true,"reason":"short reason"}.',
+        'Return JSON only: {"validLetters":["A"],"certain":true,"reason":"short reason","clue":"exact quotation from the sentence outside the blank","clueReason":"中文解释线索","correctReason":"中文解释正确项的适用理由","optionJudgments":[{"letter":"A","fits":true,"meaning":"此项语境义","reason":"中文解释为何能或不能成立"}]}. Include all four options once.',
+        'First substitute EACH option into the sentence and judge whether it is plausible. The expected answer is not evidence. If even one distractor fits an ordinary interpretation, reject it. The option fits judgments and validLetters must agree.',
+        'Use concrete sentence clues in every reason. Do not invent facts to exclude distractors; color, location or a preference alone often cannot uniquely identify a fruit, sport or venue. Reject ambiguous questions even if the intended word is more typical.',
         'If more than one option could naturally fit, list all of them. If uncertain, set certain false.',
         JSON.stringify({ context: question?.context, options: question?.options, optionMeanings: question?.optionMeanings, expectedAnswer: answer }),
     ].join('\n');
@@ -49,13 +52,15 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
         const validLetters = Array.isArray(parsed?.validLetters)
             ? [...new Set(parsed.validLetters.map(value => String(value).trim().toUpperCase()).filter(value => /^[A-D]$/.test(value)))]
             : [];
-        const approved = parsed?.certain === true && validLetters.length === 1 && validLetters[0] === answer;
+        const teachingAnalysis = teachingAnalysisFromAudit(question, parsed);
+        const approved = parsed?.certain === true && validLetters.length === 1 && validLetters[0] === answer && !!teachingAnalysis;
         return {
             approved,
             status: approved ? 'approved' : 'rejected',
             validLetters,
             reason: String(parsed?.reason || '').slice(0, 200),
             policyVersion: CURRENT_SEMANTIC_AUDIT_POLICY_VERSION,
+            ...(approved ? {teachingAnalysis} : {}),
         };
     } catch (error) {
         return {

@@ -90,6 +90,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261010_challenge_demand_priority.sql',
       '20261012_parent_word_archive.sql',
       '20261012_parent_word_archive_legacy_ids.sql',
+      '20261013_teaching_analysis_snapshots.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -174,6 +175,10 @@ test('missing DATABASE_URL fails before a database client is constructed', async
 });
 
 const COMPLETE_STATE = Object.freeze({
+  teaching_analysis_cache_column: true,
+  teaching_analysis_assessment_column: true,
+  teaching_analysis_publish_contract: true,
+  teaching_analysis_challenge_trigger: true,
   archive_words_legacy_id_lookup: true,
   archive_words_safe_search_path: true,
   archive_words_column: true,

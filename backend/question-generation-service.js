@@ -78,7 +78,7 @@ function rowCheckpoint(row, slot, wordText) {
             : Array.isArray(row.optionMeanings) ? [...row.optionMeanings] : [],
         localValidated: true,
         audit: String(row.ai_audit_status || '').toLowerCase() === 'approved'
-            ? { approved: true, status: 'approved', validLetters: [row.answer] }
+            ? { approved: true, status: 'approved', validLetters: [row.answer], teachingAnalysis: row.teaching_analysis || null }
             : undefined,
         row,
     };

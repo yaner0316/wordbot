@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
 const { getContextTranslationIssues } = require('./context-sentence-translation');
 const { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION } = require('./question-semantic-audit');
+const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
 
 const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
@@ -128,6 +129,7 @@ function normalizeCacheRow(row) {
             questionFingerprint: fields.question_fingerprint || row.question_fingerprint || '',
             aiAuditStatus: fields.ai_audit_status || '',
             sourceVersion: fields.source_version || '',
+            teachingAnalysis: fields.teaching_analysis || null,
         },
     };
 }
@@ -141,6 +143,9 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
+    if (String(normalized.sourceVersion || '').split('|').includes(TEACHING_ANALYSIS_POLICY)) {
+        issues.push(...getTeachingAnalysisIssues(question,question.teachingAnalysis));
+    }
     if (['retired', 'replace_pending'].includes(normalized.cacheState)) issues.push('inactive_cache_state');
     if (normalized.qualityStatus !== QUESTION_CACHE_STATUS.READY) issues.push('not_ready_status');
     if (requireAiAudit && Number(question.type) === 1

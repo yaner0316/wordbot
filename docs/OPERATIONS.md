@@ -1,5 +1,15 @@
 # WordBot Operations
 
+## Teaching snapshots and history review (2026-10-13)
+
+Apply `20261013_teaching_analysis_snapshots.sql` through the existing migration runner before this backend. It adds nullable `teaching_analysis` JSONB to cache and assessments, extends the installed atomic publisher while retaining lease/archive/edit fences and ACLs, and validates tagged cache rows and challenge snapshots. The change is repeatable; an otherwise current schema applies only this migration. No startup-time DDL, data backfill, cache purge or history rewrite occurs.
+
+Newly audited rows carry `teaching-analysis-v1`. The semantic audit must supply all four contextual judgments and grounded reasons; missing, conflicting or ungrounded output fails closed and remains in the existing durable retry/checkpoint flow. A legacy partial audit without analysis resumes at the audit only, reusing saved context, layout, meanings and translation. Old complete `unique-answer-v2` rows stay compatible and are not mass-enqueued merely for missing analysis. Normal display replacement gradually supplies the new snapshots; old history explicitly reports absent teaching fields. This compatibility does not certify the semantic correctness of any particular legacy question.
+
+History review uses the existing `/api/reviews` chain. Restoration/submission apply the same active-meaning filter and stable ordering; a word set changed since display is rejected for reload rather than assigning answers to another row. Original formal assessments and game minutes are preserved. Completed chains are not restarted; archived-only and no-wrong-answer responses are explicit.
+
+The reported legacy `shiny red` apple/grape question remains original historical evidence. Its scoring is not changed by this release. Any stored-question repair must first be a separately reviewed plan matching exact owner/meaning/stem/options/fingerprint and current cache version, with a per-row receipt. Do not run a bulk production export, retroactive analysis generation or answer rewrite. Local tests, Edge fixtures and model probes are preparation evidence; release completion still requires main CI, migration verification, live SHA and the authorized production readback.
+
 ## Parent library archive (2026-10-12)
 
 Follow-up `20261012_parent_word_archive_legacy_ids.sql` repairs legacy Feishu ID lookup: the old table alias `word` collided with the `word` text column inside `to_jsonb(word)`, so legacy IDs were rejected. It replaces only the archive RPC using the unambiguous `owned_word` row alias, retaining ownership, locking, history and permissions. The verifier detects this repair; an otherwise current deployment applies only this follow-up. No data backfill or automatic user deletion is performed. UUID and legacy IDs may be mixed in one batch.

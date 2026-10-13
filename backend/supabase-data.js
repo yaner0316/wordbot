@@ -26,6 +26,7 @@ const { isContextSentenceTranslationAcceptable } = require('./context-sentence-t
 const { generateSupabaseDistractors } = require('./supabase-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
 const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
+const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
 const { createSupabaseAdminAdapter } = require('./supabase-admin');
 const { createSupabaseAuthAdapter } = require('./supabase-auth');
@@ -602,6 +603,7 @@ function toHistoryQuestion(row, feedback = {}, word = {}) {
         contextCN,
         options,
         optionMeanings,
+        ...(row?.teaching_analysis ? {teachingAnalysis:row.teaching_analysis} : {}),
         yourAnswer: answer.option,
         confidence: answer.confidence,
         correctAnswer: String(row?.correct_answer || '').trim(),
@@ -624,7 +626,7 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
         const testId = String(row.test_id || '').trim();
         if (!testId) continue;
         if (!groups.has(testId)) {
-            groups.set(testId, { testId, mode: normalizedMode, time: 0, questions: [], correct: 0, total: 0 });
+            groups.set(testId, { testId, mode: normalizedMode, time: 0, questions: [], correct: 0, total: 0, ...(row.source_test_id ? {sourceTestId:row.source_test_id} : {}) });
         }
         const group = groups.get(testId);
         const timestamp = Date.parse(String(row.assessed_at || row.created_at || '')) || 0;
@@ -636,7 +638,10 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
         group.total++;
         if (question.isCorrect) group.correct++;
     }
-    return [...groups.values()].sort((left, right) => right.time - left.time);
+    return [...groups.values()].map(group=>{
+        const first=group.sourceTestId ? groups.get(group.sourceTestId) : null;
+        return first ? {...group,firstResult:{correct:first.correct,total:first.total}} : group;
+    }).sort((left, right) => right.time - left.time);
 }
 
 function decorateAssessmentRows(rows, user) {
@@ -773,6 +778,7 @@ function toQuestionCacheStatusRecord(row, { user, word }) {
             options: JSON.stringify(row.options || []),
             answer: row.answer || '',
             option_meanings: JSON.stringify(row.option_meanings || []),
+            teaching_analysis: row.teaching_analysis || null,
             correct_meaning: row.correct_meaning || '',
             used_count: Number(row.used_count || 0),
             generated_at: toMillis(row.generated_at || row.created_at),
@@ -883,7 +889,7 @@ async function getQuestionCacheStatusWithClient(client, username) {
         fetchAllRows(
             () => client
                 .from('question_cache')
-                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, ai_audit_status, source_version, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, correct_meaning, used_count, generated_at')
+                .select('id, feishu_record_id, user_id, word_id, source_word_record_id, level, round_type, quality_status, ai_audit_status, source_version, cache_state, variant_slot, question_fingerprint, available_from, question_type, question_text, context_zh, options, answer, option_meanings, teaching_analysis, correct_meaning, used_count, generated_at')
                 .eq('user_id', user.id)
                 .order('generated_at', { ascending: true })
                 .order('id', { ascending: true }),
@@ -1259,7 +1265,8 @@ function countDistractorOverlap(left, right) {
     const rightSet = new Set((right || []).map(value => String(value || '').trim().toLowerCase()));
     return (left || []).filter(value => rightSet.has(String(value || '').trim().toLowerCase())).length;
 }
-async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, reportRejection = () => {}, variantCheckpoint = {}, saveVariantCheckpoint = async () => {}, knownDistractorMeanings = null }) {
+async function buildType1CacheRow({ user, word, level, context, distractors, slot, now, translateWords, translateContext, semanticAudit, requireSemanticAudit = false, requireTeachingAnalysis = false, reportRejection = () => {}, variantCheckpoint = {}, saveVariantCheckpoint = async () => {}, knownDistractorMeanings = null }) {
+    requireTeachingAnalysis = requireTeachingAnalysis || semanticAudit === auditUniqueAnswer;
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
     let state = { ...variantCheckpoint, slot, context };
@@ -1350,7 +1357,8 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return requireSemanticAudit ? null : row;
     }
 
-    const audit = state.audit || await semanticAudit({
+    const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues({context:blankedContext,options,answer},state.audit.teachingAnalysis).length);
+    const audit = (reusableAudit ? state.audit : null) || await semanticAudit({
         type: 1,
         word: wordText,
         level,
@@ -1373,6 +1381,17 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     }
     row.ai_audit_status = 'approved';
     row.source_version = buildAttestedQuestionSourceVersion('supabase-contextual-variant-v3');
+    const teachingAnalysis = audit.teachingAnalysis;
+    const teachingIssues = getTeachingAnalysisIssues({context:blankedContext,options,answer},teachingAnalysis);
+    if (requireTeachingAnalysis && teachingIssues.length) {
+        teachingIssues.forEach(reportRejection);
+        await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
+        return null;
+    }
+    if (!teachingIssues.length) {
+        row.teaching_analysis = teachingAnalysis;
+        row.source_version += '|' + TEACHING_ANALYSIS_POLICY;
+    }
     const finalIssues = getCacheQuestionReadinessIssues(
         toQuestionCacheStatusRecord(row, { user, word }),
         { requireAiAudit: true }
@@ -1405,7 +1424,7 @@ async function persistTranslatedWordMeaning(client, word, meaning) {
     }
 }
 
-async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, allowPartialCandidates = false, reportRejection = () => {}, requiredCount = 2, approvedVariants = [], generationCheckpoint = null, saveGenerationCheckpoint = async () => {} }) {
+async function buildCacheQuestionRowsForWord({ client, user, word, level, roundType, now = Date.now(), generateDistractors, translateWords, translateContext, generateContext, semanticAudit, renewLease, requireSemanticAudit = false, requireTeachingAnalysis = false, allowPartialCandidates = false, reportRejection = () => {}, requiredCount = 2, approvedVariants = [], generationCheckpoint = null, saveGenerationCheckpoint = async () => {} }) {
     if (!isValidGenerationWord(word.word)) return [];
     const wordText = normalizeGenerationWord(word.word).toLowerCase();
     const targetCount = Math.max(1, Math.min(2, Number(requiredCount) || 2));
@@ -1519,11 +1538,19 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             ? variantCheckpoint.distractors
             : await generateForContext(context, approvedDistractors[0] || []);
         if (!initialDistractors) { reportRejection('distractor_generation_failed'); continue; }
+        const savedWords = variantCheckpoint.optionWords;
+        const savedMeanings = variantCheckpoint.optionMeanings;
+        const expectedWords = [wordText,...initialDistractors];
+        const canReuseMeanings = Array.isArray(savedWords) && savedWords.length === 4 && new Set(savedWords).size === 4
+            && expectedWords.every(value=>savedWords.includes(value)) && Array.isArray(savedMeanings) && savedMeanings.length === 4
+            && savedMeanings.every(hasMeaningfulChineseMeaning) && !getOverlappingOptionPairs(savedMeanings).length;
+        const savedMeaningByWord = canReuseMeanings ? Object.fromEntries(savedWords.map((value,index)=>[value,savedMeanings[index]])) : null;
         const resolved = await resolveDistinctOptionDistractors({
             distractors: initialDistractors,
             wordText,
             meaning,
-            translateWords,
+            translateWords: savedMeaningByWord ? async values=>values.every(value=>savedMeaningByWord[value])
+                ? Object.fromEntries(values.map(value=>[value,savedMeaningByWord[value]])) : translateWords(values) : translateWords,
             regenerate: excluded => generateForContext(context, [...(approvedDistractors[0] || []), ...excluded]),
             reportRejection,
         });
@@ -1543,6 +1570,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             translateWords,
             translateContext,
             semanticAudit,
+            requireTeachingAnalysis,
             requireSemanticAudit,
             variantCheckpoint,
             saveVariantCheckpoint: persistVariant,
@@ -2038,6 +2066,7 @@ function buildAssessmentRow(input, user, wordRow) {
         context_zh: input.contextZh || input.contextCN || null,
         options: Array.isArray(input.options) ? input.options : [],
         option_meanings: Array.isArray(input.optionMeanings) ? input.optionMeanings : [],
+        teaching_analysis: input.teachingAnalysis || null,
         correct_answer: input.correctAnswer || null,
         submitted_answer: String(input.yourAnswer || '').trim(),
         answer_confidence: normalizeConfidence(input.confidence),
@@ -2048,6 +2077,9 @@ function buildAssessmentRow(input, user, wordRow) {
     };
     if (!row.test_id) throw new Error('TEST_ID_REQUIRED');
     if (!row.word_snapshot) throw new Error('WORD_REQUIRED');
+    if (input.teachingAnalysis && getTeachingAnalysisIssues({context:row.question_text,options:row.options,answer:row.correct_answer},input.teachingAnalysis).length) {
+        throw new Error('FORMAL_TEACHING_ANALYSIS_INVALID');
+    }
     if (isRealAssessment(row.test_id) && row.question_type === '1' && row.assessment_kind !== 'review') {
         const completeMeanings = validChineseMeanings(row.option_meanings);
         const answerIndex = 'ABCD'.indexOf(String(row.correct_answer || '').trim().toUpperCase());
@@ -2103,13 +2135,21 @@ function isCorrectAssessmentRow(row) {
 }
 
 async function getWordInfoForReview(client, userId, row) {
-    let query = client.from('words').select('*');
+    let query = client.from('words').select('*').eq('user_id',userId);
     if (row.word_id) query = query.eq('id', row.word_id);
     else query = query.eq('user_id', userId).eq('feishu_record_id', row.source_word_record_id);
     const { data, error } = await query.maybeSingle();
     ensureNoError(error, 'getWordInfoForReview');
     if (!data) throw new Error('Word record not found for review generation');
     return data;
+}
+async function activeReviewRows(client,userId,rows) {
+    const active=[],seen=new Set();
+    for (const row of [...rows].sort((a,b)=>toMillis(a.assessed_at)-toMillis(b.assessed_at)||String(a.id).localeCompare(String(b.id)))) {
+        const word=await getWordInfoForReview(client,userId,row);
+        if (!word.deleted_at && !seen.has(word.id)) {seen.add(word.id);active.push(row);}
+    }
+    return active;
 }
 
 function isMissingReviewParentColumnError(error) {
@@ -2128,7 +2168,10 @@ async function findExistingReviewRoundWithClient(client, user, sourceTestId, par
     catch (error) { if (!isMissingReviewParentColumnError(error)) throw error; rows = await loadRows(false); }
     if (parentReviewId) rows = rows.filter(row => !Object.prototype.hasOwnProperty.call(row, 'parent_review_id') || row.parent_review_id === parentReviewId);
     if (!rows.length) return null;
-    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(rows, user), rows[0].test_id);
+    const newest = [...rows].sort((a,b)=>Number(b.review_round || 1)-Number(a.review_round || 1))[0];
+    const activeRows = await activeReviewRows(client,user.id,rows.filter(row=>row.test_id === newest.test_id));
+    if (!activeRows.length) return {sourceTestId,complete:true,reason:'archived_words',questions:[]};
+    return buildSupabaseReviewRoundResponse(decorateAssessmentRows(activeRows, user), newest.test_id);
 }
 function buildSupabaseReviewRoundResponse(rows, reviewId) {
     if (!rows.length) return null;
@@ -2156,7 +2199,7 @@ function buildSupabaseReviewRoundResponse(rows, reviewId) {
 
 async function createReviewRoundWithClient(client, { userId, sourceTestId, parentReviewId = '' }) {
     const user = await requireUserByUsername(client, userId);
-    const sourceRows = await getAssessmentsForTestWithClient(client, userId, parentReviewId || sourceTestId);
+    let sourceRows = await getAssessmentsForTestWithClient(client, userId, parentReviewId || sourceTestId);
     if (!sourceRows.length) throw new Error('Review source records not found');
     if (!sourceRows.every(row => row.user_id === user.id)) throw new Error('Review source does not belong to current user');
     if (!sourceRows.every(isSubmittedAssessmentRow)) throw new Error('Source assessment must be submitted before review');
@@ -2164,15 +2207,27 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     const existing = await findExistingReviewRoundWithClient(client, user, sourceTestId, parentReviewId);
     if (existing) return existing;
 
+    if (!parentReviewId) {
+        const chain = await fetchAllRows(()=>client.from('assessments').select('*').eq('user_id',user.id).eq('source_test_id',sourceTestId).order('assessed_at',{ascending:true}).order('id',{ascending:true}),'resumeHistoryReview');
+        const latest = [...chain].sort((a,b)=>Number(b.review_round || 1)-Number(a.review_round || 1)||toMillis(b.assessed_at)-toMillis(a.assessed_at))[0];
+        if (latest) {
+            const previousRound = chain.filter(row=>row.test_id === latest.test_id);
+            if (previousRound.every(isCorrectAssessmentRow)) return {sourceTestId,complete:true,reason:'review_complete',questions:[]};
+            parentReviewId = latest.test_id;
+            sourceRows = previousRound;
+        }
+    }
+
     const allWords = await getWordsForUserWithClient(client, userId);
     const reviewRows = [];
+    const seenMeanings = new Set();
     for (const row of sourceRows) {
         const word = await getWordInfoForReview(client, user.id, row);
-        if (word.deleted_at) continue;
+        if (word.deleted_at || seenMeanings.has(word.id)) continue;
         const shouldReviewInitial = !parentReviewId && row.assessment_kind === 'initial_context' && hasSelectedSenseFlowFlag(word);
-        if (!isCorrectAssessmentRow(row) || shouldReviewInitial) reviewRows.push({ row, word, selectedSense: shouldReviewInitial });
+        if (!isCorrectAssessmentRow(row) || shouldReviewInitial) { seenMeanings.add(word.id); reviewRows.push({ row, word, selectedSense: shouldReviewInitial }); }
     }
-    if (!reviewRows.length) return { sourceTestId, parentReviewId, complete: true, questions: [] };
+    if (!reviewRows.length) return { sourceTestId, parentReviewId, complete: true, reason:sourceRows.every(isCorrectAssessmentRow)?'no_wrong_answers':'archived_words', questions: [] };
 
     const mode = getAssessmentMode(sourceTestId);
     const reviewId = mode + '-review-' + crypto.randomUUID().split('-')[0];
@@ -2327,7 +2382,9 @@ async function submitReviewRoundWithClient(client, { userId, reviewId, answers }
     const rows = await getAssessmentsForTestWithClient(client, userId, reviewId);
     if (!rows.length) throw new Error('Review records not found');
     if (!rows.every(row => row.user_id === user.id)) throw new Error('Review source does not belong to current user');
-    const sorted = [...rows].sort((left, right) => Number(toMillis(left.assessed_at)) - Number(toMillis(right.assessed_at)));
+    const sorted = await activeReviewRows(client,user.id,rows);
+    if (!sorted.length) return {reviewId,complete:true,reason:'archived_words',results:[],correct:0,total:0,remainingRecordIds:[]};
+    if (!Array.isArray(answers) || answers.length !== sorted.length) throw new Error('REVIEW_WORDS_CHANGED_RELOAD');
     const results = [];
     for (let index = 0; index < sorted.length; index++) {
         const row = sorted[index];
@@ -2955,6 +3012,7 @@ function assertFormalChallengeQuestionsRenderable(questions) {
                 correct_meaning: question.correctMeaning || question.correct_meaning || optionMeanings[answerIndex],
                 ai_audit_status: question.aiAuditStatus || question.ai_audit_status || '',
                 source_version: question.sourceVersion || question.source_version || '',
+                teaching_analysis: question.teachingAnalysis || null,
             },
         });
         const formalQualityIssues = readinessIssues.filter(issue => issue !== 'missing_generated_at');
@@ -3063,7 +3121,7 @@ async function getFormalQuizChallengeWithClient(client, username, testId) {
     if (cacheIds.length) {
         const { data: cacheRows, error: cacheError } = await client
             .from('question_cache')
-            .select('id, question_type, question_text, options, answer, option_meanings, context_zh, correct_meaning')
+            .select('id, question_type, question_text, options, answer, option_meanings, teaching_analysis, context_zh, correct_meaning')
             .in('id', cacheIds);
         ensureNoError(cacheError, 'getFormalQuizChallenge.cacheQuestions');
         cacheById = new Map((cacheRows || []).map(row => [row.id, row]));

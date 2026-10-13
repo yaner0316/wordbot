@@ -211,6 +211,10 @@ select
       and pg_get_indexdef(index_meta.indexrelid) like '%(user_id, parent_review_id, review_status)%'
       and lower(pg_get_expr(index_meta.indpred, index_meta.indrelid)) like '%parent_review_id%is not null%'
   ) as assessment_parent_review_index,
+  exists(select 1 from pg_attribute where attrelid=to_regclass('public.question_cache') and attname='teaching_analysis' and not attisdropped) as teaching_analysis_cache_column,
+  exists(select 1 from pg_attribute where attrelid=to_regclass('public.assessments') and attname='teaching_analysis' and not attisdropped) as teaching_analysis_assessment_column,
+  coalesce(position('teaching_analysis' in pg_get_functiondef(to_regprocedure('public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)'))) > 0,false) as teaching_analysis_publish_contract,
+  exists(select 1 from pg_trigger where tgrelid=to_regclass('public.quiz_challenge_questions') and tgname='validate_formal_teaching_snapshot' and not tgisinternal) as teaching_analysis_challenge_trigger,
   (select function_exists from formal_quality_state) as formal_quality_function,
   (select security_invoker from formal_quality_state) as formal_quality_function_security_invoker,
   (select safe_search_path from formal_quality_state) as formal_quality_function_safe_search_path,
@@ -455,6 +459,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261010_challenge_demand_priority.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive_legacy_ids.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261013_teaching_analysis_snapshots.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -486,6 +491,10 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 }));
 
 const EXPECTED_STATE = Object.freeze({
+  teaching_analysis_cache_column: true,
+  teaching_analysis_assessment_column: true,
+  teaching_analysis_publish_contract: true,
+  teaching_analysis_challenge_trigger: true,
   archive_words_safe_search_path: true,
   archive_words_legacy_id_lookup: true,
   archive_words_column: true,
@@ -626,7 +635,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.length === 1 && missing[0] === 'archive_words_legacy_id_lookup'
+    const paths = missing.every(key=>key.startsWith('teaching_analysis_'))
+      ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_teaching_analysis_snapshots.sql')
+      : missing.length === 1 && missing[0] === 'archive_words_legacy_id_lookup'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261012_parent_word_archive_legacy_ids.sql')
       : missing.every(key => key.startsWith('archive_words_') || key.startsWith('rpc_archive_words_'))
       ? MIGRATION_PATHS.filter(file => ['20261012_parent_word_archive.sql', '20261012_parent_word_archive_legacy_ids.sql'].includes(path.basename(file)))
