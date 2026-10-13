@@ -82,6 +82,33 @@ test('archive during a review maps the surviving answer to its own stored row on
  assert.equal(client.db.assessments.find(row=>row.test_id===initial.reviewId&&row.word_id==='second').submitted_answer,'图书馆');
  assert.deepEqual(client.db.assessments.slice(0,2),original);
 });
+test('initial-context history with three active meanings and archived correct words uses real meaning recall',async()=>{
+ const base={user_id:'u',test_id:'real-legacy-review',question_type:'1',assessment_kind:'initial_context',submitted_answer:'A',correct_answer:'A',assessed_at:'2026-10-10T12:14:00Z'};
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words:[
+  {id:'apple',user_id:'u',word:'apple',meaning_zh:'苹果',deleted_at:'2026-10-12T00:00:00Z'},
+  {id:'bicycle',user_id:'u',word:'bicycle',meaning_zh:'自行车',deleted_at:'2026-10-12T00:00:00Z'},
+  {id:'library',user_id:'u',word:'library',meaning_zh:'图书馆',quality_flags:['selected_sense_flow_v1']},
+  {id:'banner',user_id:'u',word:'carry the banner',meaning_zh:'扛旗'},
+  {id:'up-to',user_id:'u',word:'up to',meaning_zh:'最多、高达'},
+ ],assessments:[{...base,id:'a1',word_id:'apple',source_word_record_id:'apple',word_snapshot:'apple',is_correct:'correct'},
+  {...base,id:'a2',word_id:'bicycle',source_word_record_id:'bicycle',word_snapshot:'bicycle',is_correct:'correct',submitted_answer:'B',correct_answer:'B'},
+  {...base,id:'a3',word_id:'library',source_word_record_id:'library',word_snapshot:'library',is_correct:'wrong',submitted_answer:'C'}]});
+ const original=structuredClone(client.db.assessments),words=structuredClone(client.db.words),adapter=createSupabaseDataAdapter(client);
+ const round=await adapter.createReviewRound({userId:'child',sourceTestId:'real-legacy-review'});
+ assert.deepEqual(round.questions.map(q=>({recordId:q.recordId,type:q.type,mode:q.answerMode,options:q.options,meaning:q.correctMeaning})),[{recordId:'library',type:4,mode:'cn_meaning',options:[],meaning:'图书馆'}]);
+ const resume=await adapter.createReviewRound({userId:'child',sourceTestId:'real-legacy-review'});assert.equal(resume.reviewId,round.reviewId);
+ const result=await adapter.submitReviewRound({userId:'child',reviewId:round.reviewId,answers:[{text:'图书馆',confidence:'sure'}]});
+ assert.equal(result.correct,1);assert.equal(result.total,1);
+ assert.deepEqual(client.db.assessments.slice(0,3),original);assert.deepEqual(client.db.words,words);assert.equal(client.db.game_states.length,0);
+});
+test('initial selected-sense recognition keeps four real choices when the active library supplies them',async()=>{
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words:[
+  {id:'library',user_id:'u',word:'library',meaning_zh:'图书馆',quality_flags:['selected_sense_flow_v1']},
+  {id:'bank',user_id:'u',word:'bank',meaning_zh:'银行'},{id:'ball',user_id:'u',word:'ball',meaning_zh:'球'},{id:'high',user_id:'u',word:'high',meaning_zh:'高的'},
+ ],assessments:[{id:'a',user_id:'u',test_id:'real-initial',word_id:'library',source_word_record_id:'library',word_snapshot:'library',question_type:'1',assessment_kind:'initial_context',submitted_answer:'A',correct_answer:'A',is_correct:'correct',assessed_at:'2026-10-10T00:00:00Z'}]});
+ const round=await createSupabaseDataAdapter(client).createReviewRound({userId:'child',sourceTestId:'real-initial'});
+ assert.equal(round.questions[0].answerMode,'sense_choice');assert.equal(round.questions[0].options.length,4);assert.deepEqual(new Set(round.questions[0].options),new Set(['图书馆','银行','球','高的']));
+});
 
 test('Supabase data adapter exposes database-backed child authentication', async () => {
     const salt = '00112233445566778899aabbccddeeff';

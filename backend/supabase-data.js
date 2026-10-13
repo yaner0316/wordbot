@@ -2241,7 +2241,9 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
             correctMeaning,
             candidateMeanings: allWords.map(item => item.meaning_zh),
         }) : null;
-        if (selectedSense && !choice) throw new Error('SELECTED_SENSE_REVIEW_OPTIONS_UNAVAILABLE');
+        // A small/archived library may not supply three genuine distractor meanings.
+        // Use the existing meaning-recall mode rather than inventing choices or
+        // blocking this preparation round; neither mode is formal mastery evidence.
         const assessedAt = toIsoString(assessedAtBase + index);
         insertRows.push({
             user_id: user.id,

@@ -8,6 +8,8 @@ Newly audited rows carry `teaching-analysis-v1`. The semantic audit must supply 
 
 History review uses the existing `/api/reviews` chain. Restoration/submission apply the same active-meaning filter and stable ordering; a word set changed since display is rejected for reload rather than assigning answers to another row. Original formal assessments and game minutes are preserved. Completed chains are not restarted; archived-only and no-wrong-answer responses are explicit.
 
+The initial-context selected-sense branch uses four genuine Chinese meanings when available. If fewer than four distinct active meanings remain (including after parent archival), it uses the already supported type-4 Chinese meaning-recall round with the saved target meaning. It never invents distractors or restores archived meanings. The preparation/recognition stage, formal evidence gates, first score and game-time rules remain the same; no migration or data repair is needed for this fallback.
+
 The reported legacy `shiny red` apple/grape question remains original historical evidence. Its scoring is not changed by this release. Any stored-question repair must first be a separately reviewed plan matching exact owner/meaning/stem/options/fingerprint and current cache version, with a per-row receipt. Do not run a bulk production export, retroactive analysis generation or answer rewrite. Local tests, Edge fixtures and model probes are preparation evidence; release completion still requires main CI, migration verification, live SHA and the authorized production readback.
 
 ## Parent library archive (2026-10-12)
