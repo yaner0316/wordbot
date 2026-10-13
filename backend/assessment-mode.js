@@ -1,20 +1,30 @@
 const ASSESSMENT_MODE = Object.freeze({
     REAL: 'real',
     TEST: 'test',
+    PRACTICE: 'practice',
 });
 
 function normalizeAssessmentMode(mode) {
     const normalized = mode || ASSESSMENT_MODE.REAL;
     if (!Object.values(ASSESSMENT_MODE).includes(normalized)) {
-        throw new Error('考核模式只能是 real 或 test');
+        throw new Error('考核模式只能是 real、test 或 practice');
     }
     return normalized;
 }
 
 function getAssessmentMode(testId) {
+    if (String(testId || '').startsWith('practice-')) return ASSESSMENT_MODE.PRACTICE;
     return String(testId || '').startsWith(`${ASSESSMENT_MODE.TEST}-`)
         ? ASSESSMENT_MODE.TEST
         : ASSESSMENT_MODE.REAL;
+}
+
+function isPracticeAssessment(testId) {
+    return getAssessmentMode(testId) === ASSESSMENT_MODE.PRACTICE;
+}
+
+function isCachedChallenge(testId) {
+    return isRealAssessment(testId) || isPracticeAssessment(testId);
 }
 
 function isRealAssessment(testId) {
@@ -54,6 +64,8 @@ module.exports = {
     filterAssessmentRecords,
     getAssessmentMode,
     isRealAssessment,
+    isPracticeAssessment,
+    isCachedChallenge,
     isTestAssessment,
     normalizeAssessmentMode,
     shouldAffectLearningState,

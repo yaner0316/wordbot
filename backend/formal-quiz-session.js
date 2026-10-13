@@ -33,11 +33,11 @@ function hasCompleteQuestionCount(questions) {
 
 function isResumableQuizSession(session, requestedMode = 'real') {
     const normalizedMode = normalizeAssessmentMode(requestedMode);
-    if (!session || normalizedMode !== 'real' || getAssessmentMode(session.test_id) !== 'real') return false;
+    if (!session || !['real','practice'].includes(normalizedMode) || getAssessmentMode(session.test_id) !== normalizedMode) return false;
 
     const sessionMode = String(session.mode || 'real').trim().toLowerCase();
     const sessionSource = String(session.source || '').trim().toLowerCase();
-    if (sessionMode !== 'real' || (sessionSource && sessionSource !== 'question_cache')) return false;
+    if (sessionMode !== normalizedMode || (sessionSource && sessionSource !== 'question_cache')) return false;
 
     const questions = Array.isArray(session.questions) ? session.questions : [];
     if (!hasCompleteQuestionCount(questions)) return false;

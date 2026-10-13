@@ -77,6 +77,10 @@ with claim_proc as (
   group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
+  coalesce((select prosrc like '%v_practice%' and prosrc like '%counts_for_cooldown%' and prosrc like '%not v_practice%'
+    from pg_catalog.pg_proc where oid=to_regprocedure('public.create_formal_quiz_challenge(uuid,text,text,jsonb,timestamptz)')),false) as custom_practice_creation_contract,
+  exists(select 1 from pg_catalog.pg_constraint where conrelid=to_regclass('public.quiz_challenges')
+    and conname='quiz_challenges_mode_real' and pg_get_constraintdef(oid) like '%practice%') as custom_practice_mode_constraint,
   coalesce((select prosrc like '%to_jsonb(owned_word)%' and prosrc not like '%to_jsonb(word)%' from pg_catalog.pg_proc where oid=to_regprocedure('public.archive_words(uuid,text[])')),false) as archive_words_legacy_id_lookup,
   (select signature from rpc_state where name = 'archive_words') as rpc_archive_words_signature,
   (select security_definer from rpc_state where name = 'archive_words') as rpc_archive_words_security_definer,
@@ -460,6 +464,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive_legacy_ids.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261013_teaching_analysis_snapshots.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261013_custom_practice.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -491,6 +496,8 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 }));
 
 const EXPECTED_STATE = Object.freeze({
+  custom_practice_creation_contract: true,
+  custom_practice_mode_constraint: true,
   teaching_analysis_cache_column: true,
   teaching_analysis_assessment_column: true,
   teaching_analysis_publish_contract: true,
@@ -635,7 +642,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.every(key=>key.startsWith('teaching_analysis_'))
+    const paths = missing.every(key=>key.startsWith('custom_practice_'))
+      ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_custom_practice.sql')
+      : missing.every(key=>key.startsWith('teaching_analysis_'))
       ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_teaching_analysis_snapshots.sql')
       : missing.length === 1 && missing[0] === 'archive_words_legacy_id_lookup'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261012_parent_word_archive_legacy_ids.sql')

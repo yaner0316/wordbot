@@ -307,7 +307,7 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
     }
     return questions;
 }
-async function getChallengeCandidatesWithDataSource({ username, dataSource, now = Date.now() }) {
+async function getChallengeCandidatesWithDataSource({ username, dataSource, now = Date.now(), mode = 'real' }) {
     const [user, words, assessments, displays] = await Promise.all([
         dataSource.getUserByUsername(username),
         (dataSource.getQuizWordsForUser || dataSource.getWordsForUser)(username),
@@ -321,7 +321,7 @@ async function getChallengeCandidatesWithDataSource({ username, dataSource, now 
         wordRecords: words.map(w => toFeishuWordRecord(w, { username: canonicalUsername })),
         assessmentRecords: assessments.map(a => toFeishuAssessmentRecord(a, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
         displayEvents: displays.map(d => normalizeFormalDisplayEvent(d, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
-        userId: canonicalUsername, now,
+        userId: canonicalUsername, now, ...(mode === 'practice' ? { minAgeMs: 0 } : {}),
     }).map(({recordId, ...candidate}) => ({ ...candidate, meaningId: canonicalIds.get(recordId) }));
     return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString() };
 }
@@ -367,6 +367,9 @@ async function generateQuizWithDataSource({
     if (!dataSource) throw new Error('DATA_SOURCE_REQUIRED');
     if (!username) throw new Error('USERNAME_REQUIRED');
     if (!level) throw new Error('LEVEL_REQUIRED');
+    if (selection?.mode === 'custom') mode = 'practice';
+    if (selection?.mode === 'random') mode = 'real';
+    if (mode === 'practice' && selection?.mode !== 'custom') throw new Error('CHALLENGE_SELECTION_INVALID');
     const effectiveLevel = normalizeLevel(level);
     const effectiveMinAgeMs = mode === 'real' ? WORD_QUIZ_COOLDOWN_MS : minAgeMs;
 
@@ -397,9 +400,10 @@ async function generateQuizWithDataSource({
     const questionCacheRows = cacheRows.map((row) => toFeishuCacheRow(row, { username: canonicalUsername }));
     const wordRowsBySourceId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
 
-    const challengeCandidates = selection && mode === 'real'
-        ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now }) : null;
-    const recentQuestionTextsByWord = mergeQuestionTextHistory(
+    const challengeCandidates = selection
+        ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now,
+            ...(mode === 'practice' ? {minAgeMs: 0} : {}) }) : null;
+    const recentQuestionTextsByWord = mode === 'practice' ? new Map() : mergeQuestionTextHistory(
         buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
         buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
     );
@@ -463,7 +467,7 @@ async function generateQuizWithDataSource({
     };
 
     if (questions.length < limit) {
-        if (mode === 'real') {
+        if (mode !== 'test') {
             if (selection) {
                 const selectedIds = queue.map(id => String(wordRowsBySourceId.get(id)?.id));
                 const readyIds = new Set(questions.map(q => String(q.meaningId || '')));
@@ -591,7 +595,7 @@ async function generateQuizWithDataSource({
     }
 
     let nextSupplyMeaningIds;
-    if (selection && mode === 'real') {
+    if (selection) {
         const nextHistory = mergeQuestionTextHistory(
             buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
             buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
@@ -614,10 +618,10 @@ async function generateQuizWithDataSource({
         source: 'question_cache',
         ...(selection ? { nextSupplyMeaningIds } : {}),
         level: effectiveLevel,
-        partialFormalChallenge: mode === 'real' ? questions.length < 10 : undefined,
-        readyCount: mode === 'real' ? questions.length : undefined,
-        requiredCount: mode === 'real' ? limit : undefined,
-        diagnostics: mode === 'real'
+        partialFormalChallenge: mode !== 'test' ? questions.length < 10 : undefined,
+        readyCount: mode !== 'test' ? questions.length : undefined,
+        requiredCount: mode !== 'test' ? limit : undefined,
+        diagnostics: mode !== 'test'
             ? {
                 ...diagnostics,
                 source: 'question_cache',
@@ -789,7 +793,7 @@ async function submitQuizWithDataSource({
             contextZh: question.contextCN || question.context_cn || question.contextTranslation || '',
             optionMeanings: Array.isArray(question.optionMeanings) ? question.optionMeanings : [],
                 teachingAnalysis: question.teachingAnalysis || null,
-            assessmentKind: getSelectedSenseContextStage(
+            assessmentKind: getAssessmentMode(testId) === 'practice' ? 'practice' : getSelectedSenseContextStage(
                 wordRowsByRecordId.get(sourceWordRecordId),
                 baseAssessmentRows.filter(row => String(row.source_word_record_id || '').trim() === sourceWordRecordId)
             ) || undefined,

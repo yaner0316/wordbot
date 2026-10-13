@@ -91,6 +91,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261012_parent_word_archive.sql',
       '20261012_parent_word_archive_legacy_ids.sql',
       '20261013_teaching_analysis_snapshots.sql',
+      '20261013_custom_practice.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -175,6 +176,8 @@ test('missing DATABASE_URL fails before a database client is constructed', async
 });
 
 const COMPLETE_STATE = Object.freeze({
+  custom_practice_creation_contract: true,
+  custom_practice_mode_constraint: true,
   teaching_analysis_cache_column: true,
   teaching_analysis_assessment_column: true,
   teaching_analysis_publish_contract: true,
@@ -1147,6 +1150,12 @@ test('existing archive deployment applies only legacy ID repair', async () => {
   const result=await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- legacy ID repair';}});
   assert.equal(result.status,'applied');
   assert.deepEqual(readPaths,['20261012_parent_word_archive_legacy_ids.sql']);
+});
+
+test('existing deployment missing practice applies only its migration',async()=>{
+ const harness=createDatabaseHarness({states:[{...COMPLETE_STATE,custom_practice_creation_contract:false,custom_practice_mode_constraint:false},COMPLETE_STATE]});const readPaths=[];
+ await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- practice';}});
+ assert.deepEqual(readPaths,['20261013_custom_practice.sql']);
 });
 
 test('existing deployment missing challenge demand applies only the new migration',async()=>{

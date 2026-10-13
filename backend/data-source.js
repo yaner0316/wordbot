@@ -14,7 +14,7 @@ const {
     isResumableQuizSession: isStructurallyResumableQuizSession,
 } = require('./formal-quiz-session');
 
-const { getAssessmentMode, isRealAssessment } = require('./assessment-mode');
+const { getAssessmentMode, isRealAssessment, isCachedChallenge } = require('./assessment-mode');
 const { normalizeCacheRow, isCacheQuestionReady } = require('./question-cache');
 const quizQuestionsByTestId = new Map();
 const quizSubmitLocks = new Map();
@@ -209,13 +209,15 @@ function loadSupabaseDataSource() {
         if (selection) {
             const settings = await supabaseData.getUserLearningSettings(user);
             level = settings.learningLevel || settings.level;
-            mode = 'real';
+            mode = selection.mode === 'custom' ? 'practice' : 'real';
         }
+        if (mode === 'practice' && selection?.mode !== 'custom') throw new Error('CHALLENGE_SELECTION_INVALID');
+        const cachedMode = (mode || 'real') !== 'test';
         const formalChallengeReaderAvailable = typeof supabaseData.getActiveFormalQuizChallenge === 'function';
-        const activeFormalChallenge = mode === 'real'
-            ? await getActiveFormalQuizChallenge(user)
+        const activeFormalChallenge = cachedMode
+            ? await getActiveFormalQuizChallenge(user, {mode: mode || 'real'})
             : null;
-        if (mode === 'real' && formalChallengeReaderAvailable && activeFormalChallenge?.unavailable) {
+        if (cachedMode && formalChallengeReaderAvailable && activeFormalChallenge?.unavailable) {
             return {
                 error: 'Formal challenge is not ready yet.', code: 'FORMAL_CHALLENGE_NOT_READY',
                 source: 'formal_quiz_challenge', level: level || null,
@@ -224,13 +226,13 @@ function loadSupabaseDataSource() {
             };
         }
         if (activeFormalChallenge && Array.isArray(activeFormalChallenge.questions)
-            && isStructurallyResumableQuizSession(activeFormalChallenge)) {
+            && isStructurallyResumableQuizSession(activeFormalChallenge, mode || 'real')) {
             const questions = activeFormalChallenge.questions;
             quizQuestionsByTestId.set(`${normalizeUserKey(user)}:${activeFormalChallenge.test_id}`, questions);
             return {
                 testId: activeFormalChallenge.test_id,
                 challengeId: activeFormalChallenge.challenge_id || activeFormalChallenge.id,
-                mode: 'real', level: level || activeFormalChallenge.level || null,
+                mode: mode || 'real', level: level || activeFormalChallenge.level || null,
                 source: 'formal_quiz_challenge', questions,
                 progress: activeFormalChallenge.progress || { currentQuestion: 0, answers: [] },
                 readyCount: questions.length, requiredCount: questions.length,
@@ -238,7 +240,7 @@ function loadSupabaseDataSource() {
                 diagnostics: { fallbackUsed: false, resumed: true, requiredCount: questions.length, readyCount: questions.length, finalQuestionCount: questions.length },
             };
         }
-        const activeSession = mode === 'real' && formalChallengeReaderAvailable
+        const activeSession = cachedMode && formalChallengeReaderAvailable
             ? null
             : await getActiveQuizSessionBestEffort(supabaseData, user, mode || 'real');
         if (activeSession) {
@@ -268,7 +270,7 @@ function loadSupabaseDataSource() {
                 await deleteQuizSessionBestEffort(supabaseData, user, activeSession.test_id);
             }
         }
-        const formalMode = (mode || 'real') === 'real';
+        const formalMode = cachedMode;
         const maxCreateAttempts = formalMode ? 3 : 1;
         let quiz;
         for (let attempt = 1; attempt <= maxCreateAttempts; attempt += 1) {
@@ -282,7 +284,7 @@ function loadSupabaseDataSource() {
                 selection,
             });
             if (quiz.error || !quiz.testId || !Array.isArray(quiz.questions)) break;
-            if ((mode || 'real') === 'real' && formalChallengeReaderAvailable
+            if (cachedMode && formalChallengeReaderAvailable
                 && typeof supabaseData.createFormalQuizChallenge !== 'function') {
                 throw new Error('FORMAL_CHALLENGE_NOT_CREATED');
             }
@@ -379,7 +381,7 @@ function loadSupabaseDataSource() {
     }
 
     async function withSubmittedMasteryFeedback(user, testId, result) {
-        if (!isRealAssessment(testId) || typeof supabaseData.getQuizSubmissionMastery !== 'function') {
+        if (!isRealAssessment(testId) || result.mode === 'practice' || typeof supabaseData.getQuizSubmissionMastery !== 'function') {
             return { ...result, ...emptyFeedback() };
         }
         const snapshot = await supabaseData.getQuizSubmissionMastery(user, testId);
@@ -405,7 +407,7 @@ function loadSupabaseDataSource() {
     }
 
     async function completeFormalChallengeIfSubmitted(user, testId, result) {
-        if (!isRealAssessment(testId) || !result || result.replacementRequired) return;
+        if (!isCachedChallenge(testId) || !result || result.replacementRequired) return;
         if (typeof supabaseData.completeFormalQuizChallenge !== 'function') return;
         await supabaseData.completeFormalQuizChallenge(user, testId);
     }
@@ -424,7 +426,7 @@ function loadSupabaseDataSource() {
         const key = `${normalizeUserKey(user)}:${testId}`;
         let questions = quizQuestionsByTestId.get(key);
         if (!questions) {
-            if (isRealAssessment(testId) && typeof supabaseData.getFormalQuizChallenge === 'function') {
+            if (isCachedChallenge(testId) && typeof supabaseData.getFormalQuizChallenge === 'function') {
                 const challenge = await supabaseData.getFormalQuizChallenge(user, testId);
                 questions = Array.isArray(challenge?.questions) ? challenge.questions : null;
                 if (!questions) {
@@ -591,12 +593,12 @@ function loadSupabaseDataSource() {
     }
     return {
         ...supabaseData,
-        getChallengeCandidates: (username) => getChallengeCandidatesWithDataSource({ username, dataSource: supabaseData }),
+        getChallengeCandidates: (username, mode = 'real') => getChallengeCandidatesWithDataSource({ username, mode, dataSource: supabaseData }),
         getActiveFormalQuizChallenge,
         getQuizHistory: (username, mode) => supabaseData.getQuizHistory(username, mode),
         getActiveQuizSession,
         updateQuizSessionProgress: async (username, testId, progress) => {
-            if (isRealAssessment(testId) && typeof supabaseData.updateFormalQuizChallengeProgress === 'function') {
+            if (isCachedChallenge(testId) && typeof supabaseData.updateFormalQuizChallengeProgress === 'function') {
                 const result = await supabaseData.updateFormalQuizChallengeProgress(username, testId, progress);
                 if (!result) throw new Error('FORMAL_CHALLENGE_NOT_FOUND');
                 return result;

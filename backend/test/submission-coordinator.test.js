@@ -1,6 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('replaying a corrected legacy practice score cannot restore formal rewards', () => {
+    const {rebuildSubmittedResult}=require('../submission-coordinator');
+    const rows=Array.from({length:10},(_,i)=>({fields:{test_id:'real-old-custom',assessment_kind:'practice',is_real_assessment:false,record_id:`word-${i}`,is_correct:'correct',your_answer:'A'}}));
+    const result=rebuildSubmittedResult(rows,value=>value==='correct');
+    assert.equal(result.mode,'practice');assert.equal(result.correct,10);assert.equal(result.gameReward.eligible,false);
+});
+
 const {
     createSubmissionCoordinator,
     validateAnswers,

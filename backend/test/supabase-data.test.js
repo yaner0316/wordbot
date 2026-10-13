@@ -14,6 +14,16 @@ const {
 const { getOverlappingOptionPairs } = require('../option-meaning-distinctness');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
+test('practice history includes corrected legacy practice but excludes it from formal history',async()=>{
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],assessments:[
+   {id:'a',user_id:'u',test_id:'real-old-custom',assessment_kind:'practice',is_real_assessment:false,is_correct:'correct',submitted_answer:'A',word_snapshot:'bank',question_text:'A bank.',assessed_at:'2026-10-13T00:00:00Z'},
+   {id:'b',user_id:'u',test_id:'practice-new',assessment_kind:'practice',is_real_assessment:false,is_correct:'wrong',submitted_answer:'B',word_snapshot:'bank',question_text:'A new bank.',assessed_at:'2026-10-13T01:00:00Z'},
+ ]});
+ const adapter=createSupabaseDataAdapter(client);
+ assert.equal((await adapter.getQuizHistory('child','real')).length,0);
+ const practice=await adapter.getQuizHistory('child','practice');
+ assert.equal(practice.length,2);assert.ok(practice.every(row=>row.mode==='practice'));
+});
 test('submitted teaching analysis stays the original historical snapshot when cache analysis later changes',async()=>{
  const analysis={schemaVersion:1,clue:'borrowed books',clueReason:'借阅图书是句中给出的关键线索。',correctWord:'library',correctReason:'图书馆提供图书借阅服务。',options:[
   {word:'library',fits:true,meaning:'图书馆',reason:'图书馆提供句中所需的借书服务。'},

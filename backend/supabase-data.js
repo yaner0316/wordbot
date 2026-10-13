@@ -621,7 +621,8 @@ async function getQuizHistoryWithClient(client, username, mode = 'real') {
     const wordsById = await getWordsByIdWithClient(client, rows.map(row => row.word_id));
     const groups = new Map();
     for (const row of rows) {
-        if (getAssessmentMode(row.test_id) !== normalizedMode) continue;
+        const rowMode = row.assessment_kind === 'practice' ? 'practice' : getAssessmentMode(row.test_id);
+        if (rowMode !== normalizedMode) continue;
         if (normalizedMode === 'real' && row.is_real_assessment === false) continue;
         const testId = String(row.test_id || '').trim();
         if (!testId) continue;
@@ -3239,6 +3240,7 @@ async function getActiveFormalQuizChallengeWithClient(client, username, options 
         .from('quiz_challenges')
         .select('test_id')
         .eq('user_id', user.id)
+        .eq('mode', options.mode === 'practice' ? 'practice' : 'real')
         .eq('status', 'active')
         .gt('expires_at', toIsoString(options.now ? options.now() : Date.now()))
         .order('created_at', { ascending: false })

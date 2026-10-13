@@ -1607,11 +1607,11 @@ test('submission replay also completes server-side game reward credit before ret
     assert.deepEqual(credits,[{user:'qiuqiu',id:testId,minutes:10}]);
 });
 
-test('self-selected short challenge resumes stored progress without making another quiz', async () => {
+test('self-selected short practice resumes its own stored progress without making another quiz', async () => {
     const questions = Array.from({length:3},(_,i)=>({type:1,record_id:`short-${i}`,cacheRecordId:`cache-${i}`,source:'question_cache',challengeSize:3}));
     const dataSource = loadDataSource({supabaseExports:{
         getUserLearningSettings: async()=>({learningLevel:'中学'}),
-        getActiveFormalQuizChallenge: async()=>({test_id:'real-short',questions,progress:{currentQuestion:1,answers:[0],revision:2}}),
+        getActiveFormalQuizChallenge: async(user, options)=>{assert.equal(options.mode,'practice');return {test_id:'practice-short',mode:'practice',questions,progress:{currentQuestion:1,answers:[0],revision:2}};},
         getAssessmentsForUser: async()=>[],
     }});
     const quiz = await dataSource.generateQuiz('qiuqiu','小学','real',{mode:'custom',meaningIds:[]});
@@ -1619,6 +1619,7 @@ test('self-selected short challenge resumes stored progress without making anoth
     assert.equal(quiz.progress.revision,2);
     assert.equal(quiz.level,'中学');
     assert.equal(quiz.diagnostics.resumed,true);
+    assert.equal(quiz.mode,'practice');
 });
 
 test('a complete three-question formal challenge submits after restart and earns no game time', async () => {
@@ -1638,7 +1639,7 @@ test('a complete three-question formal challenge submits after restart and earns
         updateWordMastery: async()=>{masteryWrites++;return [];},
         incrementCacheUsedCount: async()=>({}),
     };
-    const quiz = await loadDataSource({supabaseExports:exports}).generateQuiz('qiuqiu','middle','real',{mode:'custom',meaningIds:['word-1']});
+    const quiz = await loadDataSource({supabaseExports:exports}).generateQuiz('qiuqiu','middle','real',{mode:'random',meaningIds:[]});
     assert.equal(stored.questions.length,3);
     const result = await loadDataSource({supabaseExports:exports}).submitAnswers('qiuqiu',quiz.testId,Array(3).fill({option:0,confidence:'sure'}));
     assert.equal(result.total,3);
@@ -1646,4 +1647,23 @@ test('a complete three-question formal challenge submits after restart and earns
     assert.equal(result.gameReward.minutes,0);
     assert.equal(saved.length,3);
     assert.equal(masteryWrites,3);
+});
+
+test('self-selected practice persists its server identity and resumes submission after restart without mastery or rewards', async () => {
+    let stored; const writes=[];
+    const exports={
+      getUserLearningSettings:async()=>({learningLevel:'中学'}),getUserByUsername:async username=>({username}),
+      getWordsForUser:async()=>formalWordRows(3),getAssessmentsForUser:async()=>[],getQuestionCache:async()=>formalCacheRows(3),
+      getActiveFormalQuizChallenge:async()=>null,getFormalQuizChallenge:async()=>stored,
+      createFormalQuizChallenge:async input=>{stored={test_id:input.testId,mode:'practice',questions:input.questions};return {challenge_id:'practice-stored'};},
+      submitAssessment:async input=>{writes.push(input);return {id:`a-${writes.length}`,...input};},
+      updateWordMastery:async()=>assert.fail('practice mastery write'),
+      creditGameReward:async()=>assert.fail('practice reward'),
+      completeFormalQuizChallenge:async()=>({status:'submitted'}),incrementCacheUsedCount:async()=>({}),
+    };
+    const quiz=await loadDataSource({supabaseExports:exports}).generateQuiz('qiuqiu','middle','real',{mode:'custom',meaningIds:['word-1']});
+    assert.match(stored.test_id,/^practice-/);
+    const result=await loadDataSource({supabaseExports:exports}).submitAnswers('qiuqiu',quiz.testId,Array(3).fill(0));
+    assert.equal(result.mode,'practice');assert.equal(result.total,3);assert.equal(result.gameReward.eligible,false);
+    assert.equal(writes.length,3);
 });

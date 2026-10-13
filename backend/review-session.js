@@ -21,7 +21,7 @@ function createReviewId(mode, createId) {
 }
 
 function getAssessmentKind(assessmentId) {
-    return /^(real|test)-review-/.test(String(assessmentId || ''))
+    return /^(real|test|practice)-review-/.test(String(assessmentId || ''))
         ? ASSESSMENT_KIND.REVIEW
         : ASSESSMENT_KIND.QUIZ;
 }

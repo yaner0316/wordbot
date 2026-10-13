@@ -81,10 +81,12 @@ function rebuildSubmittedResult(records, isCorrectValue, masteryFeedback) {
     });
     const correct = results.filter(result => result.correct).length;
     const total = results.length;
+    const mode = records[0]?.fields?.assessment_kind === 'practice' ? 'practice'
+        : getAssessmentMode(fieldValue(records[0]?.fields?.test_id));
 
     return {
         alreadySubmitted: true,
-        mode: getAssessmentMode(fieldValue(records[0]?.fields?.test_id)),
+        mode,
         results,
         correct,
         total,
@@ -93,7 +95,7 @@ function rebuildSubmittedResult(records, isCorrectValue, masteryFeedback) {
         ...(masteryFeedback || {}),
         gameReward: calculateGameReward({
             testId: fieldValue(records[0]?.fields?.test_id),
-            mode: getAssessmentMode(fieldValue(records[0]?.fields?.test_id)),
+            mode,
             correct,
             total,
         }),

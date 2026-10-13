@@ -1,4 +1,4 @@
-const { ASSESSMENT_MODE } = require('./assessment-mode');
+const { ASSESSMENT_MODE, isPracticeAssessment } = require('./assessment-mode');
 const { ASSESSMENT_KIND, getAssessmentKind } = require('./review-session');
 
 const DEFAULT_EXCELLENT_MINUTES = 5;
@@ -9,6 +9,10 @@ function calculateGameReward({ testId, mode, correct, total }) {
     const normalizedMode = mode || ASSESSMENT_MODE.REAL;
     const score = Number(correct) || 0;
     const questionCount = Number(total) || 0;
+
+    if (normalizedMode === ASSESSMENT_MODE.PRACTICE || isPracticeAssessment(testId)) {
+        return { eligible: false, minutes: 0, tier: 'none', reason: 'practice_mode' };
+    }
 
     if (assessmentKind !== ASSESSMENT_KIND.QUIZ) {
         return { eligible: false, minutes: 0, tier: 'none', reason: 'review_round' };

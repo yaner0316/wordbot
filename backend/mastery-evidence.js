@@ -93,7 +93,7 @@ function isRealContextAssessment(record) {
     const testId = fieldValue(fields.test_id).trim();
     if (!/^real(?:-|$)/.test(testId) || /^real-(?:review|preview|test)/.test(testId)) return false;
     const kind = fieldValue(fields.assessment_kind).trim().toLowerCase();
-    if (['review', 'test', 'preview'].includes(kind)) return false;
+    if (['review', 'test', 'preview', 'practice'].includes(kind)) return false;
     const rawFlag = fields.is_real_assessment !== undefined
         ? fields.is_real_assessment
         : record?.is_real_assessment;

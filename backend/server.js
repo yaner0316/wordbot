@@ -486,7 +486,7 @@ app.get('/api/quiz/candidates', async (req, res) => {
     try {
         const user = req.wordbotSession?.user || req.query.user;
         if (!user) return res.status(400).json({ error: '缺少用户ID' });
-        res.json(await getChallengeCandidates(user));
+        res.json(await getChallengeCandidates(user, req.query.mode === 'practice' ? 'practice' : 'real'));
     } catch (error) {
         res.status(500).json({ code: 'CHALLENGE_CANDIDATES_UNAVAILABLE', error: '暂时未能读取单词，请重试。' });
     }

@@ -104,6 +104,12 @@ Before release, record branch/base and intended SHA, focused and full test count
 Rollback code through the normal repository/deploy path. Database rollback is a separate reviewed operation: prefer forward-compatible corrective migrations and preserve evidence. Do not claim a release complete until the live SHA and affected production flow match `PROJECT.md`'s definition of done.
 
 
+## Custom practice and authorized historical correction (2026-10-13)
+
+Apply `20261013_custom_practice.sql` with the existing migration runner and verifier. It permits durable practice challenges and excludes their displays from formal cooldown while retaining stem history and question quality gates. Publish the paired frontend contract before backend CI; deploy the backend before exposing the new frontend behavior.
+
+Historical correction requires an explicit operator-selected cutoff and a local source backup. Preserve question snapshots, answers and scores. Reclassify affected challenge/assessment projections as practice, clear their formal cooldown flags, recompute only affected mastery using prior valid evidence and the earliest submission baseline, and retain independently earned mastery. Revoke only claimed positive rewards, floor balances at zero, preserve claim IDs, advance game revisions and store an idempotent correction receipt. Lock/check current rows before updating and roll back the entire correction on drift. Fresh generation uses the existing word fence/finalizer, retiring referenced caches instead of deleting evidence. Verify changed projections, immutable answers and fresh current-version supply; do not repeat an unrelated full-data audit.
+
 ## Selected challenge demand (2026-10-10)
 
 Apply `20261010_challenge_demand_priority.sql` through the existing question-generation migration runner before deploying its API adapter. An otherwise current schema applies only this migration; the verifier checks columns, RPC ACL/search path, bounded demand and claim priority. `request_challenge_question_supply(uuid, uuid[])` is service-role-only and accepts up to ten unique owned IDs. It advances pending/retry backoff once per five minutes, prioritizes within that user for two minutes, and preserves leases/checkpoints/attempt counts/edit fences. Other users retain fair claim rotation. No answer history or mastery rewrite is required. The UI stops automatic waiting after two minutes; background retries continue under their normal quality gates.

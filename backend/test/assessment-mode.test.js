@@ -36,7 +36,7 @@ test('assessment ids include an explicit mode prefix', () => {
 test('invalid assessment modes are rejected', () => {
     assert.throws(
         () => normalizeAssessmentMode('preview'),
-        /考核模式只能是 real 或 test/
+        /考核模式只能是 real、test 或 practice/
     );
 });
 

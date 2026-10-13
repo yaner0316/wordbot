@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { generateQuizWithDataSource, getChallengeCandidatesWithDataSource } = require('../quiz-adapter');
+const { generateQuizWithDataSource, getChallengeCandidatesWithDataSource, submitQuizWithDataSource } = require('../quiz-adapter');
 const { assertFormalQuizQuestions, isResumableQuizSession } = require('../formal-quiz-session');
 const { calculateGameReward } = require('../game-reward');
 const NOW = Date.parse('2026-10-05T04:00:00Z');
@@ -28,6 +28,40 @@ function generate(f, meaningIds = [], mode = 'custom') {
   return generateQuizWithDataSource({ username: 'child', level: '中学', mode: 'real', now: NOW,
     dataSource: f.dataSource, selection: { mode, meaningIds }, createId: () => 'custom-test' });
 }
+test('custom selection is practice even if the caller requests real mode; submission preserves feedback without formal effects', async () => {
+  const f = fixture(10);
+  const quiz = await generate(f, ['word-0']);
+  assert.equal(quiz.mode, 'practice');
+  assert.match(quiz.testId, /^practice-/);
+  const writes=[];
+  f.dataSource.submitAssessments=async inputs=>{writes.push(...inputs);return inputs;};
+  f.dataSource.updateWordMastery=async()=>assert.fail('practice must not update mastery');
+  f.dataSource.ensureQuizSubmissionMastery=async()=>assert.fail('practice must not create formal progress');
+  const result=await submitQuizWithDataSource({username:'child',testId:quiz.testId,questions:quiz.questions,answers:Array(10).fill(0),dataSource:f.dataSource});
+  assert.equal(result.correct,10);
+  assert.equal(result.mode,'practice');
+  assert.equal(result.gameReward.eligible,false);
+  assert.equal(result.gameReward.minutes,0);
+  assert.ok(writes.every(row=>row.assessmentKind==='practice'));
+});
+test('practice can choose cooling meanings, and its display does not prioritize them in random selection', async () => {
+  const f=fixture(20);
+  f.words[0].entered_at=new Date(NOW-HOUR).toISOString();
+  f.displays.push({meaning_id:'word-0',displayed_at:new Date(NOW-HOUR).toISOString(),counts_for_cooldown:true});
+  const quiz=await generate(f,['word-0']);
+  assert.ok(quiz.questions.some(q=>q.meaningId==='word-0'));
+  const candidates=await getChallengeCandidatesWithDataSource({username:'child',dataSource:f.dataSource,now:NOW,mode:'practice'});
+  assert.equal(candidates.candidates[0].eligible,true);
+});
+test('practice modes and corrected practice evidence never count as formal mastery or game rewards', () => {
+  const {getAssessmentMode,isRealAssessment,normalizeAssessmentMode}=require('../assessment-mode');
+  const {isFormalAssessment}=require('../mastery-evidence');
+  assert.equal(normalizeAssessmentMode('practice'),'practice');
+  assert.equal(getAssessmentMode('practice-example'),'practice');
+  assert.equal(isRealAssessment('practice-example'),false);
+  assert.equal(isFormalAssessment({fields:{test_id:'real-old',assessment_kind:'practice'}}),false);
+  assert.equal(calculateGameReward({testId:'practice-example',mode:'real',correct:10,total:10}).eligible,false);
+});
 test('random challenge prioritizes yesterday displayed words after cooldown', async () => {
   const f = fixture(25);
   for (const w of f.words.slice(15)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-20*HOUR).toISOString(),counts_for_cooldown:true});
@@ -66,7 +100,7 @@ test('candidate eligibility is independent of cache, includes recognized, and us
   assert.equal(result.candidates.find(w => w.meaningId === 'word-3').eligible, false);
 });
 test('only a genuinely small eligible pool produces a short formal challenge', async () => {
-  const quiz = await generate(fixture(3), ['word-1']);
+  const quiz = await generate(fixture(3), [], 'random');
   assert.equal(quiz.questions.length, 3);
   assert.equal(quiz.requiredCount, 3);
   assert.doesNotThrow(() => assertFormalQuizQuestions(quiz.questions));
@@ -89,17 +123,18 @@ for (const ids of [['foreign-id'], ['word-1', 'word-1'], Array.from({length:11},
     await assert.rejects(generate(fixture(), ids), /CHALLENGE_SELECTION_INVALID/);
   });
 }
-test('rejects a chosen word still cooling without substituting another', async () => {
+test('random challenge excludes a word still cooling', async () => {
   const f = fixture();
   f.displays.push({ meaning_id: 'word-0', displayed_at: new Date(NOW - HOUR).toISOString() });
-  await assert.rejects(generate(f, ['word-0']), /CHALLENGE_SELECTION_CHANGED/);
+  const quiz=await generate(f, [], 'random');
+  assert.ok(quiz.questions.every(q=>q.meaningId!=='word-0'));
 });
 
 test('using the last fresh cached stem identifies only exhausted meanings for advance replenishment', async () => {
   const f = fixture(3);
   f.displays.push({meaning_id:'word-0',stem:'Variant 1 uses _____ naturally in context.',
     displayed_at:new Date(NOW - 19 * HOUR).toISOString(),history_expires_at:new Date(NOW + HOUR).toISOString()});
-  const quiz = await generate(f,['word-0']);
+  const quiz = await generate(f,[],'random');
   assert.deepEqual(quiz.nextSupplyMeaningIds,['word-0']);
 });
 
@@ -109,15 +144,15 @@ test('first challenge requires eighteen hours from entry even with approved cach
   const status = await getChallengeCandidatesWithDataSource({ username:'child', dataSource:f.dataSource, now:NOW });
   assert.equal(status.candidates[0].eligible, false);
   assert.equal(status.candidates[0].cooldownEndsAt, new Date(NOW + 1).toISOString());
-  assert.equal((await generate(f)).code, 'CHALLENGE_COOLDOWN');
+  assert.equal((await generate(f, [], 'random')).code, 'CHALLENGE_COOLDOWN');
   f.words[0].entered_at = new Date(NOW - 18 * HOUR).toISOString();
-  assert.equal((await generate(f)).questions.length, 3);
+  assert.equal((await generate(f, [], 'random')).questions.length, 3);
 });
 
 test('cooling words do not shrink a library of twelve to a short quiz', async () => {
   const f = fixture(12);
   for (const w of f.words.slice(5)) w.entered_at = new Date(NOW - HOUR).toISOString();
-  const quiz = await generate(f, ['word-0']);
+  const quiz = await generate(f, [], 'random');
   assert.equal(quiz.code, 'CHALLENGE_COOLDOWN');
   assert.equal(quiz.requiredCount, 10);
   assert.equal(quiz.availableCount, 5);

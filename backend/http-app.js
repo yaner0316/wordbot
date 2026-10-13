@@ -11,9 +11,9 @@ const DEFAULT_CORS_ALLOWED_ORIGINS = Object.freeze([
 ]);
 
 
-function isCompleteCacheOnlyFormalSession(session) {
+function isCompleteCacheOnlyFormalSession(session, mode = 'real') {
     const questions = Array.isArray(session?.questions) ? session.questions : [];
-    return isResumableQuizSession(session)
+    return isResumableQuizSession(session, mode)
         && questions.every(question => String(question?.source || '').trim().toLowerCase() === 'question_cache'
             && String(question?.cacheRecordId || '').trim());
 }
@@ -319,8 +319,9 @@ function createApp({
             try {
                 const { user } = req.query;
                 if (!user) return res.status(400).json({ error: '缺少用户ID' });
-                const session = await getActiveFormalQuizChallenge(user);
-                if (!isCompleteCacheOnlyFormalSession(session)) return res.json({ active: false });
+                const mode = req.query.mode === 'practice' ? 'practice' : 'real';
+                const session = await getActiveFormalQuizChallenge(user, {mode});
+                if (!isCompleteCacheOnlyFormalSession(session, mode)) return res.json({ active: false });
                 const questions = session.questions;
                 const readyCount = questions.length;
                 res.json({
@@ -328,7 +329,7 @@ function createApp({
                     testId: session.test_id,
                     level: session.level,
                     source: 'question_cache',
-                    mode: 'real',
+                    mode,
                     partialFormalChallenge: readyCount < FORMAL_QUIZ_REQUIRED_COUNT,
                     readyCount,
                     requiredCount: readyCount,
