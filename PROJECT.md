@@ -10,6 +10,7 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 
 - The learning and cache unit is one user's one meaning, identified by canonical `user_id + meaning_id` (`words.id`; older code may call it `word_id`). Different meanings of the same spelling remain independent.
 - The user account's current selected learning level controls every generated and selected formal question. A meaning's historical entry level is metadata, not an eligibility filter and not a generation level.
+- New accounts persist junior-high difficulty (displayed as “初中”, stored as “中学”) at registration; setting this initial default is not a difficulty change. Changing the account difficulty uses the new level for future questions while preserving existing scores, assessments and immutable historical question snapshots. Cache rows referenced by history remain readable even when retired from future selection.
 - A deleted meaning is absent from the current library, progress totals, new challenges, reviews and generation coverage. Parent deletion archives the meaning with `deleted_at`, preserving its identity, past assessments, scores and immutable challenge snapshots. Existing challenges remain readable/submittable; submission never restores the archived meaning. Re-entering the same spelling creates a new meaning and entry time. Every active meaning that is not mastered is a coverage target, including unseen, recognized, consolidating, pending, and legacy status variants.
 - Production persistence is Supabase. Compatibility adapters may translate legacy shapes at boundaries, but may not become a second source of truth.
 
@@ -23,6 +24,11 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 - A target generation failure is never terminal. Retries continue with bounded backoff until the target is ready, mastered, or deleted. Attempt counts and safe diagnostics remain observable but do not remove a target from the executable queue.
 - Approved partial work and valid intermediate stage artifacts are durable. Retry resumes at the first missing or invalid stage. A changed input invalidates that stage and its downstream dependents only; it does not rerun unrelated valid upstream work or discard an independently approved variant.
 - Publishing is atomic at the selectable-pair boundary. Incomplete artifacts are not selectable, while the last valid active pair remains available until its replacement pair is ready.
+
+## Word and phrase entry
+
+- Child and parent entry preserve complete English words and phrases, including internal spaces. Entry separators are newlines, commas and semicolons; spaces inside a phrase never silently split it into separate words. Consecutive whitespace within a phrase is normalized to one space.
+- A line using “word or phrase | Chinese meaning” remains one entry and preserves punctuation in its Chinese meaning. Both entry forms use the same parsing rule and pass the full phrase through lookup, submission and persistence. Explicit individual words such as “the” and “to” remain valid; the parser does not add stop-word filtering or guess the original phrase.
 
 ## Chinese meaning labels
 
