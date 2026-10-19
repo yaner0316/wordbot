@@ -36,7 +36,7 @@ test('a complete old-method audit resumes only semantic review instead of bypass
  const rows=await buildCacheQuestionRowsForWord({user,word,level:LEVEL,requiredCount:1,allowPartialCandidates:true,requireSemanticAudit:true,semanticAudit:audit,
  generationCheckpoint:{variants:[{slot:1,context:'The child picked an apple from the tree used to grow apples.',distractors:['pear','chair','book'],optionWords:['apple','pear','chair','book'],options,answer:'A',optionMeanings:['苹果','梨','椅子','书'],contextTranslation:'这个孩子从结苹果的树上摘了一个苹果。',localValidated:true,audit:{approved:true,status:'approved',validLetters:['A'],teachingAnalysis:analysis}}]},
  generateContext:async()=>assert.fail('valid context must be reused'),generateDistractors:async()=>assert.fail('valid distractors must be reused'),translateWords:async()=>assert.fail('valid meanings must be reused'),translateContext:async()=>assert.fail('valid translation must be reused')});
- assert.equal(audits,1);assert.equal(rows.length,1);assert.match(rows[0].source_version,/blind-completion-v1/);
+ assert.equal(audits,1);assert.equal(rows.length,1);assert.match(rows[0].source_version,/blind-completion-v2/);
 });
 test('legacy partial audit missing teaching resumes only the audit and persists the new analysis',async()=>{
  const saved=[],options=['A. apple','B. pear','C. chair','D. book'];

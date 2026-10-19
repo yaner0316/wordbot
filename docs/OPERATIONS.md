@@ -131,3 +131,7 @@ New account registration persists the existing default learning level so coverag
 ### Concise Chinese label normalization (2026-10-13)
 
 The user explicitly authorized shortening legacy Chinese label prose while retaining each concept. This cleanup uses a fixed locally reviewed plan, an original-row snapshot and per-row receipts. Conditional updates require the same word ID, owner, old Chinese label, English definition, edit timestamp and active state. Only meaning_zh and updated_at change. English definitions, saved mastery, entry time, meaning identities, immutable assessments and generation versions are preserved. This semantics-preserving label-only operation does not invalidate caches or request new model generation. Ordinary parent meaning changes continue to use the existing generation fence. Keep learner plans and snapshots local; they are not release artifacts.
+# Semantic proof revision (2026-10-20)
+
+New approvals use `blind-completion-v2`: a proposed unique answer must also survive a critical exclusion check with the existing MiniMax provider. Both requests omit the intended answer; the second response is validated independently. Failure does not reuse the first approval. Do not relabel v1 cache/checkpoint evidence as v2. This changes neither submitted assessment snapshots nor scoring/mastery/reward rules.
+

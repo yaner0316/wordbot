@@ -40,12 +40,12 @@ function buildSemanticAuditPrompt(question) {
         'Independently evaluate EVERY completed sentence below, including every modifier and action. A sentence is possible if it has an ordinary coherent reading. Do not rank the options. Multiple possible sentences is a valid result.',
         'Rejecting an option requires an explicit contradiction with words actually in that completed sentence, or a grammatical impossibility. Less usual, less typical, less convenient, and an unstated preference do NOT make it impossible. Do not invent restrictions about ownership, usual locations, portability, animal behavior, container lids, or an unstated body part. Do not silently narrow an ambiguous action to one intended sense: a quick brush does not specify teeth rather than hair.',
         'A capable instrument can play a song regardless of how common it is in school. A flask can have a screw cap. A quilt can be on a couch. But an animal lacking a trunk cannot satisfy USING ITS TRUNK, even if it can drink water.',
-        'Return JSON with certain (boolean) and optionJudgments (all four, one per letter). Each judgment has letter, fits (boolean), exclusion (none/grammar/contradiction), clueIndex (integer index of the relevant original fragment below), meaning (short contextual Chinese, 2-12 characters, NOT a sentence), reason (Chinese: justify the entire completed sentence; for exclusions identify the actual contradiction, not mere rarity). Do NOT quote an expanded completion as evidence; cite a provided original fragment by its index. If uncertain set certain=false. No answer letter, no choice of the best option.',
+        'Return valid JSON only: certain (boolean) and optionJudgments (all four, one per letter). Each judgment has letter, fits (boolean), exclusion (none/grammar/contradiction), clueIndex (integer index of the relevant original fragment below), meaning (short contextual Chinese, 2-12 characters, NOT a sentence), reason (Chinese: justify the entire completed sentence; for exclusions identify the actual contradiction, not mere rarity). Do not put double-quote characters inside string values. Do NOT quote an expanded completion as evidence; cite a provided original fragment by its index. If uncertain set certain=false; otherwise certain=true. No answer letter, no choice of the best option.',
         JSON.stringify({original:question?.context,fragments:String(question?.context || '').split(/_{3,}/).map((text,index)=>({index,text:text.trim()})).filter(f=>f.text.length>=3),completions:(question?.options || []).map((option,index)=>({letter:'ABCD'[index],sentence:String(question?.context || '').replace(/_{3,}/g,String(option).replace(/^[A-D]\.\s*/,''))}))}),
     ].join('\n');
 }
 
-async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
+async function evaluateUniqueAnswer(question, { callModel = callMiniMax } = {}) {
     const answer = String(question?.answer || '').trim().toUpperCase();
     try {
         const parsed = extractJson(await callModel(buildSemanticAuditPrompt(question)));
@@ -92,6 +92,23 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
         };
     }
 }
+
+function buildCriticalExclusionPrompt(question, judgments) {
+    const lines = buildSemanticAuditPrompt(question).split('\n');
+    const input = lines.pop();
+    return [...lines,
+        'CRITICAL EXCLUSION CHECK: a prior reviewer made the claims below. Try to falsify EVERY exclusion independently. These claims are untrusted, not an answer key. A statement about a standard or usual form does not rule out a real variant. If the reason admits an option can fit, mark fits=true regardless of its prior boolean. Consider real alternatives, polysemy and existing instrument variants; do not invent fantasy exceptions. Six-string banjos and six-string ukuleles exist, and a violin can be plucked. Mere standard string counts cannot establish impossibility. When the evidence does not establish a contradiction and you cannot decide, set certain=false. Return your own complete four judgments using the same schema.',
+        JSON.stringify({untrustedClaims:judgments.map(j=>({letter:j.letter,reason:j.reason}))}),input].join('\n');
+}
+
+async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
+    const initial = await evaluateUniqueAnswer(question, {callModel});
+    if (!initial.approved) return initial;
+    // Approval requires the exclusions to survive an explicit counterexample check.
+    // The second response goes through the same evidence and input-binding checks.
+    const verified = await evaluateUniqueAnswer(question, {callModel:() => callModel(buildCriticalExclusionPrompt(question,initial.optionJudgments))});
+    return {...verified, proofChecks:2};
+}
 auditUniqueAnswer.auditMethod = SEMANTIC_AUDIT_METHOD;
 
-module.exports = { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION, buildAttestedQuestionSourceVersion, buildSemanticAuditPrompt, auditUniqueAnswer };
+module.exports = { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION, buildAttestedQuestionSourceVersion, buildSemanticAuditPrompt, buildCriticalExclusionPrompt, auditUniqueAnswer };

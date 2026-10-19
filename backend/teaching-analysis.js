@@ -1,6 +1,6 @@
 'use strict';
 const TEACHING_ANALYSIS_POLICY = 'teaching-analysis-v1';
-const SEMANTIC_AUDIT_METHOD = 'blind-completion-v1';
+const SEMANTIC_AUDIT_METHOD = 'blind-completion-v2';
 const clean = value => String(value || '').trim();
 const optionWord = value => clean(value).replace(/^[A-D]\.\s*/, '').toLowerCase();
 const chineseReason = value => /[\u3400-\u9fff]/.test(clean(value)) && clean(value).length >= 8 && clean(value).length <= 500;

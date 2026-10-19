@@ -62,7 +62,7 @@ test('new teaching policy cannot supply a missing or contradictory snapshot whil
 });
 
 test('a new semantic method marker alone cannot attest an old or missing proof',()=>{
-    const row=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1|blind-completion-v1'});
+    const row=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1|blind-completion-v2'});
     assert.ok(getCacheQuestionReadinessIssues(row,{requireAiAudit:true}).includes('semantic_audit_outdated'));
 });
 test('builds an update payload for a replacement fill-in cache question', () => {
