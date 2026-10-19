@@ -1,5 +1,12 @@
 'use strict';
 
+require('node:test')('semantic rejected contexts survive checkpoint normalization for the same meaning',()=>{
+ const {normalizeGenerationCheckpoint}=require('../question-generation-checkpoint');
+ const current={word:'bank',level:'中学',meaning:'finance',wordVersion:1};
+ const checkpoint=normalizeGenerationCheckpoint({...current,variants:[],rejectedContexts:['She saw a _____ nearby.']},current);
+ require('node:assert/strict').deepEqual(checkpoint.rejectedContexts,['She saw a _____ nearby.']);
+});
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 

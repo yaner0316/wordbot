@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
 const { getContextTranslationIssues } = require('./context-sentence-translation');
 const { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION } = require('./question-semantic-audit');
-const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
+const { TEACHING_ANALYSIS_POLICY, SEMANTIC_AUDIT_METHOD, getTeachingAnalysisIssues } = require('./teaching-analysis');
 
 const QUESTION_CACHE_STATUS = {
     PENDING: 'pending',
@@ -143,6 +143,8 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
+    if (String(normalized.sourceVersion || '').split('|').includes(SEMANTIC_AUDIT_METHOD)
+        && question.teachingAnalysis?.auditMethod !== SEMANTIC_AUDIT_METHOD) issues.push('semantic_audit_outdated');
     if (String(normalized.sourceVersion || '').split('|').includes(TEACHING_ANALYSIS_POLICY)) {
         issues.push(...getTeachingAnalysisIssues(question,question.teachingAnalysis));
     }

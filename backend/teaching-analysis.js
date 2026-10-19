@@ -1,8 +1,18 @@
 'use strict';
 const TEACHING_ANALYSIS_POLICY = 'teaching-analysis-v1';
+const SEMANTIC_AUDIT_METHOD = 'blind-completion-v1';
 const clean = value => String(value || '').trim();
 const optionWord = value => clean(value).replace(/^[A-D]\.\s*/, '').toLowerCase();
 const chineseReason = value => /[\u3400-\u9fff]/.test(clean(value)) && clean(value).length >= 8 && clean(value).length <= 500;
+
+function semanticAuditInputFingerprint(question) {
+    const words = (question.options || []).map(optionWord);
+    const answer = clean(question.answer || question.correctAnswer).toUpperCase();
+    return require('node:crypto').createHash('sha256').update(JSON.stringify({
+        context: clean(question.context || question.question_text || question.question).replace(/\s+/g,' ').replace(/_{3,}/g,'_____'),
+        options: [...words].sort(), correctWord: words['ABCD'.indexOf(answer)] || '',
+    })).digest('hex');
+}
 
 function getTeachingAnalysisIssues(question, analysis) {
     if (!analysis || analysis.schemaVersion !== 1) return ['teaching_analysis_missing'];
@@ -20,6 +30,7 @@ function getTeachingAnalysisIssues(question, analysis) {
             && /[\u3400-\u9fff]/.test(clean(item.meaning)) && clean(item.meaning).length <= 80 && chineseReason(item.reason))) issues.push('teaching_options_incomplete');
     const fitting = options.filter(item => item.fits === true);
     if (!expected || fitting.length !== 1 || optionWord(fitting[0]?.word) !== expected || optionWord(analysis.correctWord) !== expected) issues.push('teaching_non_unique_answer');
+    if (analysis.auditMethod === SEMANTIC_AUDIT_METHOD && analysis.inputFingerprint !== semanticAuditInputFingerprint(question)) issues.push('semantic_audit_input_changed');
     return issues;
 }
 function teachingAnalysisFromAudit(question, audit) {
@@ -33,4 +44,4 @@ function teachingAnalysisFromAudit(question, audit) {
         options:judgments.map(item=>({word:words['ABCD'.indexOf(item.letter)],fits:item.fits,meaning:clean(item.meaning),reason:clean(item.reason)}))};
     return getTeachingAnalysisIssues(question,analysis).length ? null : analysis;
 }
-module.exports = {TEACHING_ANALYSIS_POLICY,getTeachingAnalysisIssues,teachingAnalysisFromAudit};
+module.exports = {TEACHING_ANALYSIS_POLICY,SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint,getTeachingAnalysisIssues,teachingAnalysisFromAudit};

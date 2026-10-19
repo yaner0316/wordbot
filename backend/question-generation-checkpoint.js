@@ -33,6 +33,7 @@ function invalidateVariantFromStage(variant, stage) {
 }
 
 function checkpointInvalidationStageForIssues(issues) {
+    if (issues.some(issue => /^semantic_audit_/.test(issue))) return 'semantic_audit';
     if (issues.some(issue => /context/.test(issue) && !/translation/.test(issue))) return 'context';
     if (issues.some(issue => /context.*translation|translation.*context/.test(issue))) return 'context_translation';
     if (issues.some(issue => /option_meaning|correct_meaning/.test(issue))) return 'option_meanings';
@@ -58,6 +59,8 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
         level: input.level,
         word: input.word,
         meaning: input.meaning,
+        ...(!materialChange && Array.isArray(previous.rejectedContexts) && previous.rejectedContexts.length
+            ? {rejectedContexts:[...previous.rejectedContexts]} : {}),
         variants: materialChange
             ? []
             : casingChanged

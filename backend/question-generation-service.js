@@ -78,7 +78,8 @@ function rowCheckpoint(row, slot, wordText) {
             : Array.isArray(row.optionMeanings) ? [...row.optionMeanings] : [],
         localValidated: true,
         audit: String(row.ai_audit_status || '').toLowerCase() === 'approved'
-            ? { approved: true, status: 'approved', validLetters: [row.answer], teachingAnalysis: row.teaching_analysis || null }
+            ? { approved: true, status: 'approved', validLetters: [row.answer], teachingAnalysis: row.teaching_analysis || null,
+                auditMethod: row.teaching_analysis?.auditMethod, inputFingerprint: row.teaching_analysis?.inputFingerprint }
             : undefined,
         row,
     };
@@ -94,6 +95,7 @@ function createQuestionGenerationService({
     saveCheckpoint = async () => {},
     requiredReadyCount = 2,
     maxAttempts = 3,
+    requiredAuditMethod = null,
 } = {}) {
     if (typeof loadWord !== 'function') throw new Error('LOAD_WORD_REQUIRED');
     if (typeof generateCandidates !== 'function') throw new Error('GENERATE_CANDIDATES_REQUIRED');
@@ -122,6 +124,10 @@ function createQuestionGenerationService({
             const excludedStems = new Set((word.excludedQuestionStems || []).map(normalizeText));
             const candidateIssues = candidate => [
                 ...validationIssues(validateCandidate, candidate, word),
+                ...(requiredAuditMethod && (candidate?.teaching_analysis?.auditMethod !== requiredAuditMethod
+                    || !String(candidate?.source_version || '').split('|').includes(requiredAuditMethod)
+                    || candidate.teaching_analysis.inputFingerprint !== require('./teaching-analysis').semanticAuditInputFingerprint({context:candidate.question_text,options:candidate.options,answer:candidate.answer}))
+                    ? ['semantic_audit_outdated'] : []),
                 ...(excludedStems.has(normalizeText(candidate?.question_text || candidate?.questionText)) ? ['context_already_displayed'] : []),
             ];
 

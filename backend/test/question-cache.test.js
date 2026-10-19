@@ -60,6 +60,11 @@ test('new teaching policy cannot supply a missing or contradictory snapshot whil
     const current={...legacy,source_version:legacy.source_version+'|teaching-analysis-v1'};
     assert.ok(getCacheQuestionReadinessIssues(current,{requireAiAudit:true}).includes('teaching_analysis_missing'));
 });
+
+test('a new semantic method marker alone cannot attest an old or missing proof',()=>{
+    const row=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1|blind-completion-v1'});
+    assert.ok(getCacheQuestionReadinessIssues(row,{requireAiAudit:true}).includes('semantic_audit_outdated'));
+});
 test('builds an update payload for a replacement fill-in cache question', () => {
     const fields = buildCacheQuestionFields({
         question: {

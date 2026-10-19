@@ -343,6 +343,7 @@ function createSupabaseQuestionGenerationService({
 
     const generationService = createQuestionGenerationService({
         loadWord,
+        requiredAuditMethod: candidateBuilderOptions?.semanticAudit?.auditMethod,
         validateCandidate: validate,
         requiredReadyCount,
         maxAttempts,
@@ -401,6 +402,7 @@ function createQuestionGenerationRuntime({
     let jobStore;
     const generationService = createQuestionGenerationService({
         loadWord,
+        requiredAuditMethod: candidateBuilderOptions?.semanticAudit?.auditMethod,
         validateCandidate: validateCandidate || defaultValidateCandidate,
         requiredReadyCount,
         maxAttempts: maxGenerationAttempts,

@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('required audit method invalidates only obsolete checkpoint audit and cannot republish its rows',async()=>{
+ const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+ const {SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint}=require('../teaching-analysis');
+ const word={id:'w',word:'bank',level:'中学'};
+ const oldRows=['She deposited money at the _____.','The _____ approved our loan.'].map(question_text=>({question_text,options:['A. bank','B. shore','C. desk','D. road'],answer:'A',ai_audit_status:'approved',source_version:'old',question_fingerprint:fingerprintQuestion({question_text},'w')}));
+ let generated=0;
+ const service=createQuestionGenerationService({requiredAuditMethod:SEMANTIC_AUDIT_METHOD,loadWord:async()=>word,validateCandidate:()=>[],
+ loadCheckpoint:async()=>({word:'bank',level:'中学',meaning:'["",""]',variants:oldRows.map((row,i)=>({slot:i+1,context:row.question_text.replace('_____','bank'),distractors:['shore','desk','road'],contextTranslation:'银行提供金融服务。',audit:{approved:true,status:'approved'},row}))}),
+ generateCandidates:async request=>{generated++;assert.ok(request.generationCheckpoint.variants.every(v=>!v.audit&&!v.row&&v.contextTranslation&&v.distractors.length===3));return oldRows.map((r,i)=>{const next={...r,options:i?['A. bank','B. tree','C. coin','D. sky']:r.options,source_version:SEMANTIC_AUDIT_METHOD};return {...next,teaching_analysis:{auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint:semanticAuditInputFingerprint({context:next.question_text,options:next.options,answer:next.answer})}};});},publishReadyVariants:async()=>{}});
+ await service.process({word_id:'w',user_id:'u'});assert.equal(generated,1);
+});
+
 test('importing a cached sibling preserves partial work even when its slot is occupied', async () => {
     const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
     const sibling={question_text:'She deposited money at the _____.',options:['bank','shore','desk','road'],answer:'A'};

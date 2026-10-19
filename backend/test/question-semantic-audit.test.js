@@ -4,12 +4,21 @@ const { auditUniqueAnswer } = require('../question-semantic-audit');
 
 const question = { context: 'Passengers must pay the bus _____ before sitting down.', options: ['A. fare', 'B. charge', 'C. fee', 'D. route'], optionMeanings: ['票价', '费用', '费用', '路线'], answer: 'A' };
 
+test('semantic reviewer receives a blind question independent of the configured answer', async () => {
+    const prompts=[];
+    for (const answer of ['A','C']) await auditUniqueAnswer({...question,answer},{callModel:async prompt=>{
+        prompts.push(prompt);return '{"certain":false,"validLetters":[]}';
+    }});
+    assert.equal(prompts[0],prompts[1], 'the expected answer must not bias semantic fit judgments');
+    assert.ok(!prompts[0].includes('expectedAnswer'));
+});
+
 test('semantic audit approves only one certain answer matching the configured answer', async () => {
     const result = await auditUniqueAnswer({...question,context:'We paid the bus _____ with a passenger ticket; it covers this journey.',options:['A. fare','B. bread','C. coat','D. pencil']}, { callModel: async () => JSON.stringify({validLetters:['A'],certain:true,clue:'passenger ticket',clueReason:'乘客车票提供了交通费用的线索。',correctReason:'车费指乘坐公共交通工具的费用。',optionJudgments:[
-      {letter:'A',fits:true,meaning:'车费',reason:'车票支付的是这一趟旅程的车费。'},
-      {letter:'B',fits:false,meaning:'面包',reason:'面包是食物，不能满足购买车票的费用用途。'},
-      {letter:'C',fits:false,meaning:'外套',reason:'外套是衣物，不能满足购买车票的费用用途。'},
-      {letter:'D',fits:false,meaning:'铅笔',reason:'铅笔是文具，不能满足购买车票的费用用途。'},
+      {letter:'A',fits:true,exclusion:'none',clue:'passenger ticket',meaning:'车费',reason:'车票支付的是这一趟旅程的车费。'},
+      {letter:'B',fits:false,exclusion:'contradiction',clue:'passenger ticket',meaning:'面包',reason:'面包是食物，不能满足购买车票的费用用途。'},
+      {letter:'C',fits:false,exclusion:'contradiction',clue:'passenger ticket',meaning:'外套',reason:'外套是衣物，不能满足购买车票的费用用途。'},
+      {letter:'D',fits:false,exclusion:'contradiction',clue:'passenger ticket',meaning:'铅笔',reason:'铅笔是文具，不能满足购买车票的费用用途。'},
     ]}) });
     assert.equal(result.approved, true);
     assert.equal(result.status, 'approved');
@@ -37,7 +46,7 @@ test('semantic audit instructs the reviewer to reject every plausible alternate 
         },
     });
 
-    assert.match(prompt, /plausibly complete the sentence/i);
+    assert.match(prompt, /Independently evaluate EVERY completed sentence/i);
     assert.equal(result.approved, false);
     assert.deepEqual(result.validLetters, ['B', 'D']);
 });

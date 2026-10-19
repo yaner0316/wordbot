@@ -28,7 +28,7 @@ test('grounded evidence is keyed to the option word so shuffled answers keep the
     {letter:'C',fits:true,meaning:'苹果',reason:'苹果是句中苹果派所需要的水果。'},
     {letter:'D',fits:false,meaning:'香蕉',reason:'香蕉不能满足句中明确的苹果派用途。'},
   ]};
-  const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify(evidence)});
+  const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify({...evidence,optionJudgments:evidence.optionJudgments.map(item=>({...item,exclusion:item.fits?'none':'contradiction',clue:evidence.clue}))})});
   assert.equal(result.approved,true);
   assert.equal(result.teachingAnalysis.options.find(item=>item.word==='grape').reason,evidence.optionJudgments[1].reason);
   const {getTeachingAnalysisIssues}=require('../teaching-analysis');

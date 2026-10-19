@@ -1358,7 +1358,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return requireSemanticAudit ? null : row;
     }
 
-    const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues({context:blankedContext,options,answer},state.audit.teachingAnalysis).length);
+    const auditInput = {context:blankedContext,options,answer};
+    const requiredAuditMethod = semanticAudit.auditMethod;
+    const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues(auditInput,state.audit.teachingAnalysis).length)
+        && (!requiredAuditMethod || (state.audit.auditMethod === requiredAuditMethod
+            && state.audit.inputFingerprint === require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)));
     const audit = (reusableAudit ? state.audit : null) || await semanticAudit({
         type: 1,
         word: wordText,
@@ -1376,12 +1380,26 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         const unavailable = audit?.status === 'unavailable';
         reportRejection(unavailable ? 'semantic_audit_unavailable' : 'semantic_audit_rejected');
         if (!unavailable) {
-            await saveVariantCheckpoint(invalidateVariantFromStage(state, 'distractors'));
+            if (['semantic_non_unique','semantic_expected_mismatch'].includes(audit?.code)) {
+                await saveVariantCheckpoint({...invalidateVariantFromStage(state,'context'),
+                    rejectedContexts:[...new Set([...(state.rejectedContexts || []),blankedContext])]});
+            } else {
+                await saveVariantCheckpoint(invalidateVariantFromStage(state,
+                    ['semantic_evidence_invalid','semantic_audit_uncertain'].includes(audit?.code) ? 'semantic_audit' : 'distractors'));
+            }
         }
         return null;
     }
     row.ai_audit_status = 'approved';
     row.source_version = buildAttestedQuestionSourceVersion('supabase-contextual-variant-v3');
+    if (requiredAuditMethod) {
+        if (audit.auditMethod !== requiredAuditMethod || audit.inputFingerprint !== require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)) {
+            reportRejection('semantic_audit_outdated');
+            await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
+            return null;
+        }
+        row.source_version += '|' + requiredAuditMethod;
+    }
     const teachingAnalysis = audit.teachingAnalysis;
     const teachingIssues = getTeachingAnalysisIssues({context:blankedContext,options,answer},teachingAnalysis);
     if (requireTeachingAnalysis && teachingIssues.length) {
@@ -1436,12 +1454,18 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     const excludedStems = new Set([
         ...(word.excludedQuestionStems || []),
         ...(approvedVariants || []).map(variant => variant?.question_text || variant?.questionText),
+        ...checkpoint.variants.flatMap(variant=>variant?.rejectedContexts || []),
+        ...(checkpoint.rejectedContexts || []),
     ].map(normalizeQuestionStem).filter(Boolean));
     const contextIsExcluded = context => excludedStems.has(normalizeQuestionStem(blankWordInContext(context, wordText)));
     const resumableVariants = checkpoint.variants
         .filter(variant => variant && !variant.row && variant.context && !contextIsExcluded(variant.context))
         .sort((left, right) => Number(left.slot || 0) - Number(right.slot || 0));
     const persistVariant = async variant => {
+        if (variant.rejectedContexts?.length) {
+            checkpoint.rejectedContexts = [...new Set([...(checkpoint.rejectedContexts || []),...variant.rejectedContexts])];
+            for (const rejected of variant.rejectedContexts) excludedStems.add(normalizeQuestionStem(rejected));
+        }
         const index = checkpoint.variants.findIndex(item => Number(item?.slot) === Number(variant.slot));
         if (index >= 0) checkpoint.variants[index] = { ...variant };
         else checkpoint.variants.push({ ...variant });
@@ -2292,7 +2316,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     const prompt = [
         `Write one natural English sentence of 8 to 16 words for level "${String(level || '').trim()}".`,
         `Use "${String(word || '').trim().toLowerCase()}" exactly once with meaning "${String(meaning || '').trim()}".`,
-        'Use the word in a concrete situation. Do not describe the word itself or explain its meaning.',
+        'Include a stated physical or functional clue that rules out alternatives of the same category. Time, place or typicality alone is insufficient. Use a real situation, not a definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
         'Return only JSON with one context key.',
     ].filter(Boolean).join('\n');

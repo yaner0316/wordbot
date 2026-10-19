@@ -1,5 +1,13 @@
 # WordBot Operations
 
+## Independent completion audit (2026-10-19)
+
+New audits use `blind-completion-v1` in addition to the compatible existing policy tags. MiniMax receives the four completed sentences and numbered original context fragments, without an expected answer. The server derives the fitting set, validates each exclusion and its cited original fragment, requires one answer matching the internal key, and persists the existing teaching JSON with method/input fingerprint metadata. Letter shuffling preserves word-based binding; context/option/answer drift invalidates it. No migration is needed and old approved supply is not globally purged.
+
+Default generation requires the current method at both checkpoint restoration and candidate validation. Old audit/row artifacts resume at semantic review while retaining context, options, meanings and translation. A confirmed non-unique context invalidates its dependent stages and remains excluded in the durable checkpoint; replacement contexts must contain a distinguishing stated clue. Formatting failures retain their upstream work. Existing lease, edit/archive, pair and atomic publisher guards remain authoritative.
+
+For an authorized stored-question repair, back up exact rows and original history hashes locally, record per-row model results and conditional-update receipts, preserve passing siblings, retire only failed supply without deleting referenced rows, and request the existing durable replacement path. Do not rewrite historical answers, scores, teaching snapshots, mastery, cooldown or game state. Large cross-account external-model batches require approval for that concrete scope; a local heuristic screening lead is not a semantic failure or a completed full audit. Local learner data and repair plans must not be committed to this repository.
+
 ## Teaching snapshots and history review (2026-10-13)
 
 Apply `20261013_teaching_analysis_snapshots.sql` through the existing migration runner before this backend. It adds nullable `teaching_analysis` JSONB to cache and assessments, extends the installed atomic publisher while retaining lease/archive/edit fences and ACLs, and validates tagged cache rows and challenge snapshots. The change is repeatable; an otherwise current schema applies only this migration. No startup-time DDL, data backfill, cache purge or history rewrite occurs.

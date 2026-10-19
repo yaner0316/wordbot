@@ -15,6 +15,29 @@ const word = {
     distractors: ['pear', 'desk', 'chair'],
 };
 const translateWords = async values => Object.fromEntries(values.map(value => [value, value === 'apple' ? '苹果' : '干扰项']));
+
+test('a semantic non-unique context is remembered and never restored from the entry context',async()=>{
+ const filled='The child picked an apple from the tree used to grow apples.',options=['A. apple','B. pear','C. chair','D. book'];let checkpoint;
+ await buildCacheQuestionRowsForWord({user,word:{...word,context_en:filled},level:LEVEL,requiredCount:1,allowPartialCandidates:true,requireSemanticAudit:true,
+ generationCheckpoint:{variants:[{slot:1,context:filled,distractors:['pear','chair','book'],optionWords:['apple','pear','chair','book'],options,answer:'A',optionMeanings:['苹果','梨','椅子','书'],contextTranslation:'这个孩子从结苹果的树上摘了一个苹果。',localValidated:true}]},saveGenerationCheckpoint:async value=>{checkpoint=structuredClone(value);},
+ generateContext:async()=>'',generateDistractors:async()=>assert.fail('existing distractors are reusable until semantic review'),translateWords:async()=>assert.fail('existing meanings are reusable'),translateContext:async()=>assert.fail('existing translation is reusable'),semanticAudit:async()=>({approved:false,status:'rejected',validLetters:['A','B'],code:'semantic_non_unique'})});
+ assert.ok(checkpoint.variants[0].rejectedContexts.includes(filled.replace('apple','_____')));assert.equal(checkpoint.variants[0].context,undefined);
+ let generated=0;
+ await buildCacheQuestionRowsForWord({user,word:{...word,context_en:filled},level:LEVEL,requiredCount:1,allowPartialCandidates:true,generationCheckpoint:checkpoint,
+ generateContext:async()=>{generated++;return '';},generateDistractors:async()=>assert.fail('rejected context must be replaced before distractors')});
+ assert.ok(generated>0);
+});
+
+test('a complete old-method audit resumes only semantic review instead of bypassing the new method',async()=>{
+ const {SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint}=require('../teaching-analysis');
+ const options=['A. apple','B. pear','C. chair','D. book'];let audits=0;
+ const analysis={schemaVersion:1,clue:'grow apples',clueReason:'树上结苹果是句中明确的来源。',correctWord:'apple',correctReason:'这种树结的是苹果，因此要填苹果。',options:options.map((o,i)=>({word:o.slice(3),fits:i===0,meaning:['苹果','梨','椅子','书'][i],reason:'树上结苹果明确了这个句子中所说的果实。'}))};
+ const audit=Object.assign(async q=>{audits++;const inputFingerprint=semanticAuditInputFingerprint(q);return {approved:true,status:'approved',validLetters:['A'],auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint,teachingAnalysis:{...analysis,auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint}};},{auditMethod:SEMANTIC_AUDIT_METHOD});
+ const rows=await buildCacheQuestionRowsForWord({user,word,level:LEVEL,requiredCount:1,allowPartialCandidates:true,requireSemanticAudit:true,semanticAudit:audit,
+ generationCheckpoint:{variants:[{slot:1,context:'The child picked an apple from the tree used to grow apples.',distractors:['pear','chair','book'],optionWords:['apple','pear','chair','book'],options,answer:'A',optionMeanings:['苹果','梨','椅子','书'],contextTranslation:'这个孩子从结苹果的树上摘了一个苹果。',localValidated:true,audit:{approved:true,status:'approved',validLetters:['A'],teachingAnalysis:analysis}}]},
+ generateContext:async()=>assert.fail('valid context must be reused'),generateDistractors:async()=>assert.fail('valid distractors must be reused'),translateWords:async()=>assert.fail('valid meanings must be reused'),translateContext:async()=>assert.fail('valid translation must be reused')});
+ assert.equal(audits,1);assert.equal(rows.length,1);assert.match(rows[0].source_version,/blind-completion-v1/);
+});
 test('legacy partial audit missing teaching resumes only the audit and persists the new analysis',async()=>{
  const saved=[],options=['A. apple','B. pear','C. chair','D. book'];
  let audits=0,contexts=0,translations=0,distractors=0;
