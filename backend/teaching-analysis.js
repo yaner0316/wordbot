@@ -1,6 +1,7 @@
 'use strict';
 const TEACHING_ANALYSIS_POLICY = 'teaching-analysis-v1';
-const SEMANTIC_AUDIT_METHOD = 'blind-completion-v2';
+const SEMANTIC_AUDIT_METHOD = 'blind-completion-v3';
+const INPUT_BOUND_SEMANTIC_AUDIT_METHODS = ['blind-completion-v2',SEMANTIC_AUDIT_METHOD];
 const clean = value => String(value || '').trim();
 const optionWord = value => clean(value).replace(/^[A-D]\.\s*/, '').toLowerCase();
 const chineseReason = value => /[\u3400-\u9fff]/.test(clean(value)) && clean(value).length >= 8 && clean(value).length <= 500;
@@ -35,7 +36,7 @@ function getTeachingAnalysisIssues(question, analysis) {
             && /[\u3400-\u9fff]/.test(clean(item.meaning)) && clean(item.meaning).length <= 80 && chineseReason(item.reason))) issues.push('teaching_options_incomplete');
     const fitting = options.filter(item => item.fits === true);
     if (!expected || fitting.length !== 1 || optionWord(fitting[0]?.word) !== expected || optionWord(analysis.correctWord) !== expected) issues.push('teaching_non_unique_answer');
-    if (analysis.auditMethod === SEMANTIC_AUDIT_METHOD && analysis.inputFingerprint !== semanticAuditInputFingerprint(question)) issues.push('semantic_audit_input_changed');
+    if (INPUT_BOUND_SEMANTIC_AUDIT_METHODS.includes(analysis.auditMethod) && analysis.inputFingerprint !== semanticAuditInputFingerprint(question)) issues.push('semantic_audit_input_changed');
     if (analysis.senseFingerprint && semanticSenseFingerprint(question) && analysis.senseFingerprint!==semanticSenseFingerprint(question)) issues.push('semantic_audit_sense_changed');
     return issues;
 }
@@ -50,4 +51,4 @@ function teachingAnalysisFromAudit(question, audit) {
         options:judgments.map(item=>({word:words['ABCD'.indexOf(item.letter)],fits:item.fits,meaning:clean(item.meaning),reason:clean(item.reason)}))};
     return getTeachingAnalysisIssues(question,analysis).length ? null : analysis;
 }
-module.exports = {TEACHING_ANALYSIS_POLICY,SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint,semanticSenseFingerprint,getTeachingAnalysisIssues,teachingAnalysisFromAudit};
+module.exports = {TEACHING_ANALYSIS_POLICY,SEMANTIC_AUDIT_METHOD,INPUT_BOUND_SEMANTIC_AUDIT_METHODS,semanticAuditInputFingerprint,semanticSenseFingerprint,getTeachingAnalysisIssues,teachingAnalysisFromAudit};

@@ -1,9 +1,15 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {auditUniqueAnswer}=require('../question-semantic-audit');
 const {getTeachingAnalysisIssues}=require('../teaching-analysis');
+
+test('printed-English uniqueness is independent of hidden Chinese option glosses',()=>{
+ const {buildSemanticAuditPrompt}=require('../question-semantic-audit');
+ const q={context:'The bag was _____ to carry.',options:['easy','light','square','sour'],answer:'A'};
+ assert.equal(buildSemanticAuditPrompt({...q,optionMeanings:['容易','光','正方形的','酸的']}),buildSemanticAuditPrompt({...q,optionMeanings:['容易','轻的','正方形的','酸的']}));
+});
 const q={context:'We observed an _____ using its trunk to drink water.',options:['A. rhinoceros','B. elephant','C. hippopotamus','D. buffalo'],answer:'B',meanings:['犀牛','大象','河马','水牛']};
 function reply(fits=[false,true,false,false]){return {certain:true,optionJudgments:q.options.map((o,i)=>({letter:'ABCD'[i],fits:fits[i],exclusion:fits[i]?'none':'contradiction',clue:'using its trunk',meaning:q.meanings[i],reason:fits[i]?'大象具有长鼻子，能够完成句中的饮水动作。':'这种动物没有长鼻子，无法完成句中用长鼻子饮水的动作。'}))};}
-test('complete-sentence judgments derive the unique answer without a suggested answer letter',async()=>{let prompt;const result=await auditUniqueAnswer(q,{callModel:async p=>{prompt=p;return JSON.stringify(reply());}});assert.equal(result.approved,true);assert.deepEqual(result.validLetters,['B']);assert.equal(result.auditMethod,'blind-completion-v2');assert.match(prompt,/We observed an elephant using its trunk/);assert.ok(!prompt.includes('expectedAnswer'));assert.deepEqual(getTeachingAnalysisIssues(q,result.teachingAnalysis),[]);});
+test('complete-sentence judgments derive the unique answer without a suggested answer letter',async()=>{let prompt;const result=await auditUniqueAnswer(q,{callModel:async p=>{prompt=p;return JSON.stringify(reply());}});assert.equal(result.approved,true);assert.deepEqual(result.validLetters,['B']);assert.equal(result.auditMethod,'blind-completion-v3');assert.match(prompt,/We observed an elephant using its trunk/);assert.ok(!prompt.includes('expectedAnswer'));assert.deepEqual(getTeachingAnalysisIssues(q,result.teachingAnalysis),[]);});
 test('all plausible completions reject a best-answer claim',async()=>{const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify({...reply([true,true,true,true]),validLetters:['B']})});assert.equal(result.approved,false);assert.deepEqual(result.validLetters,['A','B','C','D']);});
 test('a less-likely exclusion or fabricated quote cannot establish uniqueness',async()=>{for(const change of [{exclusion:'less_likely'},{clue:'not present in this sentence'},{fits:true,exclusion:'contradiction'}]){const r=reply();Object.assign(r.optionJudgments[0],change);assert.equal((await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify(r)})).approved,false);}});
 test('audit evidence is bound to the actual sentence and option identity, not shuffled letters',async()=>{const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify(reply())});assert.equal(result.approved,true);const shuffled={...q,options:['A. elephant','B. buffalo','C. rhinoceros','D. hippopotamus'],optionMeanings:['大象','水牛','犀牛','河马'],answer:'A'};assert.deepEqual(getTeachingAnalysisIssues(shuffled,result.teachingAnalysis),[]);for(const change of [{context:'We saw an _____ in a park.'},{options:['A. giraffe',...q.options.slice(1)]},{answer:'C'}])assert.ok(getTeachingAnalysisIssues({...q,...change},result.teachingAnalysis).includes('semantic_audit_input_changed'));});
@@ -29,11 +35,11 @@ test('failure of the critical proof check cannot reuse the first approval',async
  assert.equal(result.approved,false);assert.equal(result.status,'unavailable');
 });
 
-test('blind audit supplies all option senses without revealing which answer is expected',async()=>{
+test('English review stays glossary-blind and the separate sense check gets the actual target sense',async()=>{
  const question={context:'The US coin worth five cents is a _____.',options:['A. nickel','B. copper','C. silver','D. gold'],optionMeanings:['镍','铜','银','金'],answer:'A'};
  let prompt;await auditUniqueAnswer(question,{callModel:async p=>{prompt=p;return '{}';}});
- const input=JSON.parse(prompt.split('\n').at(-1));assert.equal(input.completions[0].sense,'镍');assert.equal(input.completions[1].sense,'铜');assert.ok(!prompt.includes('expectedAnswer'));
- assert.match(prompt,/supplied Chinese sense/);
+ const input=JSON.parse(prompt.split('\n').at(-1));assert.ok(input.completions.every(c=>!('sense'in c)));assert.ok(!prompt.includes('expectedAnswer'));
+ const {buildWordSensePrompt}=require('../question-semantic-audit');assert.equal(JSON.parse(buildWordSensePrompt(question).split('\n').at(-1)).providedSense,'镍');
 });
 
 test('sense evidence survives letter shuffles but not a change from metal to coin',async()=>{
@@ -51,4 +57,9 @@ test('a fitting option also needs an independent, input-bound sense approval',as
  const result=await auditUniqueAnswer(question,{callModel:async p=>JSON.stringify(p.startsWith('WORD SENSE CHECK')?{matches:true,providedSense:'大象',contextualSense:'大象',reason:'句中所指的动物正是给定词义的大象。'}:reply())});
  assert.equal(result.approved,true);assert.equal(result.senseChecks,1);assert.equal(result.teachingAnalysis.senseVerified,true);
  assert.ok(getTeachingAnalysisIssues({...question,optionMeanings:['犀牛','象棋','河马','水牛']},result.teachingAnalysis).includes('semantic_audit_sense_changed'));
+});
+
+test('sense check marks the actual target in a subordinate clause, not its surrounding emotion',()=>{
+ const {buildWordSensePrompt}=require('../question-semantic-audit');const q={context:'The boy felt sad when the canceled picnic _____ him.',options:['angered','disappointed','bored','puzzled'],answer:'B',optionMeanings:['激怒','使失望','使厌烦','使困惑']};
+ const input=JSON.parse(buildWordSensePrompt(q).split('\n').at(-1));assert.match(input.markedSentence,/picnic «disappointed» him/);assert.ok(!input.markedSentence.includes('«sad»'));assert.equal(input.providedSense,'使失望');
 });
