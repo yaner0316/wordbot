@@ -25,7 +25,7 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 - Coverage is continuously reconciled. Missing, stale, wrong-level, invalid, or incomplete supply creates or revives durable generation work without requiring a user or operator to notice it first.
 - A target generation failure is never terminal. Retries continue with bounded backoff until the target is ready, mastered, or deleted. Attempt counts and safe diagnostics remain observable but do not remove a target from the executable queue.
 - Approved partial work and valid intermediate stage artifacts are durable. Retry resumes at the first missing or invalid stage. A changed input invalidates that stage and its downstream dependents only; it does not rerun unrelated valid upstream work or discard an independently approved variant.
-- Publishing is atomic at the selectable-pair boundary. Incomplete artifacts are not selectable, while the last valid active pair remains available until its replacement pair is ready.
+- Publishing is atomic at the selectable-pair boundary. Incomplete artifacts are not selectable, while the last valid active pair remains available until its replacement pair is ready. Self-selected practice may start with one already-published, available, current-level, policy-compatible approved question per meaning, without waiting for a second reserve question. All individual question quality and audit gates still apply; retired rows and generation checkpoints remain unselectable. Formal selection and background pair replenishment retain their two-question requirements.
 
 ## Word and phrase entry
 

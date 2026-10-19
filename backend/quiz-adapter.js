@@ -409,7 +409,7 @@ async function generateQuizWithDataSource({
     );
     const readyRecordIds = challengeCandidates ? new Set(selectCachedQuestionsForWordQueue({
         cacheRows: questionCacheRows, queue: challengeCandidates.filter(w=>w.eligible).map(w=>w.recordId),
-        userId: canonicalUsername, level: effectiveLevel, roundType, requireReadyPair:true,
+        userId: canonicalUsername, level: effectiveLevel, roundType, requireReadyPair:mode !== 'practice',
         limit: challengeCandidates.length, recentQuestionTextsByWord, now,
     }).map(question=>question.record_id)) : new Set();
     const queue = challengeCandidates ? chooseChallengeQueue({ selection, wordRows, limit,
@@ -438,7 +438,7 @@ async function generateQuizWithDataSource({
         userId: canonicalUsername,
         level: effectiveLevel,
         roundType,
-        requireReadyPair: true,
+        requireReadyPair: mode !== 'practice',
         limit,
         recentQuestionTextsByWord,
         now,

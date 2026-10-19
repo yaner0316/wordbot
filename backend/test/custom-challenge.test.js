@@ -22,7 +22,7 @@ function fixture(count = 12, missing = []) {
     getAssessmentsForUser: async () => [], getFormalDisplayEventsForUser: async () => displays,
     getQuestionCache: async () => cache, ensureQuizQuestionSupply: async (user, ids) => queued.push(...ids),
   };
-  return { words, displays, queued, dataSource };
+  return { words, cache, displays, queued, dataSource };
 }
 function generate(f, meaningIds = [], mode = 'custom') {
   return generateQuizWithDataSource({ username: 'child', level: '中学', mode: 'real', now: NOW,
@@ -53,6 +53,74 @@ test('practice can choose cooling meanings, and its display does not prioritize 
   const candidates=await getChallengeCandidatesWithDataSource({username:'child',dataSource:f.dataSource,now:NOW,mode:'practice'});
   assert.equal(candidates.candidates[0].eligible,true);
 });
+
+test('practice starts a complete ten-question selection with only one approved active question per meaning', async () => {
+  const f = fixture(10);
+  f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
+  const ids = f.words.map(word => word.id);
+  const quiz = await generate(f, ids);
+  assert.equal(quiz.pending, undefined);
+  assert.equal(quiz.mode, 'practice');
+  assert.equal(quiz.questions.length, 10);
+  assert.deepEqual(new Set(quiz.questions.map(q => q.meaningId)), new Set(ids));
+  assert.deepEqual(f.queued, []);
+});
+
+test('practice autofill prefers single approved questions over unrelated missing supply', async () => {
+  const f = fixture(20, Array.from({length:10}, (_, i) => `word-${i}`));
+  f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
+  const quiz = await generate(f, ['word-19']);
+  assert.equal(quiz.pending, undefined);
+  assert.equal(quiz.questions.length, 10);
+  assert.deepEqual(new Set(quiz.questions.map(q => q.meaningId)), new Set(f.words.slice(10).map(w => w.id)));
+  assert.deepEqual(f.queued, []);
+});
+
+test('random formal challenges still wait when only one approved question per meaning exists', async () => {
+  const f = fixture(10);
+  f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
+  const quiz = await generate(f, [], 'random');
+  assert.equal(quiz.pending, true);
+  assert.equal(quiz.readyCount, 0);
+  assert.equal(quiz.requiredCount, 10);
+  assert.deepEqual(quiz.questions, []);
+});
+
+for (const patch of [
+  {cache_state:'retired'}, {quality_status:'pending'}, {level:'小学'},
+  {cache_state:'reserved_next_day', available_from:new Date(NOW + HOUR).toISOString()},
+  {question_fingerprint:''}, {options:[]},
+]) test(`practice rejects an unusable single question: ${JSON.stringify(patch)}`, async () => {
+  const f = fixture(10);
+  f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
+  Object.assign(f.cache.find(row => row.word_id === 'word-0'), patch);
+  const ids = f.words.map(word => word.id);
+  const quiz = await generate(f, ids);
+  assert.equal(quiz.pending, true);
+  assert.equal(quiz.requiredCount, 10);
+  assert.deepEqual(quiz.meaningIds, ids);
+  assert.deepEqual(quiz.questions, []);
+  assert.ok(f.queued.includes('word-0'));
+});
+
+for (const patch of [{ai_audit_status:'rejected'}, {source_version:'legacy-unattested'}]) {
+  test(`practice retains the production audit gate: ${JSON.stringify(patch)}`, async t => {
+    const previous = process.env.WORDBOT_REQUIRE_AI_AUDIT;
+    process.env.WORDBOT_REQUIRE_AI_AUDIT = '1';
+    t.after(() => {
+      if (previous === undefined) delete process.env.WORDBOT_REQUIRE_AI_AUDIT;
+      else process.env.WORDBOT_REQUIRE_AI_AUDIT = previous;
+    });
+    const f = fixture(10);
+    f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
+    f.cache.forEach(row => { row.source_version = 'supabase-contextual-variant-v3|unique-answer-v2'; });
+    Object.assign(f.cache.find(row => row.word_id === 'word-0'), patch);
+    const quiz = await generate(f, f.words.map(word => word.id));
+    assert.equal(quiz.pending, true);
+    assert.deepEqual(quiz.questions, []);
+    assert.ok(f.queued.includes('word-0'));
+  });
+}
 test('practice modes and corrected practice evidence never count as formal mastery or game rewards', () => {
   const {getAssessmentMode,isRealAssessment,normalizeAssessmentMode}=require('../assessment-mode');
   const {isFormalAssessment}=require('../mastery-evidence');
