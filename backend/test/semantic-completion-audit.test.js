@@ -11,6 +11,12 @@ test('uncertain or mismatched independent judgments never approve',async()=>{for
 
 test('fragment indexes cite the original sentence without inventing an expanded quote',async()=>{const r=reply();r.optionJudgments=r.optionJudgments.map(({clue,...j})=>({...j,clueIndex:1}));const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify(r)});assert.equal(result.approved,true);assert.equal(result.teachingAnalysis.clue,'using its trunk to drink water.');});
 
+test('fitting completions need explicit evidence too; null indexes fail closed',async()=>{
+ const r=reply();r.optionJudgments=r.optionJudgments.map(({clue,...j})=>({...j,clueIndex:j.fits?null:1}));
+ const result=await auditUniqueAnswer(q,{callModel:async prompt=>{assert.match(prompt,/EVERY judgment, including fits=true, must provide a non-null clueIndex/);return JSON.stringify(r);}});
+ assert.equal(result.approved,false);assert.equal(result.code,'semantic_evidence_invalid');
+});
+
 test('a claimed unique answer is rejected when a critical proof check finds an alternative',async()=>{
  let calls=0;const result=await auditUniqueAnswer(q,{callModel:async prompt=>{
   calls++;if(calls===1)return JSON.stringify(reply());
