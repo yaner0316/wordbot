@@ -40,3 +40,15 @@ test('overlap needs a shared token, not merely a shared character', () => {
     assert.equal(meaningsOverlap('\u6cb3\u6d41', '\u6cb3\u5cb8'), false);
     assert.equal(meaningsOverlap('\u9ec4\u660f', '\u9ec4\u660f,\u8584\u66ae'), true);
 });
+
+test('a smaller denomination inside a larger number is not a repeated meaning',()=>{
+ assert.deepEqual(getOverlappingOptionPairs(['二十五美分硬币','一美分硬币','十美分硬币','五美分硬币']),[]);
+ assert.equal(meaningsOverlap('25美分硬币','5美分硬币'),false);
+ assert.equal(meaningsOverlap('十五岁','五岁'),false);
+ assert.equal(meaningsOverlap('0.5美元','5美元'),false);
+ assert.equal(meaningsOverlap('这枚五美分硬币','五美分硬币'),true);
+ assert.equal(meaningsOverlap('二十五美分硬币','二十五美分硬币'),true);
+ assert.equal(meaningsOverlap('百万','一百万'),true);
+ assert.equal(meaningsOverlap('十美分','一十美分'),true);
+ assert.equal(meaningsOverlap('5美分','05美分'),true);
+});

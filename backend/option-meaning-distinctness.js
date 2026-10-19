@@ -20,11 +20,40 @@ function normalizeMeaningTokens(value) {
         .filter(token => token.length >= 2))];
 }
 
+function meaningTokensOverlap(left,right) {
+    if (left===right) return true;
+    const numeric=/[0-9零〇一二两兩三四五六七八九十百千万萬亿億兆壹贰貳叁肆伍陆陸柒捌玖拾佰仟点點.正负負+-]/;
+    const numberPattern=/[0-9零〇一二两兩三四五六七八九十百千万萬亿億兆壹贰貳叁肆伍陆陸柒捌玖拾佰仟点點.正负負+-]+/g;
+    const sameAmount=(a,b)=>{
+        const arabic=/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
+        if(arabic.test(a)&&arabic.test(b)) return Number(a)===Number(b);
+        const clean=value=>value.replace(/^[+正零〇]+/,'');
+        a=clean(a);b=clean(b);
+        return a===b || (/^[十拾百佰千仟万萬亿億兆]/.test(b)&&a==='一'+b)
+            || (/^[十拾百佰千仟万萬亿億兆]/.test(a)&&b==='一'+a);
+    };
+    const containsWhole=(full,part)=>{
+        for(let index=full.indexOf(part);index>=0;index=full.indexOf(part,index+1)) {
+            // 五 in 二十五 and 5 in 25 are parts of another amount, not a
+            // shared denomination. Ordinary non-numeric containment remains.
+            const cutsNumber=(numeric.test(part[0])&&numeric.test(full[index-1]||''))
+                || (numeric.test(part.at(-1))&&numeric.test(full[index+part.length]||''));
+            if(cutsNumber){
+                const truncated=[...part.matchAll(numberPattern)],whole=[...full.matchAll(numberPattern)];
+                if(truncated.some(piece=>{const start=index+piece.index,span=whole.find(n=>n.index<=start&&n.index+n[0].length>=start+piece[0].length);return span&&!sameAmount(span[0],piece[0]);})) continue;
+            }
+            return true;
+        }
+        return false;
+    };
+    return containsWhole(left,right)||containsWhole(right,left);
+}
+
 function meaningsOverlap(left, right) {
     const leftTokens = normalizeMeaningTokens(left);
     const rightTokens = normalizeMeaningTokens(right);
     if (!leftTokens.length || !rightTokens.length) return false;
-    return leftTokens.some(a => rightTokens.some(b => a === b || a.includes(b) || b.includes(a)));
+    return leftTokens.some(a => rightTokens.some(b => meaningTokensOverlap(a,b)));
 }
 
 // Returns the colliding index pairs of an exact four-option meaning list.
@@ -34,7 +63,7 @@ function getOverlappingOptionPairs(meanings) {
     if (groups.length !== 4) return pairs;
     for (let left = 0; left < groups.length; left += 1) {
         for (let right = left + 1; right < groups.length; right += 1) {
-            if (groups[left].some(a => groups[right].some(b => a === b || a.includes(b) || b.includes(a)))) {
+            if (groups[left].some(a => groups[right].some(b => meaningTokensOverlap(a,b)))) {
                 pairs.push([left, right]);
             }
         }
