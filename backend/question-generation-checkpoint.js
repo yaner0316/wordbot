@@ -61,6 +61,8 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
         meaning: input.meaning,
         ...(!materialChange && Array.isArray(previous.rejectedContexts) && previous.rejectedContexts.length
             ? {rejectedContexts:[...previous.rejectedContexts]} : {}),
+        ...(!materialChange && Array.isArray(previous.rejectedAlternatives) && previous.rejectedAlternatives.length
+            ? {rejectedAlternatives:[...previous.rejectedAlternatives].slice(-12)} : {}),
         variants: materialChange
             ? []
             : casingChanged

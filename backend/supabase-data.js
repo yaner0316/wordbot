@@ -1382,7 +1382,9 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         if (!unavailable) {
             if (['semantic_non_unique','semantic_expected_mismatch'].includes(audit?.code)) {
                 await saveVariantCheckpoint({...invalidateVariantFromStage(state,'context'),
-                    rejectedContexts:[...new Set([...(state.rejectedContexts || []),blankedContext])]});
+                    rejectedContexts:[...new Set([...(state.rejectedContexts || []),blankedContext])],
+                    rejectedAlternatives:[...new Set([...(state.rejectedAlternatives || []),
+                        ...validLetters.filter(letter=>letter!==answer).map(letter=>optionWords['ABCD'.indexOf(letter)]).filter(Boolean)])]});
             } else {
                 await saveVariantCheckpoint(invalidateVariantFromStage(state,
                     ['semantic_evidence_invalid','semantic_audit_uncertain'].includes(audit?.code) ? 'semantic_audit' : 'distractors'));
@@ -1451,6 +1453,10 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         ? generationCheckpoint
         : { variants: [] };
     if (!Array.isArray(checkpoint.variants)) checkpoint.variants = [];
+    const repairFeedback = () => ({rejectedAlternatives:[...new Set([
+        ...(checkpoint.rejectedAlternatives || []),
+        ...checkpoint.variants.flatMap(variant=>variant?.row ? [] : variant?.rejectedAlternatives || []),
+    ])].slice(-12)});
     const excludedStems = new Set([
         ...(word.excludedQuestionStems || []),
         ...(approvedVariants || []).map(variant => variant?.question_text || variant?.questionText),
@@ -1462,6 +1468,9 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         .filter(variant => variant && !variant.row && variant.context && !contextIsExcluded(variant.context))
         .sort((left, right) => Number(left.slot || 0) - Number(right.slot || 0));
     const persistVariant = async variant => {
+        if (variant.rejectedAlternatives?.length) checkpoint.rejectedAlternatives = [...new Set([
+            ...(checkpoint.rejectedAlternatives || []),...variant.rejectedAlternatives,
+        ])].slice(-12);
         if (variant.rejectedContexts?.length) {
             checkpoint.rejectedContexts = [...new Set([...(checkpoint.rejectedContexts || []),...variant.rejectedContexts])];
             for (const rejected of variant.rejectedContexts) excludedStems.add(normalizeQuestionStem(rejected));
@@ -1488,7 +1497,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         const previousContext = firstContext;
         firstContext = '';
         for (let attempt = 0; attempt < 3 && !firstContext; attempt++) {
-            const candidate = await generateContext(wordText, meaning, level, previousContext).catch(error => miniMaxFallback(error, ''));
+            const candidate = await generateContext(wordText, meaning, level, previousContext, repairFeedback()).catch(error => miniMaxFallback(error, ''));
             if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate)) firstContext = candidate;
         }
     }
@@ -1514,9 +1523,11 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
                 context: questionStem,
                 candidates: candidateDistractors,
                 excludedDistractors: [...excludedDistractors],
+                ...repairFeedback(),
             }).catch(error => miniMaxFallback(error, null));
             const normalized = uniqueWords(generated || [], wordText).slice(0, 3);
             if (normalized.length !== 3) continue;
+            if (normalized.some(value=>repairFeedback().rejectedAlternatives.includes(value))) continue;
             if (countDistractorOverlap(normalized, excludedDistractors) > 1) continue;
             return normalized;
         }
@@ -1542,7 +1553,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             const previousContext = context;
             context = variantCheckpoint.context || '';
             for (let attempt = 0; attempt < 3 && !context; attempt++) {
-                const candidate = await generateContext(wordText, meaning, level, previousContext).catch(error => miniMaxFallback(error, ''));
+                const candidate = await generateContext(wordText, meaning, level, previousContext, repairFeedback()).catch(error => miniMaxFallback(error, ''));
                 const candidateKey = normalizeQuestionStem(candidate);
                 if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
             }
@@ -1604,6 +1615,10 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         if (!row) continue;
         approvedRows.push(row);
         approvedDistractors.push(distractors);
+        // These are repair hints for one unresolved candidate, not permanent
+        // lexical bans. A fresh approved variant starts without them.
+        checkpoint.rejectedAlternatives = [];
+        await saveGenerationCheckpoint(checkpoint);
     }
     return approvedRows.length === targetCount || allowPartialCandidates ? approvedRows : [];
 }
@@ -2309,15 +2324,16 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     return buildSupabaseReviewRoundResponse(decorateAssessmentRows(data || [], user), reviewId);
 }
 
-async function generateReplacementContextWithAI(word, meaning, level, previousContext) {
+async function generateReplacementContextWithAI(word, meaning, level, previousContext, repair = {}) {
     const apiKey = process.env.MINIMAX_API_KEY;
     if (!apiKey || typeof fetch !== 'function') return '';
     const prior = String(previousContext || '').trim();
     const prompt = [
         `Write one natural English sentence of 8 to 16 words for level "${String(level || '').trim()}".`,
         `Use "${String(word || '').trim().toLowerCase()}" exactly once with meaning "${String(meaning || '').trim()}".`,
-        'Include a stated physical or functional clue that rules out alternatives of the same category. Time, place or typicality alone is insufficient. Use a real situation, not a definition.',
+        'Use a defining part AND action (e.g. strumming strings on a fretted neck) to rule out same-category alternatives. Playing/tuning, time/place or typicality alone do not suffice. No definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
+        repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the target a concrete part and action; change more than the scene.` : '',
         'Return only JSON with one context key.',
     ].filter(Boolean).join('\n');
     const settings = getMiniMaxSettings();
