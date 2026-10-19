@@ -114,6 +114,7 @@ function buildWordSensePrompt(question) {
     const providedSense=(question.optionMeanings || question.option_meanings)[index];
     return [
             'WORD SENSE CHECK. 独立核对：英文单词在当前完整句中实际使用的词义，是否属于给定中文释义？只比较当前输入，不是在选答案。拼写相同不代表同一义项，材质与用这种材质制成的整件物品不是同一词义。例：nickel 给定镍时指金属元素，不能扩充为镍币或五美分硬币；但给定五美分硬币时可以指该硬币。calf 给定小腿时指身体部位，给定小牛时则可以指母牛产下的幼崽。例子不是对当前输入的预判。若给定释义明确列出多个义项，句中符合其中一个即可；不要擅自补入未列出的义项。相符就 matches=true，不相符或无法判断就 false；不要编造相关词不能同时出现等额外条件。',
+            '给定释义可以比句中实例宽泛：没有额外限定的键盘包括电脑键盘和钢琴键盘，杯子包括陶瓷杯；不能因为释义没有逐项列出普通子类或用途就拒绝。只有给定释义本身明确限定为电脑键盘时，钢琴键盘才不符。具体实例与一般类别的关系，不等于另一词义或材质与制品的关系。',
             'Return JSON only: matches (boolean), providedSense (copy the input exactly), contextualSense (short Chinese), reason (Chinese sentence explaining agreement or the specific difference). If uncertain, matches=false. Do not put double-quote characters inside string values.',
             JSON.stringify({word,providedSense,completedSentence:question.context.replace(/_{3,}/g,word)}),
         ].join('\n');
