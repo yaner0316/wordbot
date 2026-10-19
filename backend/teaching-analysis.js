@@ -13,6 +13,11 @@ function semanticAuditInputFingerprint(question) {
         options: [...words].sort(), correctWord: words['ABCD'.indexOf(answer)] || '',
     })).digest('hex');
 }
+function semanticSenseFingerprint(question) {
+    const meanings=question.optionMeanings || question.option_meanings;
+    if (!Array.isArray(meanings) || meanings.length!==4 || question.options?.length!==4) return '';
+    return require('node:crypto').createHash('sha256').update(JSON.stringify(question.options.map((word,index)=>[optionWord(word),clean(meanings[index])]).sort((a,b)=>a[0].localeCompare(b[0])))).digest('hex');
+}
 
 function getTeachingAnalysisIssues(question, analysis) {
     if (!analysis || analysis.schemaVersion !== 1) return ['teaching_analysis_missing'];
@@ -31,6 +36,7 @@ function getTeachingAnalysisIssues(question, analysis) {
     const fitting = options.filter(item => item.fits === true);
     if (!expected || fitting.length !== 1 || optionWord(fitting[0]?.word) !== expected || optionWord(analysis.correctWord) !== expected) issues.push('teaching_non_unique_answer');
     if (analysis.auditMethod === SEMANTIC_AUDIT_METHOD && analysis.inputFingerprint !== semanticAuditInputFingerprint(question)) issues.push('semantic_audit_input_changed');
+    if (analysis.senseFingerprint && semanticSenseFingerprint(question) && analysis.senseFingerprint!==semanticSenseFingerprint(question)) issues.push('semantic_audit_sense_changed');
     return issues;
 }
 function teachingAnalysisFromAudit(question, audit) {
@@ -44,4 +50,4 @@ function teachingAnalysisFromAudit(question, audit) {
         options:judgments.map(item=>({word:words['ABCD'.indexOf(item.letter)],fits:item.fits,meaning:clean(item.meaning),reason:clean(item.reason)}))};
     return getTeachingAnalysisIssues(question,analysis).length ? null : analysis;
 }
-module.exports = {TEACHING_ANALYSIS_POLICY,SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint,getTeachingAnalysisIssues,teachingAnalysisFromAudit};
+module.exports = {TEACHING_ANALYSIS_POLICY,SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint,semanticSenseFingerprint,getTeachingAnalysisIssues,teachingAnalysisFromAudit};

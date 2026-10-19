@@ -21,17 +21,17 @@ test('approved boolean and a lone letter without evidence never establish questi
   assert.equal(result.approved,false);
 });
 test('grounded evidence is keyed to the option word so shuffled answers keep their reasons',async()=>{
-  const q={...question,context:'She picked an _____ from the tree and baked an apple pie.',options:['A. orange','B. grape','C. apple','D. banana'],answer:'C'};
+  const q={...question,context:'She picked an _____ from the tree and baked an apple pie.',options:['A. orange','B. grape','C. apple','D. banana'],optionMeanings:['橙子','葡萄','苹果','香蕉'],answer:'C'};
   const evidence={...reply,validLetters:['C'],clue:'baked an apple pie',correctReason:'苹果派要用苹果，后半句明确指出用途。',optionJudgments:[
     {letter:'A',fits:false,meaning:'橙子',reason:'橙子不能满足句中明确的苹果派用途。'},
     {letter:'B',fits:false,meaning:'葡萄',reason:'葡萄不能满足句中明确的苹果派用途。'},
     {letter:'C',fits:true,meaning:'苹果',reason:'苹果是句中苹果派所需要的水果。'},
     {letter:'D',fits:false,meaning:'香蕉',reason:'香蕉不能满足句中明确的苹果派用途。'},
   ]};
-  const result=await auditUniqueAnswer(q,{callModel:async()=>JSON.stringify({...evidence,optionJudgments:evidence.optionJudgments.map(item=>({...item,exclusion:item.fits?'none':'contradiction',clue:evidence.clue}))})});
+  const result=await auditUniqueAnswer(q,{callModel:async p=>p.startsWith('WORD SENSE CHECK')?JSON.stringify({matches:true,providedSense:'苹果',contextualSense:'苹果',reason:'句中烤苹果派使用的水果与给定苹果词义一致。'}):JSON.stringify({...evidence,optionJudgments:evidence.optionJudgments.map(item=>({...item,exclusion:item.fits?'none':'contradiction',clue:evidence.clue}))})});
   assert.equal(result.approved,true);
   assert.equal(result.teachingAnalysis.options.find(item=>item.word==='grape').reason,evidence.optionJudgments[1].reason);
   const {getTeachingAnalysisIssues}=require('../teaching-analysis');
-  assert.deepEqual(getTeachingAnalysisIssues({...q,answer:'A',options:['A. apple','B. orange','C. banana','D. grape']},result.teachingAnalysis),[]);
+  assert.deepEqual(getTeachingAnalysisIssues({...q,answer:'A',options:['A. apple','B. orange','C. banana','D. grape'],optionMeanings:['苹果','橙子','香蕉','葡萄']},result.teachingAnalysis),[]);
   assert.ok(getTeachingAnalysisIssues({...q,context:'Another _____ sentence.'},result.teachingAnalysis).includes('teaching_clue_not_in_context'));
 });

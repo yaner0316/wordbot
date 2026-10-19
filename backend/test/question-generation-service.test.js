@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('sense-aware jobs cannot restore an old English-only proof or discard its upstream stages',async()=>{
+ const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+ const {semanticSenseFingerprint}=require('../teaching-analysis');
+ const word={id:'w',word:'nickel',level:'小学',meaning_zh:'镍'};
+ const old={question_text:'She used pure _____ metal.',options:['nickel','copper','silver','gold'],option_meanings:['镍','铜','银','金'],answer:'A',question_fingerprint:'old',teaching_analysis:{}};
+ let generated=0;
+ const service=createQuestionGenerationService({requiredSenseAudit:true,loadWord:async()=>word,validateCandidate:()=>[],
+ loadCheckpoint:async()=>({word:'nickel',level:'小学',meaning:'["","镍"]',variants:[{slot:1,context:'She used pure nickel metal.',contextTranslation:'她用了纯镍金属。',distractors:['copper','silver','gold'],audit:{approved:true},row:old}]}),
+ generateCandidates:async request=>{generated++;assert.ok(!request.generationCheckpoint.variants[0].audit&&!request.generationCheckpoint.variants[0].row);assert.equal(request.generationCheckpoint.variants[0].contextTranslation,'她用了纯镍金属。');return [old,{...old,question_text:'The _____ was a pure magnetic metal.',options:['nickel','tin','zinc','lead'],option_meanings:['镍','锡','锌','铅']}].map(r=>({...r,teaching_analysis:{senseVerified:true,senseFingerprint:semanticSenseFingerprint(r)}}));},publishReadyVariants:async()=>{}});
+ const result=await service.process({word_id:'w',user_id:'u'});assert.equal(generated,1);assert.equal(result.readyCount,2);
+});
+
 test('required audit method invalidates only obsolete checkpoint audit and cannot republish its rows',async()=>{
  const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
  const {SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint}=require('../teaching-analysis');

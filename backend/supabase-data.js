@@ -1358,11 +1358,12 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return requireSemanticAudit ? null : row;
     }
 
-    const auditInput = {context:blankedContext,options,answer};
+    const auditInput = {context:blankedContext,options,answer,optionMeanings};
     const requiredAuditMethod = semanticAudit.auditMethod;
     const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues(auditInput,state.audit.teachingAnalysis).length)
         && (!requiredAuditMethod || (state.audit.auditMethod === requiredAuditMethod
-            && state.audit.inputFingerprint === require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)));
+            && state.audit.inputFingerprint === require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)))
+        && (!semanticAudit.senseAware || (state.audit?.senseVerified === true && state.audit.senseFingerprint === require('./teaching-analysis').semanticSenseFingerprint(auditInput)));
     const audit = (reusableAudit ? state.audit : null) || await semanticAudit({
         type: 1,
         word: wordText,
@@ -1380,7 +1381,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         const unavailable = audit?.status === 'unavailable';
         reportRejection(unavailable ? 'semantic_audit_unavailable' : 'semantic_audit_rejected');
         if (!unavailable) {
-            if (['semantic_non_unique','semantic_expected_mismatch'].includes(audit?.code)) {
+            if (['semantic_non_unique','semantic_expected_mismatch','semantic_expected_sense_mismatch'].includes(audit?.code)) {
                 await saveVariantCheckpoint({...invalidateVariantFromStage(state,'context'),
                     rejectedContexts:[...new Set([...(state.rejectedContexts || []),blankedContext])],
                     rejectedAlternatives:[...new Set([...(state.rejectedAlternatives || []),
@@ -1401,6 +1402,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
             return null;
         }
         row.source_version += '|' + requiredAuditMethod;
+    }
+    if (semanticAudit.senseAware && (audit.senseVerified !== true || audit.senseFingerprint !== require('./teaching-analysis').semanticSenseFingerprint(auditInput))) {
+        reportRejection('semantic_audit_sense_missing');
+        await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
+        return null;
     }
     const teachingAnalysis = audit.teachingAnalysis;
     const teachingIssues = getTeachingAnalysisIssues({context:blankedContext,options,answer},teachingAnalysis);

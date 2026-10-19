@@ -79,7 +79,7 @@ function rowCheckpoint(row, slot, wordText) {
         localValidated: true,
         audit: String(row.ai_audit_status || '').toLowerCase() === 'approved'
             ? { approved: true, status: 'approved', validLetters: [row.answer], teachingAnalysis: row.teaching_analysis || null,
-                auditMethod: row.teaching_analysis?.auditMethod, inputFingerprint: row.teaching_analysis?.inputFingerprint }
+                auditMethod: row.teaching_analysis?.auditMethod, inputFingerprint: row.teaching_analysis?.inputFingerprint, senseFingerprint: row.teaching_analysis?.senseFingerprint, senseVerified: row.teaching_analysis?.senseVerified }
             : undefined,
         row,
     };
@@ -96,6 +96,7 @@ function createQuestionGenerationService({
     requiredReadyCount = 2,
     maxAttempts = 3,
     requiredAuditMethod = null,
+    requiredSenseAudit = false,
 } = {}) {
     if (typeof loadWord !== 'function') throw new Error('LOAD_WORD_REQUIRED');
     if (typeof generateCandidates !== 'function') throw new Error('GENERATE_CANDIDATES_REQUIRED');
@@ -128,6 +129,8 @@ function createQuestionGenerationService({
                     || !String(candidate?.source_version || '').split('|').includes(requiredAuditMethod)
                     || candidate.teaching_analysis.inputFingerprint !== require('./teaching-analysis').semanticAuditInputFingerprint({context:candidate.question_text,options:candidate.options,answer:candidate.answer}))
                     ? ['semantic_audit_outdated'] : []),
+                ...(requiredSenseAudit && (candidate?.teaching_analysis?.senseVerified !== true || !candidate?.teaching_analysis?.senseFingerprint
+                    || candidate.teaching_analysis.senseFingerprint !== require('./teaching-analysis').semanticSenseFingerprint(candidate)) ? ['semantic_audit_sense_missing'] : []),
                 ...(excludedStems.has(normalizeText(candidate?.question_text || candidate?.questionText)) ? ['context_already_displayed'] : []),
             ];
 
