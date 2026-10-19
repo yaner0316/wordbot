@@ -24,7 +24,7 @@ const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { normalizeChineseMeaning } = require('./chinese-meaning');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
-const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
 const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
@@ -1237,7 +1237,7 @@ async function resolveDistinctOptionDistractors({
 
     const excluded = [];
     for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
-        const translated = await translateWords(current).catch(() => null);
+        const translated = await translateWords(current).catch(error => miniMaxFallback(error, null));
         const meanings = current.map(word => String(translated?.[word] || '').trim());
         // Without usable translations the existing downstream behaviour decides.
         if (!meanings.every(hasMeaningfulChineseMeaning)) return { distractors: current, meanings: null };
@@ -1488,7 +1488,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         const previousContext = firstContext;
         firstContext = '';
         for (let attempt = 0; attempt < 3 && !firstContext; attempt++) {
-            const candidate = await generateContext(wordText, meaning, level, previousContext).catch(() => '');
+            const candidate = await generateContext(wordText, meaning, level, previousContext).catch(error => miniMaxFallback(error, ''));
             if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate)) firstContext = candidate;
         }
     }
@@ -1514,7 +1514,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
                 context: questionStem,
                 candidates: candidateDistractors,
                 excludedDistractors: [...excludedDistractors],
-            }).catch(() => null);
+            }).catch(error => miniMaxFallback(error, null));
             const normalized = uniqueWords(generated || [], wordText).slice(0, 3);
             if (normalized.length !== 3) continue;
             if (countDistractorOverlap(normalized, excludedDistractors) > 1) continue;
@@ -1542,7 +1542,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             const previousContext = context;
             context = variantCheckpoint.context || '';
             for (let attempt = 0; attempt < 3 && !context; attempt++) {
-                const candidate = await generateContext(wordText, meaning, level, previousContext).catch(() => '');
+                const candidate = await generateContext(wordText, meaning, level, previousContext).catch(error => miniMaxFallback(error, ''));
                 const candidateKey = normalizeQuestionStem(candidate);
                 if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
             }
@@ -2332,6 +2332,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         });
         if (!response.ok) return '';
         const payload = await response.json();
+        assertMiniMaxResponse(payload);
         const content = payload?.choices?.[0]?.message?.content || '';
         const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
         const context = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
@@ -2339,8 +2340,8 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
         if (!context || count !== 1 || context.toLowerCase() === prior.toLowerCase()) return '';
         return context;
-    } catch {
-        return '';
+    } catch (error) {
+        return miniMaxFallback(error, '');
     } finally {
         clearTimeout(timer);
     }

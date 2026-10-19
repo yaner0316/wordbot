@@ -2,7 +2,7 @@ const https = require('https');
 const { isConciseChineseMeaning } = require('./chinese-meaning');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
-const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse } = require('./minimax-settings');
 
 class TranslationError extends Error {
     constructor(code, message, options = {}) {
@@ -55,6 +55,7 @@ function callMiniMax(prompt, timeout) {
                 }
                 try {
                     const result = JSON.parse(Buffer.concat(chunks).toString());
+                    assertMiniMaxResponse(result);
                     const content = result.choices?.[0]?.message?.content;
                     if (!content) {
                         reject(translationError('TRANSLATION_RESPONSE_INVALID', 'MiniMax translation response did not contain content'));
@@ -62,6 +63,7 @@ function callMiniMax(prompt, timeout) {
                     }
                     resolve(content);
                 } catch (error) {
+                    if (['MINIMAX_RATE_LIMITED','MINIMAX_PROVIDER_UNAVAILABLE'].includes(error?.code)) { reject(error); return; }
                     reject(translationError('TRANSLATION_RESPONSE_INVALID', 'MiniMax translation response was not valid JSON', error));
                 }
             });

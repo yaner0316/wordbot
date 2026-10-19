@@ -35,7 +35,22 @@ function buildMiniMaxRequestBody(prompt, env = process.env) {
     return body;
 }
 
+function assertMiniMaxResponse(payload) {
+    const status = Number(payload?.base_resp?.status_code || 0);
+    if (!status) return;
+    const error = new Error(status === 2062 ? 'MiniMax Token Plan rate limit' : 'MiniMax provider rejected request');
+    error.code = status === 2062 ? 'MINIMAX_RATE_LIMITED' : 'MINIMAX_PROVIDER_UNAVAILABLE';
+    throw error;
+}
+
+function miniMaxFallback(error, value) {
+    if (['MINIMAX_RATE_LIMITED','MINIMAX_PROVIDER_UNAVAILABLE'].includes(error?.code)) throw error;
+    return value;
+}
+
 module.exports = {
+    assertMiniMaxResponse,
+    miniMaxFallback,
     DEFAULT_MINIMAX_MODEL,
     DEFAULT_MINIMAX_MAX_TOKENS,
     DEFAULT_MINIMAX_TIMEOUT_MS,

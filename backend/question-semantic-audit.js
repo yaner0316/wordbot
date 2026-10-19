@@ -1,4 +1,4 @@
-const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { teachingAnalysisFromAudit, SEMANTIC_AUDIT_METHOD, semanticAuditInputFingerprint } = require('./teaching-analysis');
 
 const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
@@ -28,6 +28,7 @@ async function callMiniMax(prompt) {
         });
         if (!response.ok) throw new Error('semantic_audit_http_' + response.status);
         const payload = await response.json();
+        assertMiniMaxResponse(payload);
         return payload?.choices?.[0]?.message?.content || '';
     } finally {
         clearTimeout(timer);
@@ -83,6 +84,7 @@ async function evaluateUniqueAnswer(question, { callModel = callMiniMax } = {}) 
             ...(approved ? {teachingAnalysis} : {}),
         };
     } catch (error) {
+        miniMaxFallback(error, null);
         return {
             approved: false,
             status: 'unavailable',

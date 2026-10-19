@@ -1,5 +1,5 @@
 const { selectContextualDistractors } = require('./generate-distractors');
-const { buildMiniMaxRequestBody, getMiniMaxSettings } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse } = require('./minimax-settings');
 
 async function callMiniMax(prompt, timeout) {
     const apiKey = process.env.MINIMAX_API_KEY;
@@ -16,6 +16,7 @@ async function callMiniMax(prompt, timeout) {
         });
         if (!response.ok) throw new Error('MiniMax HTTP ' + response.status);
         const result = await response.json();
+        assertMiniMaxResponse(result);
         return result.choices?.[0]?.message?.content || '';
     } finally {
         clearTimeout(timer);

@@ -2,6 +2,7 @@
  * LLM-assisted distractor generation for fill-in-the-blank quiz questions.
  */
 
+const {miniMaxFallback} = require('./minimax-settings');
 async function selectContextualDistractors({ word, meaning, level, context, candidates, excludedDistractors = [], callLLM }) {
     const referenceList = (candidates || []).slice(0, 8).join(', ');
     const exclusionList = (excludedDistractors || [])
@@ -21,7 +22,7 @@ meaning ? `Required meaning: "${String(meaning).trim()}"` : '',
         `Never repeat "${word}". Return only JSON: {"distractors":["word1","word2","word3"]}`,
     ].filter(Boolean).join('\n');
 
-    const raw = await callLLM(prompt).catch(() => '');
+    const raw = await callLLM(prompt).catch(error => miniMaxFallback(error, ''));
     if (!raw) return null;
 
     const normalizedRaw = String(raw).replace(/```(?:json)?/gi, '').trim();
