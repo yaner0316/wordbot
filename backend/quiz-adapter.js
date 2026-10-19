@@ -173,6 +173,7 @@ function toFeishuCacheRow(row, { username }) {
             answer: row.answer || '',
             option_meanings: JSON.stringify(row.option_meanings || []),
             correct_meaning: row.correct_meaning || '',
+            teaching_analysis: row.teaching_analysis || null,
             used_count: Number(row.used_count || 0),
             generated_at: generatedAt,
         },

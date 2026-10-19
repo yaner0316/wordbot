@@ -66,6 +66,28 @@ test('practice starts a complete ten-question selection with only one approved a
   assert.deepEqual(f.queued, []);
 });
 
+for (const mode of ['custom', 'random']) test(`${mode} selects approved teaching snapshots without dropping their audit evidence`, async () => {
+  const f = fixture(10);
+  f.cache.forEach(row => {
+    row.source_version = 'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1';
+    row.teaching_analysis = {
+      schemaVersion: 1, clue: 'naturally in context', clueReason: '句中说明了目标词的具体使用语境。',
+      correctWord: row.word, correctReason: '目标词与句中明确的语境一致。',
+      options: row.options.map((option, i) => ({ word: option.slice(3), fits: i === 0,
+        meaning: row.option_meanings[i], reason: i === 0 ? '这个词符合句中明确的语境。' : '这个词不符合句中明确的语境。' })),
+    };
+  });
+  const quiz = await generate(f, mode === 'custom' ? ['word-0'] : [], mode);
+  assert.equal(quiz.pending, undefined);
+  assert.equal(quiz.questions.length, 10);
+  for (const q of quiz.questions) {
+    const snapshot = f.cache.find(row => row.id === q.cacheRecordId).teaching_analysis;
+    assert.deepEqual(q.teachingAnalysis, snapshot);
+    assert.equal(q.teachingAnalysis.correctWord, q.word);
+  }
+  assert.deepEqual(f.queued, []);
+});
+
 test('practice autofill prefers single approved questions over unrelated missing supply', async () => {
   const f = fixture(20, Array.from({length:10}, (_, i) => `word-${i}`));
   f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
