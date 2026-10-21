@@ -1,0 +1,21 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const express=require('express');
+const {requireUserSession,sessionStore}=require('../auth-middleware');
+const source=fs.readFileSync(path.join(__dirname,'../server.js'),'utf8');
+for(const resource of ['history','stats'])test(`${resource} path ownership is enforced after real Express prefix middleware and cookie authentication`,async t=>{
+ const previous=process.env.WORDBOT_AUTH_TEST_BYPASS;delete process.env.WORDBOT_AUTH_TEST_BYPASS;t.after(()=>{if(previous===undefined)delete process.env.WORDBOT_AUTH_TEST_BYPASS;else process.env.WORDBOT_AUTH_TEST_BYPASS=previous;});
+ const app=express(),calls=[];
+ const mounts=source.split('\n').filter(line=>/^app.use\('\/api\/(history|stats)',/.test(line)).join('\n');
+ const routes=source.slice(source.indexOf("app.get('/api/stats/:user'"),source.indexOf("app.get('/api/admin/users'"));
+ assert.ok(mounts&&routes.includes("app.get('/api/history/:user'"));
+ vm.runInNewContext(mounts+'\n'+routes,{app,requireUserSession,ASSESSMENT_MODE:{REAL:'real'},getStats:async user=>{calls.push(user);return {user};},getQuizHistory:async user=>{calls.push(user);return [{owner:user}];},normalizeAssessmentMode:mode=>mode});
+ const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+ const base=`http://127.0.0.1:${server.address().port}/api/${resource}/`;
+ const cookie=sessionStore.cookie(sessionStore.issue('qa-child','user')).split(';')[0];
+ assert.equal((await fetch(base+'qa-child')).status,401);
+ assert.equal((await fetch(base+'other-child',{headers:{cookie}})).status,403);
+ assert.deepEqual(calls,[],'foreign user must not reach data source');
+ assert.equal((await fetch(base+'%6fther-child?user=qa-child',{headers:{cookie}})).status,403);
+ assert.equal((await fetch(base+'qa-child?user=other-child',{headers:{cookie}})).status,403);
+ const own=await fetch(base+'QA-CHILD',{headers:{cookie}});assert.equal(own.status,200);assert.equal(calls.length,1);assert.equal(calls[0],'QA-CHILD');
+});

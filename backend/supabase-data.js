@@ -581,13 +581,20 @@ function hydrateHistoryOptionMeanings(row, feedback, word) {
 }
 
 function toHistoryQuestion(row, feedback = {}, word = {}) {
+    const type = Number(row?.question_type) || 1;
     const question = String(row?.question_text || '').trim();
     const options = Array.isArray(row?.options) ? row.options.map(value => String(value || '').trim()).filter(Boolean) : [];
-    const optionMeanings = hydrateHistoryOptionMeanings(row, feedback, word);
-    const contextCN = [row?.context_zh, row?.contextCN, feedback?.context_zh, word?.context_zh]
+    const senseChoice = type === 4 && options.length > 0;
+    const correctAnswer = String(row?.correct_answer || '').trim();
+    const optionMeanings = type === 4 ? [] : hydrateHistoryOptionMeanings(row, feedback, word);
+    const contextCN = type === 4 ? '' : [row?.context_zh, row?.contextCN, feedback?.context_zh, word?.context_zh]
         .map(value => String(value || '').trim())
         .find(value => hasCompleteChineseContext(question, value, word?.meaning_zh)) || '';
-    const missingFields = [
+    const missingFields = type === 4 ? [
+        ...(String(row?.word_snapshot || '').trim() ? [] : ['word_snapshot']),
+        ...(senseChoice && options.length !== 4 ? ['options'] : []),
+        ...((senseChoice ? /^[A-D]$/.test(correctAnswer) : !!correctAnswer) ? [] : ['correct_answer']),
+    ] : [
         ...(question ? [] : ['question_text']),
         ...(options.length ? [] : ['options']),
         ...(optionMeanings.length === 4 ? [] : ['option_meanings']),
@@ -598,15 +605,16 @@ function toHistoryQuestion(row, feedback = {}, word = {}) {
         assessmentId: String(row?.id || '').trim(),
         meaningId: String(row?.word_id || '').trim(),
         word: String(row?.word_snapshot || '').trim(),
-        question: question || '这是一条早期考核记录，当时没有保存完整题目。答题结果仍然保留。',
-        type: Number(row?.question_type) || 1,
+        question: question || (type === 4 ? senseChoice ? '请选择这个单词对应的中文释义。' : '请写出这个单词的中文释义。' : '这是一条早期考核记录，当时没有保存完整题目。答题结果仍然保留。'),
+        type,
+        ...(type === 4 ? {answerMode:senseChoice ? 'sense_choice' : 'cn_meaning'} : {}),
         contextCN,
         options,
         optionMeanings,
         ...(row?.teaching_analysis ? {teachingAnalysis:row.teaching_analysis} : {}),
         yourAnswer: answer.option,
         confidence: answer.confidence,
-        correctAnswer: String(row?.correct_answer || '').trim(),
+        correctAnswer,
         isCorrect: String(row?.is_correct || '').trim().toLowerCase() === 'correct',
         contentState: missingFields.length ? 'legacy_incomplete' : 'complete',
         missingFields,
@@ -2221,6 +2229,7 @@ async function findExistingReviewRoundWithClient(client, user, sourceTestId, par
 }
 function buildSupabaseReviewRoundResponse(rows, reviewId) {
     if (!rows.length) return null;
+    rows = [...rows].sort((a,b) => toMillis(a.assessed_at)-toMillis(b.assessed_at) || String(a.id).localeCompare(String(b.id)));
     const first = rows[0];
     return {
         reviewId,
@@ -2275,13 +2284,19 @@ async function createReviewRoundWithClient(client, { userId, sourceTestId, paren
     }
     if (!reviewRows.length) return { sourceTestId, parentReviewId, complete: true, reason:sourceRows.every(isCorrectAssessmentRow)?'no_wrong_answers':'archived_words', questions: [] };
 
+    const orderedReviewRows = shuffled(reviewRows);
+    // Avoid retaining exam/previous-round order even when a shuffle draws it.
+    if (orderedReviewRows.length > 1 && orderedReviewRows.every((row, index) => row === reviewRows[index])) {
+        orderedReviewRows.push(orderedReviewRows.shift());
+    }
+
     const mode = getAssessmentMode(sourceTestId);
     const reviewId = mode + '-review-' + crypto.randomUUID().split('-')[0];
     const round = parentReviewId ? Number(sourceRows[0].review_round || 0) + 1 : 1;
     const assessedAtBase = Date.now();
     const insertRows = [];
-    for (let index = 0; index < reviewRows.length; index++) {
-        const { row, word, selectedSense } = reviewRows[index];
+    for (let index = 0; index < orderedReviewRows.length; index++) {
+        const { row, word, selectedSense } = orderedReviewRows[index];
         const correctMeaning = String(word.meaning_zh || row.correct_answer || word.meaning_en || word.word || '').trim();
         const choice = selectedSense ? buildMeaningChoiceOptions({
             correctMeaning,

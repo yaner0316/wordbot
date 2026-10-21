@@ -521,7 +521,7 @@ app.post('/api/quiz', async (req, res) => {
     }
 });
 
-app.get('/api/stats/:user', async (req, res) => {
+app.get('/api/stats/:user', requireUserSession, async (req, res) => {
     try {
         const data = await getStats(req.params.user);
         res.json(data);
@@ -530,7 +530,7 @@ app.get('/api/stats/:user', async (req, res) => {
     }
 });
 
-app.get('/api/history/:user', async (req, res) => {
+app.get('/api/history/:user', requireUserSession, async (req, res) => {
     try {
         const mode = normalizeAssessmentMode(req.query.mode || ASSESSMENT_MODE.REAL);
         if (typeof getQuizHistory === 'function') {

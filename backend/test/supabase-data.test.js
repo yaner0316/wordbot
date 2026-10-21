@@ -14,6 +14,42 @@ const {
 const { getOverlappingOptionPairs } = require('../option-meaning-distinctness');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
+test('history completeness follows review type without rewriting original assessment snapshots',async()=>{
+ const make=(id,fields)=>({id,user_id:'u',word_id:id,word_snapshot:id,test_id:'real-review-current',assessment_kind:'review',assessed_at:'2026-10-21T00:00:00Z',question_type:'4',submitted_answer:'小猫',is_correct:'correct',question_text:'',options:[],correct_answer:'小猫',...fields});
+ const rows=[make('recall',{}),make('choice',{options:['食堂','教室','书店','图书馆'],correct_answer:'D',submitted_answer:'A',is_correct:'wrong'}),make('broken-choice',{options:['食堂','教室'],correct_answer:'D'}),make('broken-recall',{correct_answer:''}),make('old-type1',{question_type:'1',test_id:'real-old',options:[],correct_answer:'A'})];
+ const original=JSON.parse(JSON.stringify(rows));
+ const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words:rows.map(r=>({id:r.id,user_id:'u',word:r.id})),assessments:rows});
+ const history=await createSupabaseDataAdapter(client).getQuizHistory('child');
+ const questions=history.flatMap(h=>h.questions),recall=questions.find(q=>q.word==='recall'),choice=questions.find(q=>q.word==='choice');
+ assert.equal(recall.contentState,'complete');assert.equal(recall.answerMode,'cn_meaning');assert.deepEqual(recall.missingFields,[]);assert.doesNotMatch(recall.question,/早期/);
+ assert.equal(choice.contentState,'complete');assert.equal(choice.answerMode,'sense_choice');assert.deepEqual(choice.options,['食堂','教室','书店','图书馆']);assert.equal(choice.correctAnswer,'D');assert.equal(choice.yourAnswer,'A');
+ for(const word of ['broken-choice','broken-recall','old-type1'])assert.equal(questions.find(q=>q.word===word).contentState,'legacy_incomplete');
+ assert.match(questions.find(q=>q.word==='old-type1').question,/早期/);
+ assert.deepEqual(client.db.assessments,original);assert.equal(client.operations.filter(op=>op.kind==='update'||op.kind==='insert').length,0);
+});
+test('new review rounds shuffle source order and persist that order for resumption', async t => {
+    // Force Fisher-Yates to return the input unchanged: it must still avoid exam order.
+    t.mock.method(crypto, 'randomInt', (min, max) => max - 1);
+    const words = ['apple','pear','desk'].map((word,i) => ({id:`w${i}`,user_id:'u',word,meaning_zh:`释义${i}`,mastery_status:'pending'}));
+    const originals = words.map((word,i) => ({id:`a${i}`,user_id:'u',word_id:word.id,source_word_record_id:word.id,test_id:'real-source',word_snapshot:word.word,question_type:'1',submitted_answer:'A',is_correct:'wrong',assessed_at:`2026-10-20T00:00:0${i}Z`,options:[]}));
+    const client = createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],words,assessments:originals.map(row=>({...row}))});
+    const adapter = createSupabaseDataAdapter(client);
+    const first = await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+    const order = first.questions.map(q=>q.recordId);
+    assert.notDeepEqual(order, words.map(w=>w.id));
+    assert.deepEqual([...order].sort(), words.map(w=>w.id).sort());
+    const saved = client.db.assessments.filter(row=>row.test_id===first.reviewId);
+    assert.deepEqual([...saved].sort((a,b)=>Date.parse(a.assessed_at)-Date.parse(b.assessed_at)).map(r=>r.word_id),order);
+    for (const row of saved) assert.equal(row.correct_answer, words.find(w=>w.id===row.word_id).meaning_zh);
+    const resumed = await adapter.createReviewRound({userId:'child',sourceTestId:'real-source'});
+    assert.equal(resumed.reviewId, first.reviewId);
+    assert.deepEqual(resumed.questions.map(q=>q.recordId), order);
+    saved.forEach(row => {row.review_status='submitted';row.submitted_answer='错';row.is_correct='wrong';});
+    const second = await adapter.createReviewRound({userId:'child',sourceTestId:'real-source',parentReviewId:first.reviewId});
+    assert.equal(second.round, 2);
+    assert.notDeepEqual(second.questions.map(q=>q.recordId),order);
+    assert.deepEqual(client.db.assessments.filter(row=>row.test_id==='real-source'), originals);
+});
 test('practice history includes corrected legacy practice but excludes it from formal history',async()=>{
  const client=createFakeSupabase({users:[{id:'u',username:'child',username_key:'child'}],assessments:[
    {id:'a',user_id:'u',test_id:'real-old-custom',assessment_kind:'practice',is_real_assessment:false,is_correct:'correct',submitted_answer:'A',word_snapshot:'bank',question_text:'A bank.',assessed_at:'2026-10-13T00:00:00Z'},
