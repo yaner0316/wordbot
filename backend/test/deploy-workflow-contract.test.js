@@ -59,7 +59,7 @@ test('deploy workflow does not use the retired frontend contract commit', () => 
     assert.doesNotMatch(workflow, /6a0e92415492f196953559cb1a15a9f74bed5a64/);
     assert.doesNotMatch(workflow, /d0f9988a9b27ee56797329809142ed2e7aa8292b/);
     assert.doesNotMatch(workflow, /5df6c32a3d81235fb3361423809176e8216e5d46/);
-    assert.match(workflow, /53e84262733d3e1e1ce81c5ae654ce925a72719e/);
+    assert.match(workflow, /fbc80915b1a3053112ca9f0d229800f486dd2335/);
 });
 
 test('pull request tests cannot invoke the Render deployment hook', () => {
