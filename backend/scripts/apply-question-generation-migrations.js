@@ -102,6 +102,10 @@ select
   (select safe_search_path from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_safe_search_path,
   (select count(*) = 2 from pg_catalog.pg_attribute where attrelid = to_regclass('public.question_generation_jobs')
     and attname in ('demand_requested_at', 'demand_priority_until') and atttypid = 'timestamptz'::regtype and not attisdropped) as challenge_demand_columns,
+  coalesce((select prosrc like '%job.demand_requested_at > job.updated_at%'
+    and prosrc like '%order by eligible.demand_pending desc, eligible.user_job_rank%'
+    and prosrc like '%demand_priority_until = null%'
+    from pg_catalog.pg_proc where oid = (select oid from claim_proc)), false) as challenge_demand_unserved_priority,
   coalesce((select prosrc like '%job.demand_priority_until > v_now%' from pg_catalog.pg_proc where oid = (select oid from claim_proc)), false) as challenge_demand_claim_priority,
   coalesce((select prosrc like '%interval ''5 minutes''%' and prosrc like '%interval ''2 minutes''%' and prosrc like '%9999-01-01%'
     from pg_catalog.pg_proc where oid = to_regprocedure('public.request_challenge_question_supply(uuid,uuid[])')), false) as challenge_demand_bounded_contract,
@@ -465,6 +469,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261012_parent_word_archive_legacy_ids.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261013_teaching_analysis_snapshots.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261013_custom_practice.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261025_unserved_challenge_demand.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -560,6 +565,7 @@ const EXPECTED_STATE = Object.freeze({
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
   display_replenishment_trigger: true,
+  challenge_demand_unserved_priority: true,
   challenge_demand_columns: true,
   challenge_demand_claim_priority: true,
   challenge_demand_bounded_contract: true,
@@ -642,7 +648,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.every(key=>key.startsWith('custom_practice_'))
+    const paths = missing.length === 1 && missing[0] === 'challenge_demand_unserved_priority'
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261025_unserved_challenge_demand.sql')
+      : missing.every(key=>key.startsWith('custom_practice_'))
       ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_custom_practice.sql')
       : missing.every(key=>key.startsWith('teaching_analysis_'))
       ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_teaching_analysis_snapshots.sql')
@@ -651,7 +659,7 @@ async function applyQuestionGenerationMigrations({
       : missing.every(key => key.startsWith('archive_words_') || key.startsWith('rpc_archive_words_'))
       ? MIGRATION_PATHS.filter(file => ['20261012_parent_word_archive.sql', '20261012_parent_word_archive_legacy_ids.sql'].includes(path.basename(file)))
       : missing.every(key => key.startsWith('challenge_demand_') || key.startsWith('rpc_request_challenge_question_supply_'))
-      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261010_challenge_demand_priority.sql')
+      ? MIGRATION_PATHS.filter(file => ['20261010_challenge_demand_priority.sql', '20261025_unserved_challenge_demand.sql'].includes(path.basename(file)))
       : missing.length === 1 && missing[0] === 'claim_fair_user_rotation'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20260908_question_generation_fair_claim.sql')
       : missing.length === 1 && missing[0] === 'rpc_custom_challenge_count_contract'

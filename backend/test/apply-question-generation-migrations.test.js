@@ -92,6 +92,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261012_parent_word_archive_legacy_ids.sql',
       '20261013_teaching_analysis_snapshots.sql',
       '20261013_custom_practice.sql',
+      '20261025_unserved_challenge_demand.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -248,6 +249,7 @@ const COMPLETE_STATE = Object.freeze({
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
   display_replenishment_trigger: true,
+  challenge_demand_unserved_priority: true,
   challenge_demand_columns: true,
   challenge_demand_claim_priority: true,
   challenge_demand_bounded_contract: true,
@@ -1162,5 +1164,14 @@ test('existing deployment missing challenge demand applies only the new migratio
  const missing={...COMPLETE_STATE,challenge_demand_columns:false,challenge_demand_claim_priority:false,challenge_demand_bounded_contract:false,rpc_request_challenge_question_supply_signature:false};
  const harness=createDatabaseHarness({states:[missing,COMPLETE_STATE]});const readPaths=[];
  await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- challenge demand';}});
- assert.deepEqual(readPaths,['20261010_challenge_demand_priority.sql']);
+ assert.deepEqual(readPaths,['20261010_challenge_demand_priority.sql','20261025_unserved_challenge_demand.sql']);
+});
+
+
+test('current deployment applies only the unserved demand repair', async () => {
+  const harness = createDatabaseHarness({states:[{...COMPLETE_STATE,challenge_demand_unserved_priority:false},COMPLETE_STATE]});
+  const readPaths = [];
+  const result = await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{readPaths.push(path.basename(file));return '-- demand repair';}});
+  assert.equal(result.status,'applied');
+  assert.deepEqual(readPaths,['20261025_unserved_challenge_demand.sql']);
 });

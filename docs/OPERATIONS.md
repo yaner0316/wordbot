@@ -58,6 +58,10 @@ Use a focused `node --test` command while developing, then run the full backend 
 
 Never use startup-time implicit DDL. Never delete caches, rewrite assessments, reset mastery, or run bulk backfills merely because an alert fired.
 
+## Unserved challenge demand (2026-10-25)
+
+Apply `20261025_unserved_challenge_demand.sql` through the existing migration runner. It replaces only the claim RPC, retaining its signature, service-role ACL, active-word/version/mastery guards, due-time/lease fences and user rotation. Existing requests whose demand timestamp follows the last job update are prioritized even after the legacy two-minute window. A claim clears the short-window marker and updates the job timestamp, consuming that request. Failed work keeps normal retry timing; the existing request throttle remains in force. No cache, checkpoint, word or historical assessment rewrite is required. Verify actual missing meanings become published before reporting supply restored.
+
 ## Question-supply operations
 
 The 20261009_display_replenishment migration adds an AFTER INSERT trigger on quiz_display_events. It requests the existing idempotent durable generation RPC in the display transaction, without changing assessment history or granting child roles access to generation tables. The verifier checks the trigger and applies only this migration when it is the sole missing contract. Coverage reconciliation also compares ready cache stems to each user's meaning-specific unexpired display history; health readiness no longer counts consumed stems as reserve. A newly mastered word is still excluded by the existing enqueue/claim guards.
