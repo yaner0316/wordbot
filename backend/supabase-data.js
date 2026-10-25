@@ -2350,12 +2350,13 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     if (!apiKey || typeof fetch !== 'function') return '';
     const prior = String(previousContext || '').trim();
     const prompt = [
-        `Write one natural English sentence of 8 to 16 words for level "${String(level || '').trim()}".`,
-        `Use "${String(word || '').trim().toLowerCase()}" exactly once with meaning "${String(meaning || '').trim()}".`,
-        'Use a defining part AND action (e.g. strumming strings on a fretted neck) to rule out same-category alternatives. Playing/tuning, time/place or typicality alone do not suffice. No definition.',
+        `Write a natural 8-16 word English sentence for "${String(level || '').trim()}".` ,
+        `Target: "${String(word || '').trim().toLowerCase()}", meaning "${String(meaning || '').trim()}".` ,
+        'Put __TARGET__ exactly once in place of the target; never inflect or write the target. Its exact spelling must fit grammatically: use a modal, infinitive or imperative for a base verb.',
+        'Give concrete sense-specific clues suited to its part of speech; time/place/typicality alone do not distinguish it. No definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
-        repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the target a concrete part and action; change more than the scene.` : '',
-        'Return only JSON with one context key.',
+        repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the requested sense a distinguishing clue appropriate to its part of speech; change more than the scene.` : '',
+        'Return JSON: {"context":"... __TARGET__ ..."}.',
     ].filter(Boolean).join('\n');
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
@@ -2372,8 +2373,11 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         assertMiniMaxResponse(payload);
         const content = payload?.choices?.[0]?.message?.content || '';
         const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        const context = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
+        let context = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
         const target = String(word || '').trim().toLowerCase();
+        const markerCount = (context.match(/__TARGET__/g) || []).length;
+        if (markerCount > 1) return '';
+        if (markerCount === 1) context = context.replace('__TARGET__', target);
         const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
         if (!context || count !== 1 || context.toLowerCase() === prior.toLowerCase()) return '';
         return context;
