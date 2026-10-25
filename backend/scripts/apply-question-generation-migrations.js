@@ -102,6 +102,19 @@ select
   (select safe_search_path from rpc_state where name = 'request_challenge_question_supply') as rpc_request_challenge_question_supply_safe_search_path,
   (select count(*) = 2 from pg_catalog.pg_attribute where attrelid = to_regclass('public.question_generation_jobs')
     and attname in ('demand_requested_at', 'demand_priority_until') and atttypid = 'timestamptz'::regtype and not attisdropped) as challenge_demand_columns,
+  coalesce((select p.prosecdef
+    and p.prosrc like '%jsonb_array_length(p_variants) <> 1%'
+    and p.prosrc like '%job.lease_token is distinct from p_lease_token%'
+    and p.prosrc like '%public.active_words%'
+    and p.prosrc like '%word.question_generation_version%'
+    and p.prosrc like '%public.is_valid_teaching_analysis%'
+    and p.prosrc like '%existing.cache_state = ''active''%'
+    and p.prosrc not like '%set cache_state = ''retired''%'
+    and not has_function_privilege('anon',p.oid,'execute')
+    and not has_function_privilege('authenticated',p.oid,'execute')
+    and has_function_privilege('service_role',p.oid,'execute')
+    and not exists(select 1 from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl where acl.grantee=0 and acl.privilege_type='EXECUTE')
+    from pg_catalog.pg_proc p where p.oid=to_regprocedure('public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)')),false) as practice_single_publish_contract,
   coalesce((select prosrc like '%job.demand_requested_at > job.updated_at%'
     and prosrc like '%order by eligible.demand_pending desc, eligible.user_job_rank%'
     and prosrc like '%demand_priority_until = null%'
@@ -470,6 +483,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261013_teaching_analysis_snapshots.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261013_custom_practice.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261025_unserved_challenge_demand.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261025_practice_single_publication.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -565,6 +579,7 @@ const EXPECTED_STATE = Object.freeze({
   rpc_create_formal_quiz_challenge_ai_audit_contract: true,
   rpc_custom_challenge_count_contract: true,
   display_replenishment_trigger: true,
+  practice_single_publish_contract: true,
   challenge_demand_unserved_priority: true,
   challenge_demand_columns: true,
   challenge_demand_claim_priority: true,
@@ -648,7 +663,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.length === 1 && missing[0] === 'challenge_demand_unserved_priority'
+    const paths = missing.length === 1 && missing[0] === 'practice_single_publish_contract'
+      ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261025_practice_single_publication.sql')
+      : missing.length === 1 && missing[0] === 'challenge_demand_unserved_priority'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261025_unserved_challenge_demand.sql')
       : missing.every(key=>key.startsWith('custom_practice_'))
       ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261013_custom_practice.sql')

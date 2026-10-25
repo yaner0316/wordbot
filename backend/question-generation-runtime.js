@@ -254,6 +254,30 @@ function createSupabaseReadyVariantPublisher({ client, workerId, requiredReadyCo
     };
 }
 
+function createSupabasePracticeVariantPublisher({ client, workerId } = {}) {
+    const supabase = requireClient(client);
+    return async function publishPracticeVariant({ job, variants } = {}) {
+        if (!Array.isArray(variants) || variants.length !== 1
+            || !String(variants[0]?.question_fingerprint || '').trim()
+            || !normalizeStem(variants[0]?.question_text)) {
+            const error = new Error('Exactly one approved practice variant is required');
+            error.code = 'EXACTLY_ONE_PRACTICE_VARIANT_REQUIRED';
+            throw error;
+        }
+        const { data, error } = await supabase.rpc('publish_question_generation_practice_variant', {
+            p_job_id: requireId(job?.id, 'JOB_ID_REQUIRED'),
+            p_worker_id: requireId(workerId || job?.lease_owner, 'WORKER_ID_REQUIRED'),
+            p_expected_word_version: job?.word_version,
+            p_lease_token: job?.lease_token,
+            p_variants: variants,
+        });
+        throwSupabaseError(error, 'questionGenerationCache.publishPractice');
+        const result = rowsFrom(data)[0];
+        if (!result) throw createStaleLeaseError();
+        return result;
+    };
+}
+
 function defaultValidateCandidate(candidate, word) {
     const issues = [];
     const questionText = normalizeStem(candidate?.question_text || candidate?.questionText);
@@ -365,6 +389,7 @@ function createSupabaseQuestionGenerationService({
             reportRejection,
         }),
         publishReadyVariants,
+        publishPracticeVariant: createSupabasePracticeVariantPublisher({ client: supabase, workerId }),
     });
 
     return generationService;
@@ -432,6 +457,7 @@ function createQuestionGenerationRuntime({
         },
         beforePublish: async ({ job }) => jobStore.renew(job, { workerId }),
         publishReadyVariants,
+        publishPracticeVariant: createSupabasePracticeVariantPublisher({ client: supabase, workerId }),
     });
     jobStore = createSupabaseQuestionGenerationJobStore({
         client: supabase,
@@ -468,6 +494,7 @@ module.exports = {
     createSupabaseQuestionGenerationJobStore,
     createSupabaseWordLoader,
     createSupabaseReadyVariantPublisher,
+    createSupabasePracticeVariantPublisher,
     createSupabaseQuestionGenerationService,
     createQuestionGenerationRuntime,
 };

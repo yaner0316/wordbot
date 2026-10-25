@@ -90,6 +90,7 @@ function createQuestionGenerationService({
     generateCandidates,
     validateCandidate,
     publishReadyVariants,
+    publishPracticeVariant = null,
     beforePublish = async () => {},
     loadCheckpoint = async () => null,
     saveCheckpoint = async () => {},
@@ -102,6 +103,7 @@ function createQuestionGenerationService({
     if (typeof generateCandidates !== 'function') throw new Error('GENERATE_CANDIDATES_REQUIRED');
     if (typeof validateCandidate !== 'function') throw new Error('VALIDATE_CANDIDATE_REQUIRED');
     if (typeof publishReadyVariants !== 'function') throw new Error('PUBLISH_READY_VARIANTS_REQUIRED');
+    if (publishPracticeVariant !== null && typeof publishPracticeVariant !== 'function') throw new Error('PUBLISH_PRACTICE_VARIANT_REQUIRED');
     if (typeof beforePublish !== 'function') throw new Error('BEFORE_PUBLISH_REQUIRED');
     if (typeof loadCheckpoint !== 'function') throw new Error('LOAD_CHECKPOINT_REQUIRED');
     if (typeof saveCheckpoint !== 'function') throw new Error('SAVE_CHECKPOINT_REQUIRED');
@@ -142,6 +144,19 @@ function createQuestionGenerationService({
             });
             const variantsByFingerprint = new Map();
             const rejectionReasons = {};
+            const exposedPracticeFingerprints = new Set();
+            const exposePracticeSingle = async rows => {
+                if (!publishPracticeVariant) return;
+                const valid = rows.filter(row => row?.question_fingerprint && !candidateIssues(row).length);
+                if (valid.length !== 1) return;
+                const variant = { ...valid[0], user_id: userId, word_id: wordId,
+                    round_type: 'primary', quality_status: 'ready', variant_slot: 1, cache_state: 'active' };
+                if (exposedPracticeFingerprints.has(variant.question_fingerprint)) return;
+                const request = { job, userId, wordId, word, variants: [variant] };
+                await beforePublish(request);
+                await publishPracticeVariant(request);
+                exposedPracticeFingerprints.add(variant.question_fingerprint);
+            };
             let restoredInvalidRow = false;
             checkpoint.variants = checkpoint.variants.map((savedVariant, index) => {
                 const variant = checkpointRow(savedVariant);
@@ -179,6 +194,7 @@ function createQuestionGenerationService({
                 checkpoint.variants = [...rows, ...partials];
                 await saveCheckpoint({job,word,checkpoint});
             }
+            await exposePracticeSingle([...variantsByFingerprint.values()]);
             for (let attempt = 1; attempt <= attemptsLimit && variantsByFingerprint.size < required; attempt += 1) {
                 const candidates = await generateCandidates({
                     job,
@@ -191,6 +207,7 @@ function createQuestionGenerationService({
                     saveGenerationCheckpoint: async nextCheckpoint => {
                         Object.assign(checkpoint, nextCheckpoint);
                         await saveCheckpoint({ job, word, checkpoint });
+                        await exposePracticeSingle(checkpoint.variants.map(checkpointRow));
                     },
                     reportRejection: code => {
                         if (/^[a-z][a-z0-9_]{0,79}$/.test(String(code))) {
@@ -240,6 +257,7 @@ function createQuestionGenerationService({
                     );
                     checkpoint.variants = [...approvedCheckpoints, ...partials];
                     await saveCheckpoint({ job, word, checkpoint });
+                    await exposePracticeSingle([...variantsByFingerprint.values()]);
                     if (variantsByFingerprint.size >= required) break;
                 }
             }

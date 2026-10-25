@@ -1143,3 +1143,45 @@ test('archive rejects foreign IDs, fences an in-flight worker and permits fresh 
         for(const key of ['rpc_archive_words_public_execute','rpc_archive_words_anon_execute','rpc_archive_words_authenticated_execute']) assert.equal(verified[key],false,key);
     } finally {await db.close();}
 });
+
+test('practice single publication is fenced, additive and leaves the two-question publisher intact',async()=>{
+ const db=await createDatabase();
+ try{
+  assert.ok((await db.query("select to_regprocedure('public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)') as rpc")).rows[0].rpc);
+  const migration=MIGRATION_PATHS.find(p=>p.endsWith('20261025_practice_single_publication.sql'));
+  await db.exec(await fs.readFile(migration,'utf8'));
+  await db.query("select enqueue_question_generation_job_if_needed($1,$2,'cache_backfill')",[USER_ID,WORD_ID]);
+  const job=(await db.query("select * from claim_question_generation_jobs('practice-worker',1,60000)")).rows[0];
+  const options=['A. apple','B. pear','C. chair','D. book'],meanings=['苹果','梨','椅子','书'];
+  const first={...JSON.parse(variantsJson())[0],question_text:'The farmer baked a pie with this sweet, red _____.',context_zh:'这个派所用的苹果来自那棵苹果树。',options,option_meanings:meanings,correct_meaning:'苹果',source_version:'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1',
+   teaching_analysis:{schemaVersion:1,clue:'sweet, red',clueReason:'甜的红色水果是句中给出的明确线索。',correctWord:'apple',correctReason:'苹果对应句中描述的甜的红色水果。',options:options.map((opt,i)=>({word:opt.slice(3),fits:i===0,meaning:meanings[i],reason:i===0?'苹果对应句中明确的苹果树来源。':'这个选项不是句中苹果树所结的果实。'}))}};
+  const args=[job.id,'practice-worker',job.word_version,job.lease_token];
+  const publish=(variants,overrides=[])=>db.query('select * from publish_question_generation_practice_variant($1,$2,$3,$4,$5::jsonb)',[...args.map((v,i)=>overrides[i]??v),JSON.stringify(variants)]);
+  assert.equal((await publish([first],[undefined,'wrong-worker'])).rows.length,0);
+  assert.equal((await publish([first],[undefined,undefined,job.word_version+1])).rows.length,0);
+  await assert.rejects(publish([{...first,ai_audit_status:'pending'}]),/INVALID_VARIANT_STRUCTURE/);
+  await assert.rejects(publish([{...first,teaching_analysis:null}]),/INVALID_VARIANT_STRUCTURE|question_cache_teaching_analysis_valid/);
+  await assert.rejects(publish([first,first]),/EXACTLY_ONE_PRACTICE_VARIANT_REQUIRED/);
+  const published=(await publish([first])).rows[0];assert.equal(published.published,1);assert.equal(published.retired,0);
+  const rows=(await db.query('select * from question_cache where word_id=$1',[WORD_ID])).rows;
+  assert.equal(rows.length,1);assert.equal(rows[0].cache_state,'active');assert.deepEqual(rows[0].teaching_analysis,first.teaching_analysis);
+  assert.equal((await db.query('select status from question_generation_jobs where id=$1',[job.id])).rows[0].status,'generating');
+  const second={...first,question_fingerprint:'practice-different',question_text:'For lunch she packed the sweet, red _____ from the orchard.'};
+  const before=(await db.query('select to_jsonb(c) as value from question_cache c where word_id=$1',[WORD_ID])).rows;
+  assert.equal((await publish([second])).rows[0].published,0);
+  assert.deepEqual((await db.query('select to_jsonb(c) as value from question_cache c where word_id=$1',[WORD_ID])).rows,before);
+  await assert.rejects(db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[...args,JSON.stringify([first])]),/EXACTLY_TWO_VARIANTS_REQUIRED/);
+  const {selectCachedQuestionsForWordQueue}=require('../quiz-word-queue');
+  const mapped=rows.map(r=>({...r,user:'child',word:'apple',word_record_id:WORD_ID,context_cn:r.context_zh,level:'中学'}));
+  assert.deepEqual(require('../question-cache').getCacheQuestionReadinessIssues(mapped[0]),[]);
+  const selection={cacheRows:mapped,queue:[WORD_ID],userId:'child',level:'中学',limit:1};
+  assert.equal(selectCachedQuestionsForWordQueue({...selection,requireReadyPair:false}).length,1);
+  assert.equal(selectCachedQuestionsForWordQueue({...selection,requireReadyPair:true}).length,0);
+  assert.equal((await db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[...args,JSON.stringify([first,second])])).rows[0].published,2);
+  assert.equal((await db.query("select count(*)::int n from question_cache where word_id=$1 and cache_state in ('active','reserved_next_day')",[WORD_ID])).rows[0].n,2);
+  const acl=(await db.query("select has_function_privilege('anon','public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)','execute') anon,has_function_privilege('authenticated','public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)','execute') authenticated,has_function_privilege('service_role','public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)','execute') service")).rows[0];
+  assert.deepEqual(acl,{anon:false,authenticated:false,service:true});
+  await db.query('update words set deleted_at=now() where id=$1',[WORD_ID]);
+  assert.equal((await publish([first])).rows.length,0);
+ }finally{await db.close();}
+});

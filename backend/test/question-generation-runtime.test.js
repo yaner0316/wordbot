@@ -219,6 +219,15 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
                 });
                 return { data: [clone(job)], error: null };
             }
+            if (name === 'publish_question_generation_practice_variant') {
+                if (!ownsLiveLease) return { data: [], error: null };
+                const existing = state.question_cache.some(row => row.user_id === job.user_id && row.word_id === job.word_id && row.cache_state === 'active' && row.quality_status === 'ready' && row.ai_audit_status === 'approved');
+                if (existing) return { data: [{published:0,retired:0,fingerprints:[]}], error:null };
+                if (failCacheUpsert) return {data:null,error:Object.assign(new Error('cache publish failed'),{code:'CACHE_UPSERT_FAILED'})};
+                const row = {...clone(args.p_variants[0]),id:'question_cache-'+(sequence++),user_id:job.user_id,word_id:job.word_id,cache_state:'active',round_type:'primary',quality_status:'ready',variant_slot:1};
+                state.question_cache.push(row);
+                return {data:[{published:1,retired:0,fingerprints:[row.question_fingerprint]}],error:null};
+            }
             if (name === 'publish_question_generation_variants') {
                 if (!ownsLiveLease) return { data: [], error: null };
                 if (failCacheUpsert) {
@@ -603,11 +612,13 @@ test('insufficient candidates do not write or retire existing ready cache', asyn
         round_type: 'primary',
         quality_status: 'ready',
         cache_state: 'active',
+        ai_audit_status: 'approved',
         question_fingerprint: 'old-fingerprint',
     };
     const fake = createFakeSupabase({
         words: [{ id: 'word-bank-finance', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'middle' }],
         cache: [old],
+        jobs: [generationJob()],
     });
     const service = createSupabaseQuestionGenerationService({
         client: fake.client,
@@ -708,7 +719,7 @@ test('runtime gives the candidate builder a lease-renewal callback', async () =>
     const renewCalls = fake.calls.filter(call =>
         call.type === 'rpc' && call.name === 'renew_question_generation_job'
     );
-    assert.equal(renewCalls.length, 2);
+    assert.equal(renewCalls.length, 3); // builder, practice publication, then complete-pair publication
 });
 
 test('runtime resumes an approved checkpoint variant and durably saves its new sibling', async () => {
