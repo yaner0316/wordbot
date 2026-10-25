@@ -256,3 +256,27 @@ test('pending challenge names only missing words with safe generation status and
  assert.deepEqual(result.missingWords,[{meaningId:'word-0',word:'target0',state:'retry_wait',retryAt:'2026-10-05T05:00:00Z'}]);
  assert.ok(!JSON.stringify(result).includes('private-provider-details'));assert.ok(!JSON.stringify(result.missingWords).includes('释义'));
 });
+
+test('random fills from usable lower-priority meanings when reviewed meanings lack supply', async () => {
+  const f=fixture(25,Array.from({length:5},(_,i)=>'word-'+i));
+  for(const w of f.words.slice(0,10)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-20*HOUR).toISOString(),counts_for_cooldown:true});
+  const quiz=await generate(f,[],'random');
+  assert.equal(quiz.pending,undefined);
+  assert.equal(quiz.questions.length,10);
+  const ids=new Set(quiz.questions.map(q=>q.meaningId));
+  for(const w of f.words.slice(5,10)) assert.ok(ids.has(w.id),'available reviewed meaning retains priority');
+  for(const w of f.words.slice(0,5)) assert.ok(!ids.has(w.id),'unavailable meaning must not block usable supply');
+  assert.deepEqual(f.queued,[]);
+});
+
+test('a second random challenge fills around meanings cooled by the first challenge',async()=>{
+  const f=fixture(30,Array.from({length:5},(_,i)=>'word-'+(i+10)));
+  for(const w of f.words.slice(0,20)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-20*HOUR).toISOString(),counts_for_cooldown:true});
+  for(const w of f.words.slice(0,10)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-HOUR).toISOString(),counts_for_cooldown:true});
+  const quiz=await generate(f,[],'random');
+  assert.equal(quiz.pending,undefined);
+  assert.equal(quiz.questions.length,10);
+  const ids=new Set(quiz.questions.map(q=>q.meaningId));
+  for(const w of f.words.slice(0,15)) assert.ok(!ids.has(w.id));
+  for(const w of f.words.slice(15,20)) assert.ok(ids.has(w.id));
+});

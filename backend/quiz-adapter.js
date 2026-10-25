@@ -346,10 +346,10 @@ function chooseChallengeQueue({ selection, candidates, wordRows, limit, readyRec
     const yesterday = day(now - 24 * 60 * 60 * 1000);
     const priorities = new Map(candidates.map(candidate => [candidate.recordId,
         candidate.lastDisplayedAt && day(candidate.lastDisplayedAt) === yesterday ? 0 : candidate.lastDisplayedAt ? 1 : 2]));
-    // Preserve explicit choices. Random review priority comes first; within each
-    // priority choose usable cached stems before unrelated jobs still building.
-    remaining.sort((left,right) => (selection.mode === 'random' ? priorities.get(left)-priorities.get(right) : 0)
-        || Number(readyRecordIds.has(right))-Number(readyRecordIds.has(left)));
+    // Preserve explicit choices. Use ready supply first, then preserve random
+    // review priority among usable meanings instead of blocking on missing jobs.
+    remaining.sort((left,right) => Number(readyRecordIds.has(right))-Number(readyRecordIds.has(left))
+        || (selection.mode === 'random' ? priorities.get(left)-priorities.get(right) : 0));
     return [...selected, ...remaining].slice(0, limit);
 }
 
