@@ -54,6 +54,17 @@ function makeTraversalRows(count, usedCount = 0, overrides = {}) {
         ...overrides,
     }));
 }
+
+test('AI-approved legacy fill-in cache cannot supply a Chinese stem', () => {
+    const approved = question({
+        ai_audit_status: 'approved',
+        source_version: 'supabase-contextual-variant-v3|unique-answer-v2',
+    });
+    assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), true);
+    const invalid = { ...approved, question_text: '我吃了一个_____。' };
+    assert.ok(getCacheQuestionReadinessIssues(invalid, { requireAiAudit: true }).includes('non_english_context'));
+    assert.equal(isCacheQuestionReady(invalid, { requireAiAudit: true }), false);
+});
 test('new teaching policy cannot supply a missing or contradictory snapshot while legacy policy stays compatible',()=>{
     const legacy=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2'});
     assert.equal(getCacheQuestionReadinessIssues(legacy,{requireAiAudit:true}).length,0);
