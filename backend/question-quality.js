@@ -581,6 +581,9 @@ function getQuestionQualityIssues(question) {
         const word = getCorrectOptionWord(question);
         const baseWord = String(question.word || '').trim().toLowerCase();
         const rawContext = String(question.context || '');
+        if (/\p{Script=Han}/u.test(rawContext) || !/[a-z]/i.test(rawContext)) {
+            issues.push('non_english_context');
+        }
         const context = rawContext.replace(/_{3,}/g, word);
         const baseContext = rawContext.replace(/_{3,}/g, baseWord);
         if (isBadQuizWord(baseWord) || isBadQuizWord(word)) issues.push('invalid_quiz_word');

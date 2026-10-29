@@ -20,6 +20,21 @@ const CN_CRAYONS = String.fromCharCode(0x8721, 0x7b14);
 const CN_CLAP = String.fromCharCode(0x9f13, 0x638c);
 const CN_SWEATER = String.fromCharCode(0x6bdb, 0x8863);
 
+test('fill-in contexts reject Chinese and mixed-language stems without rejecting Chinese translations', () => {
+    const question = {
+        type: 1, word: 'apple', level: SENIOR_HIGH,
+        context: 'I ate an _____.', contextCN: '我吃了一个苹果。',
+        options: ['A. apple', 'B. pear', 'C. chair', 'D. book'],
+        answer: 'A', correctMeaning: '苹果',
+    };
+    assert.deepEqual(getQuestionQualityIssues(question), []);
+    for (const context of ['我吃了一个_____。', 'I ate an _____。苹果', '𠀀 I ate an _____.', '_____ 123.']) {
+        assert.ok(getQuestionQualityIssues({ ...question, context }).includes('non_english_context'));
+        assert.equal(isQuestionQualityAcceptable({ ...question, context }), false);
+    }
+    assert.equal(getQuestionQualityIssues({ type: 4, context: '请写出中文释义' }).includes('non_english_context'), false);
+});
+
 test('hasAiMetaResponse detects English meta-response', () => {
     assert.equal(hasAiMetaResponse(META), true);
 });
