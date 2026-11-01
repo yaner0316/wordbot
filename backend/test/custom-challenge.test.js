@@ -28,6 +28,35 @@ function generate(f, meaningIds = [], mode = 'custom') {
   return generateQuizWithDataSource({ username: 'child', level: '中学', mode: 'real', now: NOW,
     dataSource: f.dataSource, selection: { mode, meaningIds }, createId: () => 'custom-test' });
 }
+
+for (const mode of ['random', 'custom']) {
+  test(`${mode}: approved Chinese stems reduce usable supply without shortening or modifying learning records`, async () => {
+    const f = fixture(10);
+    f.cache.filter(row => row.word_id === 'word-0').forEach(row => {
+      row.source_version = 'supabase-contextual-variant-v3|unique-answer-v2';
+      row.question_text = `第${row.variant_slot}题：在中学，她每天用琴弓夹住琴弦练习 _____，认真纠正按弦和运弓的姿势。`;
+    });
+    const before = JSON.stringify({ words: f.words, cache: f.cache, displays: f.displays });
+    const quiz = await generate(f, mode === 'custom' ? ['word-0'] : [], mode);
+    assert.equal(quiz.pending, true);
+    assert.equal(quiz.requiredCount, 10);
+    assert.equal(quiz.readyCount, 9);
+    assert.deepEqual(quiz.questions, []);
+    assert.ok(f.queued.includes('word-0'));
+    assert.equal(JSON.stringify({ words: f.words, cache: f.cache, displays: f.displays }), before);
+  });
+
+  test(`${mode}: valid English reserves still fill ten questions after Chinese supply is excluded`, async () => {
+    const f = fixture(12);
+    f.cache.filter(row => row.word_id === 'word-0').forEach(row => {
+      row.question_text = `第${row.variant_slot}题：她正在练习 _____。`;
+    });
+    const quiz = await generate(f, mode === 'custom' ? ['word-1'] : [], mode);
+    assert.equal(quiz.pending, undefined);
+    assert.equal(quiz.questions.length, 10);
+    assert.ok(quiz.questions.every(q => q.meaningId !== 'word-0'));
+  });
+}
 test('custom selection is practice even if the caller requests real mode; submission preserves feedback without formal effects', async () => {
   const f = fixture(10);
   const quiz = await generate(f, ['word-0']);
