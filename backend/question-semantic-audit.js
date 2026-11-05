@@ -1,6 +1,6 @@
 const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { teachingAnalysisFromAudit, SEMANTIC_AUDIT_METHOD, semanticAuditInputFingerprint, semanticSenseFingerprint } = require('./teaching-analysis');
-const { LEVEL_FIT_POLICY, isHighSchool, levelFitPrompt, parseLevelFitEvidence } = require('./high-school-fit');
+const { LEVEL_FIT_POLICY, levelFitPrompt, parseLevelFitEvidence } = require('./high-school-fit');
 
 const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
 
@@ -138,7 +138,7 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
     // Approval requires the exclusions to survive an explicit counterexample check.
     const verified = await evaluateUniqueAnswer(question, {callModel:() => callModel(buildCriticalExclusionPrompt(question,initial.optionJudgments))});
     if (!verified.approved) return {...verified, proofChecks:2};
-    if (!semanticSenseFingerprint(question)) return isHighSchool(question.level)
+    if (!semanticSenseFingerprint(question)) return question.level
         ? {...verified,approved:false,status:'rejected',code:'level_fit_evidence_invalid',teachingAnalysis:undefined,proofChecks:2}
         : {...verified,proofChecks:2};
     // Reuse the two actual uniqueness judgments; verify the specified sense separately.

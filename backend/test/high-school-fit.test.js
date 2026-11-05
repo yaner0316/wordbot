@@ -30,10 +30,10 @@ test('a blocking background requirement rejects an otherwise unique question', a
  assert.equal(result.approved,false);
  assert.equal(result.code,'level_fit_context');
 });
-test('non-high-school audits keep their existing evidence contract', async()=>{
- const result=await auditUniqueAnswer({...question,level:'中学'},{callModel:model(null)});
- assert.equal(result.approved,true);
- assert.equal(result.teachingAnalysis.levelFit,undefined);
+test('unsupported explicit learner levels cannot approve', async()=>{
+ const result=await auditUniqueAnswer({...question,level:'unknown'},{callModel:model(null)});
+ assert.equal(result.approved,false);
+ assert.equal(result.code,'level_fit_unsupported');
 });
 
 test('fit evidence cannot be reused after level, sense, option or context changes',()=>{
@@ -55,4 +55,33 @@ test('fabricated evidence, contradictory approvals and unresolved concerns fail 
  for(const evidence of [{...fit,clue:'not in the sentence'},{...fit,optionsReason:''},{...fit,barriers:[{text:'copied',location:'context',impact:'blocking',reason:'测试中明确认定该处存在不能解决的理解障碍。'}]}]) assert.equal(parseLevelFitEvidence(question,evidence).approved,false);
  const uncertain={...fit,status:'borderline',repairStage:'context',barriers:[{text:'copied',location:'context',impact:'incidental',reason:'测试中该处具体用法的理解难度尚无法得到确认。'}]};
  assert.equal(parseLevelFitEvidence(question,uncertain).approved,false);
+});
+
+for (const level of ['小学','中学','CET4_6_TOEFL']) {
+ test(level+' cannot approve without its own level-fit evidence',async()=>{
+  const result=await auditUniqueAnswer({...question,level},{callModel:model(null)});
+  assert.equal(result.approved,false);
+  assert.equal(result.code,'level_fit_evidence_invalid');
+ });
+ test(level+' approves valid evidence under a distinct level policy',async()=>{
+  const result=await auditUniqueAnswer({...question,level},{callModel:model(fit)});
+  assert.equal(result.approved,true);
+  assert.ok(result.teachingAnalysis.levelFit);
+  assert.notEqual(result.teachingAnalysis.levelFit.policyVersion,'high-school-fit-v1');
+ });
+}
+
+test('level evidence and vocabulary hints remain separate across school bands',()=>{
+ const {hasCurrentLevelFit,parseLevelFitEvidence,vocabularyHints,levelGuidance}=require('../high-school-fit');
+ const evidence=parseLevelFitEvidence(question,fit).levelFit;
+ for(const level of ['小学','中学','CET4_6_TOEFL']) assert.equal(hasCurrentLevelFit({...question,level},evidence),false);
+ assert.equal(vocabularyHints({...question,level:'小学'}).available,false);
+ assert.equal(vocabularyHints({...question,level:'CET4_6_TOEFL'}).available,false);
+ const q={...question,context:'We abandon the damaged plan.'};
+ assert.equal(vocabularyHints(q).context.unlisted.includes('abandon'),false);
+ assert.equal(vocabularyHints({...q,level:'中学'}).context.unlisted.includes('abandon'),true);
+ assert.match(levelGuidance('小学'),/grades 5–6/);
+ assert.match(levelGuidance('中学'),/grades 7–9/);
+ assert.match(levelGuidance('CET4_6_TOEFL'),/NOT|mixed band/);
+ assert.equal(hasCurrentLevelFit({...question,level:''},evidence),false);
 });

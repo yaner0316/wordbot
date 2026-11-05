@@ -147,7 +147,7 @@ test('service startup scripts do not run question-generation migrations', () => 
   );
 });
 
-test('the main release applies and verifies migrations before triggering Render', () => {
+test('the code-only release verifies schema without applying migrations before Render', () => {
   const workflow = fs.readFileSync(
     path.resolve(__dirname, '..', '..', '.github', 'workflows', 'render-deploy.yml'),
     'utf8'
@@ -157,8 +157,8 @@ test('the main release applies and verifies migrations before triggering Render'
   const deployIndex = workflow.indexOf('curl --fail --request POST "$RENDER_DEPLOY_HOOK_URL"');
 
   assert.match(workflow, /DATABASE_URL:\s*\$\{\{ secrets\.DATABASE_URL \}\}/);
-  assert.ok(applyIndex >= 0);
-  assert.ok(verifyIndex > applyIndex);
+  assert.equal(applyIndex, -1);
+  assert.ok(verifyIndex >= 0);
   assert.ok(deployIndex > verifyIndex);
 });
 

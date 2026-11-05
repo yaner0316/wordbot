@@ -1,0 +1,25 @@
+{
+  "policyVersion": "junior-fit-v1",
+  "reference": "https://www.esph.com.cn/docs/2025-10/705da262a6e74b088ac658bfe2d757ba.pdf — 2022 curriculum level 3 (grades 7–9); lookup uses compulsory-education entries in the already verified 2025 senior-high appendix. Rubric/examples authored for WordBot.",
+  "audience": "A learner completing Chinese junior-secondary English (grades 7–9, curriculum level 3). The target sense may be new. Everyday, social and introductory scientific topics are allowed with accessible stated evidence and simple inference.",
+  "grammarReference": "Common tenses, modal verbs, passive constructions, infinitives and basic object/adverbial/relative clauses may support comprehension. Inspect the actual relation: clear reasons, contrast and simple inference are appropriate; stacked embedding, implicit complex logical relations and specialist background must not carry the decisive clue unsupported. No mechanical word or clause count.",
+  "examples": [
+    {
+      "context": "Although the road was wet, the driver slowed down and reached the school safely.",
+      "target": "driver",
+      "assessment": "Clear familiar action and contrast; sentence length is not a barrier. Stem example only."
+    },
+    {
+      "context": "The driver contested liability under the indemnity provision.",
+      "target": "driver",
+      "assessment": "Unexplained legal vocabulary and process obscure the action; revise the context."
+    }
+  ],
+  "rules": [
+    "Evaluate vocabulary IN ITS ACTUAL SENSE and collocation, syntax, inference/background knowledge, and ALL distractors. Assuming the learner knows the target sense, can they understand the clues and distinguish the choices?",
+    "Use the local vocabulary hints as evidence, not a whitelist. Listed words can have unfamiliar senses. Unlisted names, transparent derivations, explained terms and incidental details can be acceptable. Do not impose a one-new-word rule or a count/percentage threshold.",
+    "Do not reject by sentence length, number of clauses, punctuation or historical/religious/scientific topic. Prefer natural meaningful context. Identify an actual comprehension barrier, not merely a long or rare-looking word.",
+    "Core clues should remain accessible without knowing another harder unglossed word. A cluster of unfamiliar terms can obstruct understanding even when no single term is indispensable. Do not exempt distractors just because the target is advanced.",
+    "Use suitable only when all four dimensions are supported. Borderline means a concrete unresolved comprehension concern; unsuitable means an identified blocking requirement. Replace only the problematic context or distractors; preserve the target meaning. Do not make the item ambiguous to simplify it."
+  ]
+}

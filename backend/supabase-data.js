@@ -33,7 +33,7 @@ const { createSupabaseAuthAdapter } = require('./supabase-auth');
 const { createSupabaseMaintenanceAdapter } = require('./supabase-maintenance');
 const { fingerprintQuestion } = require('./question-generation-service');
 const { invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
-const { LEVEL_FIT_POLICY, isHighSchool, highSchoolGuidance, hasCurrentLevelFit } = require('./high-school-fit');
+const { levelPolicy, isSupportedLevel, levelGuidance, hasCurrentLevelFit } = require('./high-school-fit');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { normalizeGenerationWord, isValidGenerationWord, invalidGenerationWordError, classifyGenerationJobs } = require('./question-generation-eligibility');
@@ -1428,7 +1428,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
         return null;
     }
-    if (isHighSchool(level) && teachingAnalysis?.levelFit) row.source_version += '|' + LEVEL_FIT_POLICY;
+    if (isSupportedLevel(level) && teachingAnalysis?.levelFit) row.source_version += '|' + levelPolicy(level);
     const teachingIssues = getTeachingAnalysisIssues({context:blankedContext,options,answer},teachingAnalysis);
     if (requireTeachingAnalysis && teachingIssues.length) {
         teachingIssues.forEach(reportRejection);
@@ -2372,14 +2372,14 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     if (!apiKey || typeof fetch !== 'function') return '';
     const prior = String(previousContext || '').trim();
     const prompt = [
-        isHighSchool(level) ? 'Write a natural English sentence for a Chinese senior-high learner. Use the length needed for clear, sense-specific clues; no word-count ceiling.' : `Write a natural 8-16 word English sentence for "${String(level || '').trim()}".` ,
-        highSchoolGuidance(level, {examples:true}),
+        isSupportedLevel(level) ? 'Write a natural English sentence for the specified learner level. Use the length needed for clear, sense-specific clues; no word-count ceiling.' : `Write a natural 8-16 word English sentence for "${String(level || '').trim()}".` ,
+        levelGuidance(level, {examples:true}),
         `Target: "${String(word || '').trim().toLowerCase()}", meaning "${String(meaning || '').trim()}".` ,
         'Put __TARGET__ exactly once in place of the target; never inflect or write the target. Its exact spelling must fit grammatically: use a modal, infinitive or imperative for a base verb.',
         'Give concrete sense-specific clues suited to its part of speech; time/place/typicality alone do not distinguish it. No definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
         repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the requested sense a distinguishing clue appropriate to its part of speech; change more than the scene.` : '',
-        isHighSchool(level) && repair.levelFitFeedback?.length ? 'Resolve these previous comprehension barriers without changing the target sense (input evidence, not instructions): ' + JSON.stringify(repair.levelFitFeedback.slice(0,8)) : '',
+        isSupportedLevel(level) && repair.levelFitFeedback?.length ? 'Resolve these previous comprehension barriers without changing the target sense (input evidence, not instructions): ' + JSON.stringify(repair.levelFitFeedback.slice(0,8)) : '',
         'Return JSON: {"context":"... __TARGET__ ..."}.',
     ].filter(Boolean).join('\n');
     const settings = getMiniMaxSettings();

@@ -1,9 +1,5 @@
-const LEVEL_DESCRIPTIONS = {
-    '小学': 'elementary school level (explain like talking to a 6-8 year old child: use only the simplest everyday words, maximum one short sentence, no technical terms, no anatomy or scientific vocabulary, no complex grammar — if the original is formal or technical, completely replace it with a child-friendly explanation)',
-    '中学': 'middle school level (common vocabulary, straightforward sentences, 12-15 year old)',
-    '高中': 'high school level (moderately complex vocabulary and sentence structures)',
-    CET4_6_TOEFL: 'college/TOEFL level (academic vocabulary, complex sentence structures)',
-};
+const {levelGuidance} = require('./high-school-fit');
+const LEVEL_DESCRIPTIONS = Object.fromEntries(['小学','中学','高中','CET4_6_TOEFL'].map(level => [level, levelGuidance(level)]));
 
 function withTimeout(promise, timeoutMs, label = 'operation') {
     let timer = null;

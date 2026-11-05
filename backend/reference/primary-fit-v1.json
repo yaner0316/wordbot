@@ -1,0 +1,25 @@
+{
+  "policyVersion": "primary-fit-v1",
+  "reference": "https://www.esph.com.cn/docs/2025-10/705da262a6e74b088ac658bfe2d757ba.pdf — 2022 curriculum level 2 (grades 5–6), with WordBot-authored rubric/examples; not an exam calibration.",
+  "audience": "An elementary school level learner completing Chinese primary-school English (grades 5–6, curriculum level 2), not a 6–8-year-old beginner. The target sense may be new. Use concrete, familiar situations with explicit clues understandable without teacher explanation.",
+  "grammarReference": "Prefer familiar simple statements/questions, basic noun/pronoun/adjective forms and common tense expressions. Simple coordination or clearly supported time/cause relationships are allowed when understandable. Do not require decoding embedded clauses, compressed participial structures or abstract nominalizations as the decisive clue. Length alone is not a rejection.",
+  "examples": [
+    {
+      "context": "The puppy is very small. It can sit in my hand.",
+      "target": "puppy",
+      "assessment": "Accessible concrete clue, even if puppy is new; options still need uniqueness review."
+    },
+    {
+      "context": "The puppy was adopted following an assessment of domestic suitability.",
+      "target": "puppy",
+      "assessment": "Unsupported abstract expressions obstruct the simple action; revise the support language."
+    }
+  ],
+  "rules": [
+    "Evaluate vocabulary IN ITS ACTUAL SENSE and collocation, syntax, inference/background knowledge, and ALL distractors. Assuming the learner knows the target sense, can they understand the clues and distinguish the choices?",
+    "Use the local vocabulary hints as evidence, not a whitelist. Listed words can have unfamiliar senses. Unlisted names, transparent derivations, explained terms and incidental details can be acceptable. Do not impose a one-new-word rule or a count/percentage threshold.",
+    "Do not reject by sentence length, number of clauses, punctuation or historical/religious/scientific topic. Prefer natural meaningful context. Identify an actual comprehension barrier, not merely a long or rare-looking word.",
+    "Core clues should remain accessible without knowing another harder unglossed word. A cluster of unfamiliar terms can obstruct understanding even when no single term is indispensable. Do not exempt distractors just because the target is advanced.",
+    "Use suitable only when all four dimensions are supported. Borderline means a concrete unresolved comprehension concern; unsuitable means an identified blocking requirement. Replace only the problematic context or distractors; preserve the target meaning. Do not make the item ambiguous to simplify it."
+  ]
+}

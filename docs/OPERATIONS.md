@@ -1,5 +1,10 @@
 # WordBot Operations
 
+## Code-only level-fit release (2026-11-05)
+
+This release only verifies the existing production schema before Render. The CI migration apply command is deliberately disabled; missing schema blocks deployment instead of changing the database. Future schema-changing releases must explicitly authorize and restore the migration step. The ordered migration CLI remains available for an authorized operator. No cache purge or historical rewrite is part of this release.
+
+
 ## Independent completion audit (2026-10-19)
 
 New audits use `blind-completion-v1` in addition to the compatible existing policy tags. MiniMax receives the four completed sentences and numbered original context fragments, without an expected answer. The server derives the fitting set, validates each exclusion and its cited original fragment, requires one answer matching the internal key, and persists the existing teaching JSON with method/input fingerprint metadata. Letter shuffling preserves word-based binding; context/option/answer drift invalidates it. No migration is needed and old approved supply is not globally purged.
@@ -53,7 +58,7 @@ Use a focused `node --test` command while developing, then run the full backend 
 2. Register it in `backend/scripts/apply-question-generation-migrations.js` and extend migration contract/verification tests.
 3. Run the local migration tests, preferably against the project's disposable PGlite fixture where supported.
 4. Review the exact target environment and dry-run/read-only evidence.
-5. Apply only after explicit operator authorization. For a `main` release, the repository workflow uses the encrypted `DATABASE_URL` secret to apply and verify the ordered migrations before it triggers Render; any migration or verification failure blocks deployment. Do not apply migrations from ordinary server startup.
+5. Apply only after explicit operator authorization. For a `main` release, a schema-changing release must explicitly restore the migration step and use the encrypted `DATABASE_URL` secret to apply and verify the ordered migrations before it triggers Render; any migration or verification failure blocks deployment. Do not apply migrations from ordinary server startup.
 6. Retain the workflow's summarized migration and verification evidence without credentials.
 
 Never use startup-time implicit DDL. Never delete caches, rewrite assessments, reset mastery, or run bulk backfills merely because an alert fired.

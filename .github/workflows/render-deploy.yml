@@ -65,16 +65,15 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install backend dependencies for database migration
+      - name: Install backend dependencies for schema verification
         run: npm ci
         working-directory: backend
 
-      - name: Apply and verify production database migrations
+      - name: Verify production schema (code-only release; no migrations)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           test -n "$DATABASE_URL"
-          npm run migrate:question-generation
           npm run verify:question-generation-schema
         working-directory: backend
 

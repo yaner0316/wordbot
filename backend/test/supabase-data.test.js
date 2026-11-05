@@ -2798,7 +2798,8 @@ test('context generation uses the shared bounded MiniMax request', async () => {
         assert.equal(body.model, 'MiniMax-M2.5');
         assert.equal(body.max_tokens, 2048);
         assert.equal(body.temperature, 0.1);
-        assert.ok(body.messages[0].content.length < 500, 'context prompt must stay compact');
+        assert.match(body.messages[0].content, /grades 5–6/);
+        assert.ok(body.messages[0].content.length < 5000, 'include the bounded rubric without the full wordlist');
     } finally {
         if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = previousKey;

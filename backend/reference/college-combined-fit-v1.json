@@ -1,0 +1,25 @@
+{
+  "policyVersion": "college-combined-fit-v1",
+  "reference": "https://www.neea.edu.cn/res/Home/1704/55b02330ac17274664f06d9d3db8249d.pdf — CET 2016 syllabus reading requirements, used only as a general reading reference. Existing product combines CET4/CET6/TOEFL; this is NOT an official equivalence or an individual test-score calibration.",
+  "audience": "The existing combined college English / CET4_6_TOEFL product band. Use general college-level reading, supported abstract ideas and introductory academic contexts. Do not silently interpret this mixed band as advanced TOEFL or CET6-only proficiency; technical terms needed for the clue must be explained or inferable.",
+  "grammarReference": "Complex clauses, passive voice, nonfinite constructions, contrast and supported multi-step inference are acceptable if relations are clear in the text. Distinguish language comprehension from specialist disciplinary knowledge. Academic topics are permitted; unexplained jargon and knowledge outside the text must not be necessary.",
+  "examples": [
+    {
+      "context": "Because the results could not be repeated, the researchers questioned whether their conclusion was reliable.",
+      "target": "reliable",
+      "assessment": "General academic reasoning is supported explicitly; complex wording alone is not grounds for rejection."
+    },
+    {
+      "context": "The conclusion rests on heteroskedasticity-consistent asymptotics.",
+      "target": "conclusion",
+      "assessment": "Specialist statistical concepts are required without explanation; replace the support language."
+    }
+  ],
+  "rules": [
+    "Evaluate vocabulary IN ITS ACTUAL SENSE and collocation, syntax, inference/background knowledge, and ALL distractors. Assuming the learner knows the target sense, can they understand the clues and distinguish the choices?",
+    "Use the local vocabulary hints as evidence, not a whitelist. Listed words can have unfamiliar senses. Unlisted names, transparent derivations, explained terms and incidental details can be acceptable. Do not impose a one-new-word rule or a count/percentage threshold.",
+    "Do not reject by sentence length, number of clauses, punctuation or historical/religious/scientific topic. Prefer natural meaningful context. Identify an actual comprehension barrier, not merely a long or rare-looking word.",
+    "Core clues should remain accessible without knowing another harder unglossed word. A cluster of unfamiliar terms can obstruct understanding even when no single term is indispensable. Do not exempt distractors just because the target is advanced.",
+    "Use suitable only when all four dimensions are supported. Borderline means a concrete unresolved comprehension concern; unsuitable means an identified blocking requirement. Replace only the problematic context or distractors; preserve the target meaning. Do not make the item ambiguous to simplify it."
+  ]
+}
