@@ -143,3 +143,11 @@ The user explicitly authorized shortening legacy Chinese label prose while retai
 
 New approvals use `blind-completion-v2`: a proposed unique answer must also survive a critical exclusion check with the existing MiniMax provider. Both requests omit the intended answer; the second response is validated independently. Failure does not reuse the first approval. Do not relabel v1 cache/checkpoint evidence as v2. This changes neither submitted assessment snapshots nor scoring/mastery/reward rules.
 
+
+## High-school fit rollout (2026-11-05)
+
+New high-school questions carry `high-school-fit-v1` in `source_version` and bound evidence in `teaching_analysis.levelFit`. The vocabulary/grammar reference is bundled under `backend/reference/`; runtime does not fetch curriculum websites. The existing sense-check request includes fit review, so request count is unchanged, while token use increases.
+
+No migration, release-time purge or whole-library regeneration is required or authorized by this rollout. Existing eligible caches remain usable and normal replenishment adds the new evidence; immutable assessment snapshots remain unchanged. Unpublished obsolete checkpoints recheck the audit without discarding unaffected stages. `level_fit_context`, `level_fit_distractors` and `level_fit_evidence_invalid` distinguish context repair, option repair and missing/inconsistent review evidence in the existing rejection counters.
+
+After integration, verify a newly generated high-school row has bound fit evidence and the version marker, then follow the existing authorized production-flow acceptance and live-SHA checks. Previously published legacy rows may lack this evidence and must not be misreported as freshly audited. The local execution record is `docs/handoff/high-school-fit-20261105.md`.

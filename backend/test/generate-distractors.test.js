@@ -46,7 +46,7 @@ test('prompt uses the real stem and asks the model to avoid prior variant distra
     assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
 });
 
-test('prompt keeps distractors in the same category and difficulty while forbidding gloss collisions', async () => {
+test('high-school prompt keeps distractors accessible and in the same category while forbidding gloss collisions', async () => {
     // Two production failures shaped this contract:
     //  - Asking for the same category with no Chinese-meaning constraint produced synonym
     //    glosses that repeated (职业/职业), which rejected candidates at 50%+ of attempts.
@@ -68,10 +68,13 @@ test('prompt keeps distractors in the same category and difficulty while forbidd
     });
 
     assert.deepEqual(result, ['cup', 'bowl', 'tray']);
-    assert.match(capturedPrompt, /same part of speech and similar difficulty as the answer/i);
+    assert.match(capturedPrompt, /same part of speech/i);
+    assert.match(capturedPrompt, /distractors must not add unsupported vocabulary barriers/i);
+    assert.doesNotMatch(capturedPrompt, /similar difficulty as the answer/i);
     assert.match(capturedPrompt, /plausible same-category words/i);
     assert.doesNotMatch(capturedPrompt, /never synonyms, antonyms or associated words/i);
     assert.match(capturedPrompt, /Chinese meaning must not repeat or contain another option/i);
     assert.match(capturedPrompt, /\u9ad8\u4e2d/);
-    assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
+    // The local rubric is included; the full curriculum vocabulary must not be.
+    assert.ok(capturedPrompt.length < 5000, 'include a bounded rubric, not the complete reference corpus');
 });

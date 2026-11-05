@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { normalizeGenerationCheckpoint, invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
+const { hasCurrentLevelFit, levelFitFingerprint } = require('./high-school-fit');
 
 function normalizeText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -79,7 +80,7 @@ function rowCheckpoint(row, slot, wordText) {
         localValidated: true,
         audit: String(row.ai_audit_status || '').toLowerCase() === 'approved'
             ? { approved: true, status: 'approved', validLetters: [row.answer], teachingAnalysis: row.teaching_analysis || null,
-                auditMethod: row.teaching_analysis?.auditMethod, inputFingerprint: row.teaching_analysis?.inputFingerprint, senseFingerprint: row.teaching_analysis?.senseFingerprint, senseVerified: row.teaching_analysis?.senseVerified }
+                auditMethod: row.teaching_analysis?.auditMethod, inputFingerprint: row.teaching_analysis?.inputFingerprint, senseFingerprint: row.teaching_analysis?.senseFingerprint, senseVerified: row.teaching_analysis?.senseVerified, levelFit: row.teaching_analysis?.levelFit }
             : undefined,
         row,
     };
@@ -98,6 +99,7 @@ function createQuestionGenerationService({
     maxAttempts = 3,
     requiredAuditMethod = null,
     requiredSenseAudit = false,
+    requiredLevelFitPolicy = null,
 } = {}) {
     if (typeof loadWord !== 'function') throw new Error('LOAD_WORD_REQUIRED');
     if (typeof generateCandidates !== 'function') throw new Error('GENERATE_CANDIDATES_REQUIRED');
@@ -125,7 +127,11 @@ function createQuestionGenerationService({
                 throw error;
             }
             const excludedStems = new Set((word.excludedQuestionStems || []).map(normalizeText));
-            const candidateIssues = candidate => [
+            // Only already-published, still-eligible cache rows retain legacy compatibility.
+            // Unpublished checkpoints and newly built rows must carry the new evidence.
+            const legacyCacheFingerprints = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint)
+                .map(row => [row.question_fingerprint,levelFitFingerprint({...row,level:word.level})]));
+            const candidateIssues = (candidate, allowPublishedLegacy = false) => [
                 ...validationIssues(validateCandidate, candidate, word),
                 ...(requiredAuditMethod && (candidate?.teaching_analysis?.auditMethod !== requiredAuditMethod
                     || !String(candidate?.source_version || '').split('|').includes(requiredAuditMethod)
@@ -133,6 +139,8 @@ function createQuestionGenerationService({
                     ? ['semantic_audit_outdated'] : []),
                 ...(requiredSenseAudit && (candidate?.teaching_analysis?.senseVerified !== true || !candidate?.teaching_analysis?.senseFingerprint
                     || candidate.teaching_analysis.senseFingerprint !== require('./teaching-analysis').semanticSenseFingerprint(candidate)) ? ['semantic_audit_sense_missing'] : []),
+                ...(requiredLevelFitPolicy && !(allowPublishedLegacy && legacyCacheFingerprints.get(candidate?.question_fingerprint) === levelFitFingerprint({...candidate,level:word.level}))
+                    && !hasCurrentLevelFit({...candidate,level:word.level},candidate?.teaching_analysis?.levelFit) ? ['level_fit_evidence_invalid'] : []),
                 ...(excludedStems.has(normalizeText(candidate?.question_text || candidate?.questionText)) ? ['context_already_displayed'] : []),
             ];
 
@@ -147,7 +155,7 @@ function createQuestionGenerationService({
             const exposedPracticeFingerprints = new Set();
             const exposePracticeSingle = async rows => {
                 if (!publishPracticeVariant) return;
-                const valid = rows.filter(row => row?.question_fingerprint && !candidateIssues(row).length);
+                const valid = rows.filter(row => row?.question_fingerprint && !candidateIssues(row,true).length);
                 if (valid.length !== 1) return;
                 const variant = { ...valid[0], user_id: userId, word_id: wordId,
                     round_type: 'primary', quality_status: 'ready', variant_slot: 1, cache_state: 'active' };
@@ -162,7 +170,7 @@ function createQuestionGenerationService({
                 const variant = checkpointRow(savedVariant);
                 const fingerprint = String(variant?.question_fingerprint || '').trim();
                 if (!fingerprint) return savedVariant;
-                const issues = candidateIssues(variant);
+                const issues = candidateIssues(variant,true);
                 if (issues.length) {
                     restoredInvalidRow = true;
                     for (const issue of issues) rejectionReasons[issue] = (rejectionReasons[issue] || 0) + 1;
@@ -179,7 +187,7 @@ function createQuestionGenerationService({
             for (const variant of word.cachedVariants || []) {
                 if (variantsByFingerprint.size >= required) break;
                 const fingerprint = String(variant.question_fingerprint || '');
-                if (!fingerprint || candidateIssues(variant).length || variantsByFingerprint.has(fingerprint)) continue;
+                if (!fingerprint || candidateIssues(variant,true).length || variantsByFingerprint.has(fingerprint)) continue;
                 if ([...variantsByFingerprint.values()].some(existing =>
                     normalizeText(existing.question_text) === normalizeText(variant.question_text)
                     || distractorOverlap(candidateDistractors(existing), candidateDistractors(variant)) > 1)) continue;

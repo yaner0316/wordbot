@@ -1,0 +1,19 @@
+{
+  "policyVersion": "high-school-fit-v1",
+  "reference": "2025 curriculum: vocabulary appendix pp.73–129; grammar appendix pp.133–137. Product rubric and examples below are authored for WordBot, not official exam items or psychometrically calibrated difficulty labels.",
+  "audience": "A learner who has completed Chinese senior-high compulsory and selective-compulsory English. The target word/sense may be new; understanding the setting, decisive clues and distractors must not require additional unsupported specialist knowledge.",
+  "rules": [
+    "Evaluate vocabulary IN ITS ACTUAL SENSE and collocation, syntax, inference/background knowledge, and ALL distractors. Assuming the learner knows the target sense, can they understand the clues and distinguish the choices?",
+    "Use the local vocabulary hints as evidence, not a whitelist. Listed words can have unfamiliar senses. Unlisted names, transparent derivations, explained terms and incidental details can be acceptable. Do not impose a one-new-word rule or a count/percentage threshold.",
+    "Do not reject by sentence length, number of clauses, punctuation or historical/religious/scientific topic. Prefer natural meaningful context. Identify an actual comprehension barrier, not merely a long or rare-looking word.",
+    "Core clues should remain accessible without knowing another harder unglossed word. A cluster of unfamiliar terms can obstruct understanding even when no single term is indispensable. Do not exempt distractors just because the target is advanced.",
+    "Use suitable only when all four dimensions are supported. Borderline means a concrete unresolved comprehension concern; unsuitable means an identified blocking requirement. Replace only the problematic context or distractors; preserve the target meaning. Do not make the item ambiguous to simplify it."
+  ],
+  "grammarReference": "Compulsory/selective-compulsory scope includes ordinary tenses and passive voice, infinitives, -ing/-ed forms, coordination, object/adverbial/relative/subject/predicative clauses and ellipsis. Appositive clauses, inversion, emphasis and subjunctive are marked elective-improvement (***) in this appendix: inspect their actual comprehension demands rather than automatically rejecting their presence. There is no sentence-word-count ceiling.",
+  "examples": [
+    {"context":"Although the old books were damaged, the scribe copied every page by hand so that future readers could still read the stories.","target":"scribe","assessment":"Suitable language support: clear familiar action and clause relationships despite length. This is a stem example only; answer uniqueness depends on the options."},
+    {"context":"At the monastery, the scribe copied an old book by hand.","target":"scribe","assessment":"The unfamiliar location can be incidental: copied/book/by hand remain understandable. Do not reject merely for monastery or historical subject matter."},
+    {"context":"The scribe transcribed illuminated manuscripts onto vellum.","target":"scribe","assessment":"Unsuitable support if the learner must decode transcribed/manuscripts/vellum to understand the action; use accessible action/material descriptions. No permanent banned-word list."},
+    {"context":"The clerk recorded the deposition before the court granted a stay.","target":"clerk","assessment":"Inspect deposition and the legal sense of stay, even if stay is listed. If this unexplained legal process blocks comprehension, revise the context."}
+  ]
+}

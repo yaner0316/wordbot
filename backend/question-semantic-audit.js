@@ -1,5 +1,6 @@
 const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { teachingAnalysisFromAudit, SEMANTIC_AUDIT_METHOD, semanticAuditInputFingerprint, semanticSenseFingerprint } = require('./teaching-analysis');
+const { LEVEL_FIT_POLICY, isHighSchool, levelFitPrompt, parseLevelFitEvidence } = require('./high-school-fit');
 
 const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
 
@@ -117,6 +118,7 @@ function buildWordSensePrompt(question) {
             '给定释义可以比句中实例宽泛：没有额外限定的键盘包括电脑键盘和钢琴键盘，杯子包括陶瓷杯；不能因为释义没有逐项列出普通子类或用途就拒绝。只有给定释义本身明确限定为电脑键盘时，钢琴键盘才不符。具体实例与一般类别的关系，不等于另一词义或材质与制品的关系。',
             '只判断 markedSentence 中用« »标出的那个词，不要把同句其他词或主句的情绪误当成它的词义。先说明该词在所在分句中的实际用法和词义，再对照给定释义，最后给出布尔结论；解释若承认属于给定义项，matches不能又写false。',
             'Return JSON only IN THIS ORDER: providedSense (copy the input exactly), contextualSense (short Chinese), reason (brief Chinese justification), matches (boolean, LAST). If uncertain, matches=false. Do not put double-quote characters inside string values.',
+            levelFitPrompt(question),
             JSON.stringify({word,providedSense,completedSentence:question.context.replace(/_{3,}/g,word),markedSentence:question.context.replace(/_{3,}/g,'«'+word+'»')}),
         ].join('\n');
 }
@@ -135,13 +137,19 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
     if (!initial.approved) return initial;
     // Approval requires the exclusions to survive an explicit counterexample check.
     const verified = await evaluateUniqueAnswer(question, {callModel:() => callModel(buildCriticalExclusionPrompt(question,initial.optionJudgments))});
-    if (!verified.approved || !semanticSenseFingerprint(question)) return {...verified, proofChecks:2};
+    if (!verified.approved) return {...verified, proofChecks:2};
+    if (!semanticSenseFingerprint(question)) return isHighSchool(question.level)
+        ? {...verified,approved:false,status:'rejected',code:'level_fit_evidence_invalid',teachingAnalysis:undefined,proofChecks:2}
+        : {...verified,proofChecks:2};
     // Reuse the two actual uniqueness judgments; verify the specified sense separately.
     const {teachingAnalysis,...withoutTeaching}=verified;
     try {
-        const sense=parseWordSenseEvidence(question,await callModel(buildWordSensePrompt(question)));
+        const raw = await callModel(buildWordSensePrompt(question));
+        const sense=parseWordSenseEvidence(question,raw);
         if (!sense.approved) return {...withoutTeaching,...sense,proofChecks:2,senseChecks:1};
-        return {...verified,...sense,proofChecks:2,senseChecks:1,teachingAnalysis:{...teachingAnalysis,senseVerified:true}};
+        const fit = parseLevelFitEvidence(question,extractJson(raw)?.levelFit);
+        if (!fit.approved) return {...withoutTeaching,...fit,proofChecks:2,senseChecks:1};
+        return {...verified,...sense,...fit,proofChecks:2,senseChecks:1,teachingAnalysis:{...teachingAnalysis,senseVerified:true,...(fit.levelFit ? {levelFit:fit.levelFit} : {})}};
     } catch (error) {
         miniMaxFallback(error,null);
         return {...withoutTeaching,approved:false,status:'unavailable',proofChecks:2,code:'semantic_audit_unavailable',reason:'sense audit unavailable'};
@@ -149,5 +157,6 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
 }
 auditUniqueAnswer.auditMethod = SEMANTIC_AUDIT_METHOD;
 auditUniqueAnswer.senseAware = true;
+auditUniqueAnswer.levelFitPolicy = LEVEL_FIT_POLICY;
 
 module.exports = { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION, buildAttestedQuestionSourceVersion, buildSemanticAuditPrompt, buildCriticalExclusionPrompt, buildWordSensePrompt, parseWordSenseEvidence, auditUniqueAnswer };

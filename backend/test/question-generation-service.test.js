@@ -260,3 +260,35 @@ test('service rejects two variants whose distractors overlap by more than one', 
     );
     assert.equal(published, false);
 });
+
+
+test('high-school checkpoints recheck obsolete fit evidence while preserving expensive upstream work', async()=>{
+ const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+ const {LEVEL_FIT_POLICY,parseLevelFitEvidence}=require('../high-school-fit');
+ const word={id:'w',word:'scribe',level:'高中',meaning_zh:'抄写员'};
+ const old={level:'高中',question_text:'The _____ copied an old book by hand.',options:['scribe','farmer','driver','dancer'],option_meanings:['抄写员','农民','司机','舞者'],answer:'A',ai_audit_status:'approved',question_fingerprint:'old',teaching_analysis:{}};
+ let generated=0;
+ const service=createQuestionGenerationService({requiredLevelFitPolicy:LEVEL_FIT_POLICY,loadWord:async()=>word,validateCandidate:()=>[],
+ loadCheckpoint:async()=>({word:'scribe',level:'高中',meaning:'["","抄写员"]',variants:[{slot:1,context:'The scribe copied an old book by hand.',contextTranslation:'抄写员手工抄写了一本旧书。',distractors:['farmer','driver','dancer'],audit:{approved:true},row:old}]}),
+ generateCandidates:async request=>{
+  generated++;
+  const restored=request.generationCheckpoint.variants[0];
+  assert.equal(restored.audit,undefined);
+  assert.equal(restored.row,undefined);
+  assert.equal(restored.contextTranslation,'抄写员手工抄写了一本旧书。');
+  assert.equal(restored.distractors.length,3);
+  return [old,{...old,question_text:'The _____ copied each book by hand.',options:['scribe','singer','cook','pilot'],option_meanings:['抄写员','歌手','厨师','飞行员']}].map(row=>({...row,teaching_analysis:{levelFit:parseLevelFitEvidence({...row,context:row.question_text},{status:'suitable',clue:'by hand',vocabularyReason:'题干的手工抄书线索使用了常用基础词汇。',syntaxReason:'主语谓语和宾语关系清楚，没有额外句法障碍。',reasoningReason:'通过手工抄写的行为判断职业，不依赖专业知识。',optionsReason:'其余职业选项使用常用词，没有额外陌生词门槛。',barriers:[],repairStage:'none'}).levelFit}}));
+ },publishReadyVariants:async()=>{}});
+ const result=await service.process({word_id:'w',user_id:'u'});
+ assert.equal(generated,1);assert.equal(result.readyCount,2);
+});
+
+
+test('already-published eligible high-school siblings are reused without a release-time rebuild',async()=>{
+ const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
+ const cached=['The _____ copied the book by hand.','An old _____ copied every page.'].map((question_text,i)=>({level:'高中',question_text,options:i?['scribe','cook','pilot','singer']:['scribe','driver','farmer','dancer'],answer:'A',option_meanings:i?['抄写员','厨师','飞行员','歌手']:['抄写员','司机','农民','舞者'],question_fingerprint:fingerprintQuestion({question_text},'w')}));
+ let generated=0;
+ const service=createQuestionGenerationService({requiredLevelFitPolicy:'high-school-fit-v1',loadWord:async()=>({id:'w',word:'scribe',level:'高中',cachedVariants:cached}),validateCandidate:()=>[],generateCandidates:async()=>{generated++;return [];},publishReadyVariants:async()=>{}});
+ const result=await service.process({word_id:'w',user_id:'u'});
+ assert.equal(generated,0);assert.equal(result.readyCount,2);
+});
