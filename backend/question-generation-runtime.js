@@ -333,10 +333,10 @@ function defaultValidateCandidate(candidate, word) {
         correctMeaning: candidate?.correct_meaning || candidate?.meaning_zh || candidate?.meaning_en || '',
         optionMeanings: candidate?.option_meanings || candidate?.optionMeanings || [],
     };
-    // Type-one candidates must contain a blank before semantic context checks are meaningful.
-    if (questionType !== 1 || /_{3,}/.test(questionText)) {
-        issues.push(...getQuestionQualityIssues(qualityQuestion));
-    }
+    // 无填空符时保留原有语义检查兼容性，但不能绕过共享题干语言门。
+    const canCheckFillInContext = questionType !== 1 || /_{3,}/.test(questionText);
+    issues.push(...getQuestionQualityIssues(qualityQuestion)
+        .filter(issue => canCheckFillInContext || issue === 'non_english_context'));
     return issues;
 }
 

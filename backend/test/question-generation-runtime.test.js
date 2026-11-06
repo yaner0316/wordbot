@@ -304,6 +304,26 @@ function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
     };
 }
 
+for (const contexts of [
+    ['她去 _____ 存钱。', '这家 _____ 为居民提供贷款。'],
+    ['她去银行存钱。', '这家银行为居民提供贷款。'],
+]) test(`generation rejects AI-approved Chinese stems before publication (blank=${contexts[0].includes('_____')})`, async () => {
+    const fake = createFakeSupabase({
+        words: [{ id: 'word-bank-finance', user_id: 'user-1', word: 'bank', meaning_zh: '银行', level: 'middle' }],
+    });
+    const before = JSON.stringify(fake.state);
+    const service = createSupabaseQuestionGenerationService({
+        client: fake.client,
+        buildCandidates: async () => [candidate(contexts[0]), candidate(contexts[1], ['tree', 'coin', 'sky'])],
+        maxAttempts: 1,
+    });
+    const error = await service.process(generationJob()).then(() => null, error => error);
+    assert.equal(fake.calls.some(call => call.type === 'rpc'), false);
+    assert.equal(error?.code, 'INSUFFICIENT_DISTINCT_READY_VARIANTS');
+    assert.equal(error.rejectionReasons.non_english_context, 2);
+    assert.equal(JSON.stringify(fake.state), before);
+});
+
 test('Supabase job store enqueue is idempotent and atomic claim uses the lease RPC', async () => {
     const existing = generationJob({ status: 'ready', attempt_count: 2, lease_owner: null });
     const due = generationJob({ id: 'job-2', word_id: 'word-2', status: 'pending', attempt_count: 0, lease_owner: null });
