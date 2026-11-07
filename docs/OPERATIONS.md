@@ -1,5 +1,9 @@
 # WordBot Operations
 
+## Option meaning separation (2026-11-07)
+
+The existing third semantic-review request now compares all six pairs of supplied option meanings, including distractor pairs. Fresh responses must include six distinct `contentReview.optionPairs` judgments with grounded reasons and `distinct`, `synonymous`, or `includes` relations; missing or malformed evidence fails with `content_review_missing`. A synonymous or inclusion relation fails with `content_option_overlap`, which uses the existing distractor-stage invalidation and retains context/translation. Accepted pair evidence is stored by option word so shuffled letters remain compatible. No extra model request or database migration is added. Previously saved compatible evidence remains readable and is not bulk invalidated. This does not certify legacy option sets; repair evidence remains per-row. Validate the prompt with real synonym/inclusion cases and a distinct same-category control, in addition to the parser and checkpoint tests. No frontend change is required because the response shape for learners is unchanged.
+
 ## Content and printed-option review contract (2026-11-07)
 
 New generation requires `question-content-v1` in both generation-service entry points. The existing sense-review request also receives the real sentence translation and canonical target sense; no extra model stage is added. Its content evidence is saved in teaching JSON, bound to exact content, and checked at candidate publication, checkpoint reuse and tagged cache selection. Translation and gloss failures invalidate only their corresponding stages; absent evidence resumes semantic review. Existing published legacy rows are not certified or repaired by this code change.

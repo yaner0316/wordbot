@@ -63,3 +63,26 @@ test('production review rejects a judgment copied from a different printed optio
     assert.equal(result.approved,false);
     assert.equal(result.code,'semantic_evidence_invalid');
 });
+
+test('fresh production review requires pair evidence and propagates overlap rejection',async()=>{
+    const q={...question,requireContentReview:true,contextCN:'教师用评分指南评估作文。',targetMeaning:'评估'};
+    const distinct=['AB','AC','AD','BC','BD','CD'].map(pair=>({letters:[...pair],relation:'distinct',reason:'测试响应声明两个词的所给含义不同，彼此不包含。'}));
+    const overlap=distinct.map((pair,i)=>i?pair:{...pair,relation:'synonymous',reason:'测试响应声明这两个选项在所给含义上同义。'});
+    for (const [pairs,code] of [[undefined,'content_review_missing'],
+        [overlap,'content_option_overlap'],[distinct,undefined]]) {
+        let calls=0;
+        const result=await auditUniqueAnswer(q,{callModel:async prompt=>{
+            calls++;
+            if (!prompt.startsWith('WORD SENSE CHECK')) return JSON.stringify(judgments(false));
+            const response=contradictorySenseResponse();
+            response.contentReview={targetSense:{providedPartsOfSpeech:['verb'],contextualPartOfSpeech:'verb'},
+                translation:{text:q.contextCN,accurate:true,reason:'测试响应保留教师评分作文这一动作。'},
+                optionMeanings:q.optionMeanings.map((meaning,i)=>({letter:'ABCD'[i],meaning,accurate:true,reason:'测试响应声明所给释义属于该词的真实含义。'})),
+                ...(pairs===undefined?{}:{optionPairs:pairs})};
+            return JSON.stringify(response);
+        }});
+        assert.equal(calls,3);
+        assert.equal(result.approved,code===undefined);
+        if(code) assert.equal(result.code,code);
+    }
+});
