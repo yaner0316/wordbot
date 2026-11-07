@@ -53,20 +53,27 @@ test('cache-shape canonical meanings cannot be replaced by the meaning stored in
     }
 });
 
+function distinctPairs() {
+    return ['AB','AC','AD','BC','BD','CD'].map(pair=>({letters:[...pair],relation:'distinct',reason:'这两个选项所给含义不同，彼此不存在同义或包含关系。'}));
+}
+
 test('fresh review must explicitly compare option meanings, while legacy evidence stays compatible', () => {
     const e = evidence();
     assert.equal(parseContentReview(q,e,{requireOptionSeparation:true}).code,'content_review_missing');
-    e.overlappingPairs=[];
+    e.optionPairs=distinctPairs();
     const result=parseContentReview(q,e,{requireOptionSeparation:true});
     assert.equal(result.approved,true);
     assert.equal(hasCurrentContentReview(q,result.contentReview),true);
+    const shuffled={...q,options:['A. passport','B. catalogue','C. diary','D. receipt'],answer:'B',optionMeanings:['护照','目录册','日记','收据']};
+    assert.equal(hasCurrentContentReview(shuffled,result.contentReview),true);
     assert.equal(parseContentReview(q,evidence()).approved,true);
 });
 
 test('semantic overlap replaces distractors rather than relabeling correct glosses', () => {
     const {checkpointInvalidationStageForIssues,invalidateVariantFromStage}=require('../question-generation-checkpoint');
     const e=evidence();
-    e.overlappingPairs=[{letters:['A','B'],reason:'两个选项的真实词义存在同义或包含关系。'}];
+    e.optionPairs=distinctPairs();
+    e.optionPairs[0]={letters:['A','B'],relation:'includes',reason:'两个选项的真实词义存在包含关系，不能作为独立选项。'};
     const result=parseContentReview(q,e,{requireOptionSeparation:true});
     assert.equal(result.code,'content_option_overlap');
     const stage=checkpointInvalidationStageForIssues([result.code]);
@@ -78,7 +85,9 @@ test('semantic overlap replaces distractors rather than relabeling correct gloss
 });
 
 test('malformed pair comparisons cannot approve a fresh review', () => {
-    for(const pairs of [null,{},[{letters:['A','A'],reason:'同一个选项不能作为两个不同选项。'}],[{letters:['A','Z'],reason:'选项字母必须存在于真实的题目中。'}]]) {
-        assert.equal(parseContentReview(q,{...evidence(),overlappingPairs:pairs},{requireOptionSeparation:true}).approved,false);
+    for(const pairs of [null,{},[],distinctPairs().slice(1),Array(6).fill(distinctPairs()[0]),
+        distinctPairs().map((pair,i)=>i?pair:{...pair,letters:['A','Z']}),
+        distinctPairs().map((pair,i)=>i?pair:{...pair,relation:'unknown'})]) {
+        assert.equal(parseContentReview(q,{...evidence(),optionPairs:pairs},{requireOptionSeparation:true}).approved,false);
     }
 });
