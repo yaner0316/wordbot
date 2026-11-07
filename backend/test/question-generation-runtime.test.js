@@ -944,3 +944,11 @@ test('runtime preserves builder rejection reasons even when no candidates surviv
     );
     assert.equal(fake.calls.some(call => call.type === 'rpc' && call.name === 'publish_question_generation_variants'), false);
 });
+test('durable runtime blocks publication without required content evidence',async()=>{
+    const active=generationJob();
+    const fake=createFakeSupabase({jobs:[active],words:[{id:active.word_id,user_id:active.user_id,word:'bank',meaning_zh:'银行',level:'middle'}]});
+    const audit=async()=>{};audit.contentPolicy='question-content-v1';
+    const runtime=createQuestionGenerationRuntime({client:fake.client,workerId:'worker-a',now:()=>new Date(NOW),maxGenerationAttempts:1,candidateBuilderOptions:{semanticAudit:audit},buildCandidates:async()=>[candidate('She deposited her savings at the bank.'),candidate('The bank approved the loan yesterday.',['branch','coin','road'])],runImmediately:false});
+    await assert.rejects(runtime.generationService.process(active),e=>e.rejectionReasons?.content_review_missing>0);
+    assert.equal(fake.calls.some(call=>call.type==='cache_upsert'),false);
+});

@@ -1,4 +1,6 @@
 'use strict';
+const { hasCurrentSurfaceEvidence, surfaceFingerprint } = require('./question-surface');
+const { hasCurrentContentReview, contentFingerprint } = require('./question-content-review');
 
 const crypto = require('node:crypto');
 const { normalizeGenerationCheckpoint, invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
@@ -99,6 +101,8 @@ function createQuestionGenerationService({
     maxAttempts = 3,
     requiredAuditMethod = null,
     requiredSenseAudit = false,
+    requiredSurfacePolicy = null,
+    requiredContentPolicy = null,
     requiredLevelFitPolicy = null,
 } = {}) {
     if (typeof loadWord !== 'function') throw new Error('LOAD_WORD_REQUIRED');
@@ -131,12 +135,18 @@ function createQuestionGenerationService({
             // Unpublished checkpoints and newly built rows must carry the new evidence.
             const legacyCacheFingerprints = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint)
                 .map(row => [row.question_fingerprint,levelFitFingerprint({...row,level:word.level})]));
+            const publishedSurface = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint).map(row => [row.question_fingerprint,surfaceFingerprint(row)]));
+            const publishedContent = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint).map(row => [row.question_fingerprint,contentFingerprint({...row,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en})]));
             const candidateIssues = (candidate, allowPublishedLegacy = false) => [
                 ...validationIssues(validateCandidate, candidate, word),
                 ...(requiredAuditMethod && (candidate?.teaching_analysis?.auditMethod !== requiredAuditMethod
                     || !String(candidate?.source_version || '').split('|').includes(requiredAuditMethod)
                     || candidate.teaching_analysis.inputFingerprint !== require('./teaching-analysis').semanticAuditInputFingerprint({context:candidate.question_text,options:candidate.options,answer:candidate.answer}))
                     ? ['semantic_audit_outdated'] : []),
+                ...(requiredSurfacePolicy && !(allowPublishedLegacy && publishedSurface.get(candidate?.question_fingerprint) === surfaceFingerprint(candidate))
+                    && !hasCurrentSurfaceEvidence(candidate,candidate?.teaching_analysis?.surface) ? ['semantic_audit_surface_missing'] : []),
+                ...(requiredContentPolicy && !(allowPublishedLegacy && publishedContent.get(candidate?.question_fingerprint) === contentFingerprint({...candidate,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en}))
+                    && !hasCurrentContentReview({...candidate,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en},candidate?.teaching_analysis?.contentReview) ? ['content_review_missing'] : []),
                 ...(requiredSenseAudit && (candidate?.teaching_analysis?.senseVerified !== true || !candidate?.teaching_analysis?.senseFingerprint
                     || candidate.teaching_analysis.senseFingerprint !== require('./teaching-analysis').semanticSenseFingerprint(candidate)) ? ['semantic_audit_sense_missing'] : []),
                 ...(requiredLevelFitPolicy && !(allowPublishedLegacy && legacyCacheFingerprints.get(candidate?.question_fingerprint) === levelFitFingerprint({...candidate,level:word.level}))

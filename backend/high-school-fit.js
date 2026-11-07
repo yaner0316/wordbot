@@ -64,9 +64,9 @@ function levelFitPrompt(question) {
     return [
         'LEARNER-LEVEL FIT CHECK (independent of whether the intended sense matches).',
         levelGuidance(question.level, {examples:true}),
-        'Also return levelFit in the SAME JSON: {status:suitable/borderline/unsuitable, clue:an exact continuous English substring of the original context identifying an accessible or obstructed clue, vocabularyReason:Chinese evidence about actual word senses, syntaxReason:Chinese evidence about clause relations, reasoningReason:Chinese evidence about required inference/background knowledge, optionsReason:Chinese evidence about distractors, barriers:[{text:exact substring of context or one option,location:context/option,impact:incidental/blocking,reason:Chinese explanation}],repairStage:none/context/distractors}. Each reason must explain this input, not just say appropriate. Suitable requires no blocking barriers and repairStage=none. Unsuitable requires at least one blocking barrier; borderline requires at least one grounded concern. If context or overall comprehension is the issue, use context; use distractors only when the stem is acceptable and only the options need replacement.',
+        'Also return levelFit in the SAME JSON: {status:suitable/borderline/unsuitable, clueIndex:integer index of an originalFragments item containing the accessible or obstructed clue, vocabularyReason:Chinese evidence about actual word senses, syntaxReason:Chinese evidence about clause relations, reasoningReason:Chinese evidence about required inference/background knowledge, optionsReason:Chinese evidence about distractors, barriers:[{text:exact substring of context or one option,location:context/option,impact:incidental/blocking,reason:Chinese explanation}],repairStage:none/context/distractors}. Select the original fragment by index; do not return a clue string or fill the blank in the evidence. Each reason must explain this input, not just say appropriate. Suitable requires no blocking barriers and repairStage=none. Unsuitable requires at least one blocking barrier; borderline requires at least one grounded concern. If context or overall comprehension is the issue, use context; use distractors only when the stem is acceptable and only the options need replacement.',
         'Local vocabulary lookup for this band (when available; hints only, never equate unlisted with unknown): ' + JSON.stringify(vocabularyHints(question)),
-        'Exact context and all options: ' + JSON.stringify(questionParts(question)),
+        'Exact context and all options: ' + JSON.stringify({...questionParts(question),originalFragments:questionParts(question).context.split(/_{3,}/).map((text,index)=>({index,text:text.trim()})).filter(item=>item.text.length>=3)}),
     ].join('\n');
 }
 
@@ -77,6 +77,12 @@ function parseLevelFitEvidence(question, evidence) {
     const parts = questionParts(question);
     const invalid = () => ({approved:false,status:'rejected',code:'level_fit_evidence_invalid',reason:'learner-level fit evidence missing or inconsistent'});
     const reasonValid = value => typeof value === 'string' && value.trim().length >= 8 && /[\u3400-\u9fff]/.test(value);
+    if (evidence && Object.hasOwn(evidence,'clueIndex')) {
+        const fragments = parts.context.split(/_{3,}/).map(text=>text.trim());
+        const clue = Number.isInteger(evidence.clueIndex) ? fragments[evidence.clueIndex] : undefined;
+        if (!clue || clue.length < 3 || (Object.hasOwn(evidence,'clue') && evidence.clue !== clue)) return invalid();
+        evidence = {...evidence,clue};
+    }
     if (!evidence || !['suitable','borderline','unsuitable'].includes(evidence.status)
         || typeof evidence.clue !== 'string' || evidence.clue.trim().length < 3 || !parts.context.includes(evidence.clue) || /_{3,}/.test(evidence.clue)
         || !['vocabularyReason','syntaxReason','reasoningReason','optionsReason'].every(key => reasonValid(evidence[key]))

@@ -46,18 +46,18 @@ meaning ? `Required meaning: "${String(meaning).trim()}"` : '',
     const targetLower = word.toLowerCase();
     const picked = tokens
         .slice(0, 3)
-        .map(t => t.replace(/"/g, '').trim().toLowerCase());
+        .map(t => t.replace(/"/g, '').trim());
     const clean = picked.filter(t =>
         t &&
-        t !== targetLower &&
+        t.toLowerCase() !== targetLower &&
         t.length >= 2 &&
         t.length <= 25 &&
         /^[a-z]+(?:'[a-z]+)?$/i.test(t)
     );
 
-    if (clean.length !== 3 || new Set(clean).size !== 3) return null;
+    if (clean.length !== 3 || new Set(clean.map(value => value.toLowerCase())).size !== 3) return null;
     const rejected = new Set(rejectedAlternatives.map(value=>String(value || '').trim().toLowerCase()));
-    if (clean.some(value=>rejected.has(value))) return null;
+    if (clean.some(value=>rejected.has(value.toLowerCase()))) return null;
 
     return clean;
 }

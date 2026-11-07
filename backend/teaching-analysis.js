@@ -38,6 +38,7 @@ function getTeachingAnalysisIssues(question, analysis) {
     if (!expected || fitting.length !== 1 || optionWord(fitting[0]?.word) !== expected || optionWord(analysis.correctWord) !== expected) issues.push('teaching_non_unique_answer');
     if (INPUT_BOUND_SEMANTIC_AUDIT_METHODS.includes(analysis.auditMethod) && analysis.inputFingerprint !== semanticAuditInputFingerprint(question)) issues.push('semantic_audit_input_changed');
     if (analysis.senseFingerprint && semanticSenseFingerprint(question) && analysis.senseFingerprint!==semanticSenseFingerprint(question)) issues.push('semantic_audit_sense_changed');
+    if (analysis.surface && !require('./question-surface').hasCurrentSurfaceEvidence(question,analysis.surface)) issues.push('semantic_audit_surface_changed');
     return issues;
 }
 function teachingAnalysisFromAudit(question, audit) {
