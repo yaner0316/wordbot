@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { CONTENT_REVIEW_POLICY, hasCurrentContentReview } = require('./question-content-review');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
 const { getContextTranslationIssues } = require('./context-sentence-translation');
 const { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION } = require('./question-semantic-audit');
@@ -143,6 +144,8 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
+    if (String(normalized.sourceVersion || '').split('|').includes(CONTENT_REVIEW_POLICY)
+        && !hasCurrentContentReview(question,question.teachingAnalysis?.contentReview)) issues.push('content_review_missing');
     const markedAuditMethod = String(normalized.sourceVersion || '').split('|').reverse()
         .find(method => INPUT_BOUND_SEMANTIC_AUDIT_METHODS.includes(method));
     if (markedAuditMethod && question.teachingAnalysis?.auditMethod !== markedAuditMethod) issues.push('semantic_audit_outdated');

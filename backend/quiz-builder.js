@@ -1,3 +1,4 @@
+const { formatOptionSurface } = require('./question-surface');
 const { hasInvalidFillInGrammar, isQuestionQualityAcceptable } = require('./question-quality');
 
 function createQuizBuilder({
@@ -10,15 +11,6 @@ function createQuizBuilder({
     getFormKey = null,
     inflectWord = null,
 }) {
-    function capitalizeFirst(value) {
-        const text = String(value || '');
-        return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
-    }
-
-    function isSentenceInitialBlank(context) {
-        return /^\s*_____/.test(String(context || '')) || /[.!?]\s*_____/m.test(String(context || ''));
-    }
-
     function inflectOption(option, formKey) {
         const value = String(option || '').trim().toLowerCase();
         if ((formKey === 'past' || formKey === 'past_participle') && value.length > 4 && /(?:ed|ied)$/.test(value)) {
@@ -148,9 +140,7 @@ function createQuizBuilder({
             const normalized = normalizeArticleContext(context);
             context = normalized.text;
             articleNormalized = normalized.normalized;
-            if (isSentenceInitialBlank(context)) {
-                options = options.map(option => option.replace(/^([A-D]\.\s+)(.+)$/i, (_, prefix, text) => prefix + capitalizeFirst(text)));
-            }
+            options = options.map(option => option.replace(/^([A-D]\.\s+)(.+)$/i, (_, prefix, text) => prefix + formatOptionSurface(text, context)));
             question = {
                 type: 1,
                 word: key,

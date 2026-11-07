@@ -4,10 +4,30 @@ const { auditUniqueAnswer } = require('../question-semantic-audit');
 
 const question = {level:'高中', context:'Although the old books were damaged, the _____ copied every page by hand so that future readers could still read the stories.', options:['A. scribe','B. farmer','C. driver','D. dancer'], answer:'A', optionMeanings:['抄写员','农民','司机','舞者']};
 const fit = {status:'suitable', clue:'copied every page by hand', vocabularyReason:'核心线索由抄写、页面和手工等常用词组成。', syntaxReason:'让步和目的从句关系清楚，不需要额外语法知识。', reasoningReason:'通过手工抄写书页的动作判断职业，线索明确。', optionsReason:'其余职业词常见，不需要先学习另一组陌生职业。', barriers:[], repairStage:'none'};
+
+test('indexed level clue resolves only to a provided original fragment without the blank',()=>{
+ const {parseLevelFitEvidence,hasCurrentLevelFit,levelFitPrompt}=require('../high-school-fit');
+ const {clue,...rest}=fit;
+ const result=parseLevelFitEvidence(question,{...rest,clueIndex:1});
+ assert.equal(result.approved,true);
+ assert.equal(result.levelFit.clue,'copied every page by hand so that future readers could still read the stories.');
+ assert.equal(hasCurrentLevelFit(question,result.levelFit),true);
+ assert.match(levelFitPrompt(question),/clueIndex/);
+ assert.match(levelFitPrompt(question),/originalFragments/);
+});
+
+test('indexed level clues reject invalid indices and conflicting literal evidence',()=>{
+ const {parseLevelFitEvidence}=require('../high-school-fit');
+ const {clue,...rest}=fit;
+ for(const clueIndex of [-1,2,1.5,'1',null]) assert.equal(parseLevelFitEvidence(question,{...rest,clueIndex}).approved,false);
+ assert.equal(parseLevelFitEvidence(question,{...fit,clueIndex:1}).approved,false,'do not silently overwrite a different literal clue');
+ assert.equal(parseLevelFitEvidence({...question,context:'_____ copied every page by hand.'},{...rest,clueIndex:0}).approved,false,'empty fragment is not evidence');
+ assert.equal(parseLevelFitEvidence(question,{...rest,clue:question.context}).approved,false,'legacy blank-containing text remains invalid');
+});
 function model(levelFit, prompts=[]) {
  return async prompt => {
   prompts.push(prompt);
-  if (prompt.startsWith('WORD SENSE CHECK')) return JSON.stringify({providedSense:'抄写员', contextualSense:'抄写员',reason:'句中用手抄写书页的人属于给定的抄写员词义。',matches:true,...(levelFit ? {levelFit} : {})});
+  if (prompt.startsWith('WORD SENSE CHECK')) return JSON.stringify({surface:{options:question.options.map((o,i)=>({letter:'ABCD'[i],word:o.slice(3),grammatical:true,reason:'词形和语法位置一致，拼写及大小写正确。'}))},providedSense:'抄写员', contextualSense:'抄写员',reason:'句中用手抄写书页的人属于给定的抄写员词义。',matches:true,...(levelFit ? {levelFit} : {})});
   return JSON.stringify({certain:true, optionJudgments:question.options.map((option,i)=>({letter:'ABCD'[i], fits:i===0, exclusion:i===0?'none':'contradiction',clueIndex:1,meaning:question.optionMeanings[i],reason:i===0?'句中抄写书页的工作对应抄写员的词义。':'此处要求的职业是抄写书页，与该职业的工作性质不符。'}))});
  };
 }
@@ -84,4 +104,13 @@ test('level evidence and vocabulary hints remain separate across school bands',(
  assert.match(levelGuidance('中学'),/grades 7–9/);
  assert.match(levelGuidance('CET4_6_TOEFL'),/NOT|mixed band/);
  assert.equal(hasCurrentLevelFit({...question,level:''},evidence),false);
+});
+
+test('the same sense request rejects grammar errors and missing surface evidence',async()=>{
+ for(const bad of ['A','B',null]) {
+  const base=model(fit);const result=await auditUniqueAnswer(question,{callModel:async prompt=>{
+   const reply=JSON.parse(await base(prompt));if(prompt.startsWith('WORD SENSE CHECK')){if(bad===null) delete reply.surface;else reply.surface.options.find(o=>o.letter===bad).grammatical=false;}return JSON.stringify(reply);
+  }});
+  assert.equal(result.approved,false);assert.equal(result.code,bad==='A'?'surface_context':bad==='B'?'surface_distractors':'semantic_audit_surface_missing');
+ }
 });

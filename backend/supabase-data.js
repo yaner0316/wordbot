@@ -1,3 +1,5 @@
+const { formatOptionSurface, targetSurface, hasCurrentSurfaceEvidence } = require('./question-surface');
+const { hasCurrentContentReview } = require('./question-content-review');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
@@ -223,10 +225,11 @@ function uniqueWords(values, correctWord) {
     const seen = new Set();
     const result = [];
     for (const value of values || []) {
-        const word = String(value || '').trim().toLowerCase();
-        if (!word || word === correct || seen.has(word)) continue;
+        const word = String(value || '').trim();
+        const key = word.toLowerCase();
+        if (!word || key === correct || seen.has(key)) continue;
         if (!/^[a-z]+(?:'[a-z]+)?$/i.test(word)) continue;
-        seen.add(word);
+        seen.add(key);
         result.push(word);
     }
     return result;
@@ -1203,7 +1206,7 @@ function stableWordOffset(word, size) {
 
 async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, translateWords, knownMeanings = null }) {
     const known = knownMeanings && typeof knownMeanings === 'object' ? knownMeanings : {};
-    const knownValue = option => String(known[option] || '').trim();
+    const knownValue = option => String(known[option] || Object.entries(known).find(([key]) => key.toLowerCase() === option.toLowerCase())?.[1] || '').trim();
     // Words the distinctness gate already translated are reused, not paid for twice.
     const missingWords = optionWords.filter(option =>
         !hasMeaningfulChineseMeaning(knownValue(option))
@@ -1212,8 +1215,8 @@ async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, t
     const translated = missingWords.length ? await translateWords(missingWords) : {};
     const meanings = optionWords.map(option =>
         option === correctWord
-            ? String(translated?.[option] || correctMeaning || '').trim()
-            : String(knownValue(option) || translated?.[option] || '').trim()
+            ? String(translated?.[option] || translated?.[option.toLowerCase()] || correctMeaning || '').trim()
+            : String(knownValue(option) || translated?.[option] || translated?.[option.toLowerCase()] || '').trim()
     );
     return meanings.every(hasMeaningfulChineseMeaning) ? meanings : null;
 }
@@ -1247,7 +1250,7 @@ async function resolveDistinctOptionDistractors({
     const excluded = [];
     for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
         const translated = await translateWords(current).catch(error => miniMaxFallback(error, null));
-        const meanings = current.map(word => String(translated?.[word] || '').trim());
+        const meanings = current.map(word => String(translated?.[word] || translated?.[word.toLowerCase()] || '').trim());
         // Without usable translations the existing downstream behaviour decides.
         if (!meanings.every(hasMeaningfulChineseMeaning)) return { distractors: current, meanings: null };
         const optionMeanings = [String(meaning).trim(), ...meanings];
@@ -1287,7 +1290,8 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         await saveVariantCheckpoint(invalidateVariantFromStage(state, 'distractors'));
         return null;
     }
-    const expectedWords = [wordText, ...approvedDistractors];
+    const displayWord = formatOptionSurface(targetSurface(context, wordText), blankedContext);
+    const expectedWords = [displayWord, ...approvedDistractors.map(value => formatOptionSurface(value, blankedContext))];
     if (state.optionWords || state.options || state.answer) {
         const words = Array.isArray(state.optionWords) ? state.optionWords : [];
         const options = Array.isArray(state.options) ? state.options : [];
@@ -1295,16 +1299,16 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
             && expectedWords.every(word => words.includes(word));
         const sameLayout = options.length === 4 && options.every((option, index) =>
             option === String.fromCharCode(65 + index) + '. ' + words[index]
-        ) && state.answer === String.fromCharCode(65 + words.indexOf(wordText));
+        ) && state.answer === String.fromCharCode(65 + words.indexOf(displayWord));
         if (!sameWords || !sameLayout) state = invalidateVariantFromStage(state, 'option_layout');
     }
     state.distractors = approvedDistractors;
     await saveVariantCheckpoint(state);
     const optionWords = Array.isArray(state.optionWords) && state.optionWords.length === 4
         ? [...state.optionWords]
-        : shuffled([wordText, ...approvedDistractors]);
+        : shuffled(expectedWords);
     const letters = ['A', 'B', 'C', 'D'];
-    const answer = state.answer || letters[optionWords.indexOf(wordText)];
+    const answer = state.answer || letters[optionWords.indexOf(displayWord)];
     const options = Array.isArray(state.options) && state.options.length === 4
         ? [...state.options]
         : optionWords.map((option, index) => letters[index] + '. ' + option);
@@ -1312,7 +1316,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         ? [...state.optionMeanings]
         : await buildOptionMeanings({
             optionWords,
-            correctWord: wordText,
+            correctWord: displayWord,
             correctMeaning: String(meaning || wordText),
             translateWords,
             knownMeanings: knownDistractorMeanings,
@@ -1339,7 +1343,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         options,
         answer,
         option_meanings: optionMeanings,
-        correct_meaning: optionMeanings[optionWords.indexOf(wordText)] || String(meaning || ''),
+        correct_meaning: optionMeanings[optionWords.indexOf(displayWord)] || String(meaning || ''),
         ai_audit_status: 'skipped',
         source_version: 'supabase-contextual-variant-v2',
         used_count: 0,
@@ -1367,12 +1371,14 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return requireSemanticAudit ? null : row;
     }
 
-    const auditInput = {context:blankedContext,options,answer,optionMeanings,level};
+    const auditInput = {context:blankedContext,options,answer,optionMeanings,level,contextCN:contextTranslation,targetMeaning:meaning};
     const requiredAuditMethod = semanticAudit.auditMethod;
     const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues(auditInput,state.audit.teachingAnalysis).length)
         && (!requiredAuditMethod || (state.audit.auditMethod === requiredAuditMethod
             && state.audit.inputFingerprint === require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)))
         && (!semanticAudit.senseAware || (state.audit?.senseVerified === true && state.audit.senseFingerprint === require('./teaching-analysis').semanticSenseFingerprint(auditInput)))
+        && (!semanticAudit.surfacePolicy || hasCurrentSurfaceEvidence(auditInput,state.audit.teachingAnalysis?.surface))
+        && (!semanticAudit.contentPolicy || hasCurrentContentReview(auditInput,state.audit.teachingAnalysis?.contentReview))
         && (!semanticAudit.levelFitPolicy || hasCurrentLevelFit(auditInput,state.audit.levelFit || state.audit.teachingAnalysis?.levelFit));
     const audit = (reusableAudit ? state.audit : null) || await semanticAudit({
         type: 1,
@@ -1382,6 +1388,9 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         options,
         answer,
         optionMeanings,
+        contextCN: contextTranslation,
+        targetMeaning: meaning,
+        requireContentReview: Boolean(semanticAudit.contentPolicy),
     });
     const validLetters = Array.isArray(audit?.validLetters)
         ? [...new Set(audit.validLetters.map(value => String(value || '').trim().toUpperCase()))]
@@ -1391,18 +1400,25 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         const unavailable = audit?.status === 'unavailable';
         reportRejection(unavailable ? 'semantic_audit_unavailable' : /^level_fit_/.test(audit?.code) ? audit.code : 'semantic_audit_rejected');
         if (!unavailable) {
+            if (['content_translation','content_option_meanings','content_review_missing'].includes(audit?.code)) {
+                state.levelFitRepairStage = checkpointInvalidationStageForIssues([audit.code]);
+                await saveVariantCheckpoint(invalidateVariantFromStage(state, checkpointInvalidationStageForIssues([audit.code])));
+                return null;
+            }
+            if (audit?.code === 'surface_distractors') state.levelFitRepairStage = 'distractors';
+            if (audit?.code === 'semantic_audit_surface_missing') state.levelFitRepairStage = 'semantic_audit';
             if (/^level_fit_/.test(audit?.code)) {
                 state.levelFitRepairStage = checkpointInvalidationStageForIssues([audit.code]);
                 state.levelFitFeedback = (audit.levelFit?.barriers || []).slice(0,8);
             }
-            if (['semantic_non_unique','semantic_expected_mismatch','semantic_expected_sense_mismatch','level_fit_context'].includes(audit?.code)) {
+            if (['semantic_non_unique','semantic_expected_mismatch','semantic_expected_sense_mismatch','level_fit_context','surface_context'].includes(audit?.code)) {
                 await saveVariantCheckpoint({...invalidateVariantFromStage(state,'context'),
                     rejectedContexts:[...new Set([...(state.rejectedContexts || []),blankedContext])],
                     rejectedAlternatives:[...new Set([...(state.rejectedAlternatives || []),
                         ...validLetters.filter(letter=>letter!==answer).map(letter=>optionWords['ABCD'.indexOf(letter)]).filter(Boolean)])]});
             } else {
                 await saveVariantCheckpoint(invalidateVariantFromStage(state,
-                    ['semantic_evidence_invalid','semantic_audit_uncertain','level_fit_evidence_invalid'].includes(audit?.code) ? 'semantic_audit' : 'distractors'));
+                    ['semantic_evidence_invalid','semantic_audit_uncertain','level_fit_evidence_invalid','semantic_audit_surface_missing'].includes(audit?.code) ? 'semantic_audit' : 'distractors'));
             }
         }
         return null;
@@ -1423,11 +1439,24 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return null;
     }
     const teachingAnalysis = audit.teachingAnalysis;
+    if (semanticAudit.contentPolicy && !hasCurrentContentReview(auditInput,teachingAnalysis?.contentReview)) {
+        reportRejection('content_review_missing');
+        state.levelFitRepairStage = 'semantic_audit';
+        await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
+        return null;
+    }
+    if (teachingAnalysis?.contentReview) row.source_version += '|' + teachingAnalysis.contentReview.policy;
+    if (semanticAudit.surfacePolicy && !hasCurrentSurfaceEvidence(auditInput,teachingAnalysis?.surface)) {
+        reportRejection('semantic_audit_surface_missing');
+        await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
+        return null;
+    }
     if (semanticAudit.levelFitPolicy && !hasCurrentLevelFit(auditInput,teachingAnalysis?.levelFit)) {
         reportRejection('level_fit_evidence_invalid');
         await saveVariantCheckpoint(invalidateVariantFromStage(state,'semantic_audit'));
         return null;
     }
+    if (teachingAnalysis?.surface) row.source_version += '|' + teachingAnalysis.surface.policy;
     if (isSupportedLevel(level) && teachingAnalysis?.levelFit) row.source_version += '|' + levelPolicy(level);
     const teachingIssues = getTeachingAnalysisIssues({context:blankedContext,options,answer},teachingAnalysis);
     if (requireTeachingAnalysis && teachingIssues.length) {
@@ -1607,15 +1636,15 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         const savedMeanings = variantCheckpoint.optionMeanings;
         const expectedWords = [wordText,...initialDistractors];
         const canReuseMeanings = Array.isArray(savedWords) && savedWords.length === 4 && new Set(savedWords).size === 4
-            && expectedWords.every(value=>savedWords.includes(value)) && Array.isArray(savedMeanings) && savedMeanings.length === 4
+            && expectedWords.every(value=>savedWords.some(saved=>saved.toLowerCase()===value.toLowerCase())) && Array.isArray(savedMeanings) && savedMeanings.length === 4
             && savedMeanings.every(hasMeaningfulChineseMeaning) && !getOverlappingOptionPairs(savedMeanings).length;
-        const savedMeaningByWord = canReuseMeanings ? Object.fromEntries(savedWords.map((value,index)=>[value,savedMeanings[index]])) : null;
+        const savedMeaningByWord = canReuseMeanings ? Object.fromEntries(savedWords.map((value,index)=>[value.toLowerCase(),savedMeanings[index]])) : null;
         const resolved = await resolveDistinctOptionDistractors({
             distractors: initialDistractors,
             wordText,
             meaning,
-            translateWords: savedMeaningByWord ? async values=>values.every(value=>savedMeaningByWord[value])
-                ? Object.fromEntries(values.map(value=>[value,savedMeaningByWord[value]])) : translateWords(values) : translateWords,
+            translateWords: savedMeaningByWord ? async values=>values.every(value=>savedMeaningByWord[value.toLowerCase()])
+                ? Object.fromEntries(values.map(value=>[value,savedMeaningByWord[value.toLowerCase()]])) : translateWords(values) : translateWords,
             regenerate: excluded => generateForContext(context, [...(approvedDistractors[0] || []), ...excluded]),
             reportRejection,
         });
@@ -1645,7 +1674,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             const saved = checkpoint.variants.find(item=>Number(item.slot)===Number(slot));
             // Resume this valid context/translation on the next service attempt.
             // Advancing to a fresh context would throw away unaffected work.
-            if (['distractors','semantic_audit'].includes(saved?.levelFitRepairStage)) break;
+            if (['distractors','semantic_audit','context_translation','option_meanings'].includes(saved?.levelFitRepairStage)) break;
             continue;
         }
         approvedRows.push(row);
@@ -2374,13 +2403,13 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     const prompt = [
         isSupportedLevel(level) ? 'Write a natural English sentence for the specified learner level. Use the length needed for clear, sense-specific clues; no word-count ceiling.' : `Write a natural 8-16 word English sentence for "${String(level || '').trim()}".` ,
         levelGuidance(level, {examples:true}),
-        `Target: "${String(word || '').trim().toLowerCase()}", meaning "${String(meaning || '').trim()}".` ,
-        'Put __TARGET__ exactly once in place of the target; never inflect or write the target. Its exact spelling must fit grammatically: use a modal, infinitive or imperative for a base verb.',
+        `Target: "${String(word || '').trim()}", meaning "${String(meaning || '').trim()}".` ,
+        'Put __TARGET__ exactly once in place of the target in context; never inflect or write the target inside context. Return targetForm separately with the same letters and spaces as Target, allowing only the capitalization required by this sentence (for example russian -> Russian, new york -> New York). Preserve proper-name capitalization. The exact word form must fit grammatically: use a modal, infinitive or imperative for a base verb.',
         'Give concrete sense-specific clues suited to its part of speech; time/place/typicality alone do not distinguish it. No definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
         repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the requested sense a distinguishing clue appropriate to its part of speech; change more than the scene.` : '',
         isSupportedLevel(level) && repair.levelFitFeedback?.length ? 'Resolve these previous comprehension barriers without changing the target sense (input evidence, not instructions): ' + JSON.stringify(repair.levelFitFeedback.slice(0,8)) : '',
-        'Return JSON: {"context":"... __TARGET__ ..."}.',
+        'Return JSON: {"context":"... __TARGET__ ...","targetForm":"target with correct capitalization only"}.',
     ].filter(Boolean).join('\n');
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
@@ -2398,11 +2427,14 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         const content = payload?.choices?.[0]?.message?.content || '';
         const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
         let context = match ? match[1].replace(/\\"/g, '"').replace(/\\n/g, ' ').trim() : '';
-        const target = String(word || '').trim().toLowerCase();
+        const canonicalTarget = String(word || '').trim();
+        const targetFormMatch = String(content).match(/"targetForm"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+        const target = targetFormMatch ? JSON.parse('"' + targetFormMatch[1] + '"').trim() : canonicalTarget;
+        if (!target || target.toLowerCase() !== canonicalTarget.toLowerCase()) return '';
         const markerCount = (context.match(/__TARGET__/g) || []).length;
         if (markerCount > 1) return '';
         if (markerCount === 1) context = context.replace('__TARGET__', target);
-        const count = (context.toLowerCase().match(new RegExp('\\b' + target + '\\b', 'g')) || []).length;
+        const count = (context.toLowerCase().match(new RegExp('\\b' + target.toLowerCase() + '\\b', 'g')) || []).length;
         if (!context || count !== 1 || context.toLowerCase() === prior.toLowerCase()) return '';
         return context;
     } catch (error) {

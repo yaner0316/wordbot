@@ -33,6 +33,9 @@ function invalidateVariantFromStage(variant, stage) {
 }
 
 function checkpointInvalidationStageForIssues(issues) {
+    if (issues.includes('content_review_missing')) return 'semantic_audit';
+    if (issues.includes('content_translation')) return 'context_translation';
+    if (issues.includes('content_option_meanings')) return 'option_meanings';
     if (issues.includes('level_fit_context')) return 'context';
     if (issues.includes('level_fit_distractors')) return 'distractors';
     if (issues.includes('level_fit_evidence_invalid')) return 'semantic_audit';

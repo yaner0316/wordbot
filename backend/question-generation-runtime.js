@@ -368,6 +368,8 @@ function createSupabaseQuestionGenerationService({
     const generationService = createQuestionGenerationService({
         loadWord,
         requiredAuditMethod: candidateBuilderOptions?.semanticAudit?.auditMethod,
+        requiredSurfacePolicy: candidateBuilderOptions?.semanticAudit?.surfacePolicy,
+        requiredContentPolicy: candidateBuilderOptions?.semanticAudit?.contentPolicy,
         requiredSenseAudit: candidateBuilderOptions?.semanticAudit?.senseAware === true,
         requiredLevelFitPolicy: candidateBuilderOptions?.semanticAudit?.levelFitPolicy,
         validateCandidate: validate,
@@ -429,7 +431,9 @@ function createQuestionGenerationRuntime({
     let jobStore;
     const generationService = createQuestionGenerationService({
         loadWord,
+        requiredContentPolicy: candidateBuilderOptions?.semanticAudit?.contentPolicy,
         requiredAuditMethod: candidateBuilderOptions?.semanticAudit?.auditMethod,
+        requiredSurfacePolicy: candidateBuilderOptions?.semanticAudit?.surfacePolicy,
         requiredSenseAudit: candidateBuilderOptions?.semanticAudit?.senseAware === true,
         requiredLevelFitPolicy: candidateBuilderOptions?.semanticAudit?.levelFitPolicy,
         validateCandidate: validateCandidate || defaultValidateCandidate,

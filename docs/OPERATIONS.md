@@ -1,5 +1,13 @@
 # WordBot Operations
 
+## Content and printed-option review contract (2026-11-07)
+
+New generation requires `question-content-v1` in both generation-service entry points. The existing sense-review request also receives the real sentence translation and canonical target sense; no extra model stage is added. Its content evidence is saved in teaching JSON, bound to exact content, and checked at candidate publication, checkpoint reuse and tagged cache selection. Translation and gloss failures invalidate only their corresponding stages; absent evidence resumes semantic review. Existing published legacy rows are not certified or repaired by this code change.
+
+Release requires real content checks in addition to software contract tests; report them separately. Stored repair proposals stay outside Git with original cache IDs/content and local verification results; proposals alone are not production approval. Apply the existing exact-row, history-preserving repair procedure below after preparing current-version comparisons and receipts. Do not stamp local authored drafts as AI-approved or overwrite existing audit evidence.
+
+The frontend companion preserves the spelling of options carrying `english-surface-v1`; deploy it before verifying newly reviewed questions. This is a code-only change with no cache purge, word rewrite or schema migration. Existing compatible published rows remain available; incorrect stored questions are repaired separately by exact ID. A rollback must retain corrected data and immutable history.
+
 ## Code-only level-fit release (2026-11-05)
 
 This release only verifies the existing production schema before Render. The CI migration apply command is deliberately disabled; missing schema blocks deployment instead of changing the database. Future schema-changing releases must explicitly authorize and restore the migration step. The ordered migration CLI remains available for an authorized operator. No cache purge or historical rewrite is part of this release.

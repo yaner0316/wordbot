@@ -2,11 +2,11 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const {generateReplacementContextWithAI}=require('../supabase-data');
 
-async function generate(word,context){
+async function generate(word,context,targetForm){
  const previousFetch=global.fetch,previousKey=process.env.MINIMAX_API_KEY;
  process.env.MINIMAX_API_KEY='test-only';
  let calls=0;
- global.fetch=async()=>{calls++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({context})}}]})};};
+ global.fetch=async()=>{calls++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({context,...(targetForm!==undefined?{targetForm}:{})})}}]})};};
  try{
   const result=await generateReplacementContextWithAI(word,'词义','中学','');
   assert.equal(calls,1,'one generation attempt must not add hidden model retries');
@@ -19,6 +19,18 @@ test('replacement generation fills the requested base verb into a single model m
 });
 test('replacement generation preserves the exact multiword selection',async()=>{
  assert.equal(await generate('take care of','We must __TARGET__ the injured bird until its wing heals.'),'We must take care of the injured bird until its wing heals.');
+});
+
+test('replacement generation preserves supplied proper-name spelling when filling the marker',async()=>{
+ assert.equal(await generate('Brazil','They flew to __TARGET__, a country in South America.'),'They flew to Brazil, a country in South America.');
+ assert.equal(await generate('New York','She lives in __TARGET__, a city in the United States.'),'She lives in New York, a city in the United States.');
+});
+
+test('lowercased canonical entries can recover printed proper-name capitalization without changing the word',async()=>{
+ assert.equal(await generate('russian','He is __TARGET__, a native of Russia.','Russian'),'He is Russian, a native of Russia.');
+ assert.equal(await generate('new york','She lives in __TARGET__, a large American city.','New York'),'She lives in New York, a large American city.');
+ assert.equal(await generate('toss','Please __TARGET__ the coin.','tossed'),'');
+ assert.equal(await generate('russian','He is __TARGET__, a native of Russia.','American'),'');
 });
 test('replacement generation rejects duplicate markers and extra target occurrences',async()=>{
  assert.equal(await generate('toss','Please __TARGET__ the ball and __TARGET__ the coin.'),'');
