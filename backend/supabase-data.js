@@ -1400,7 +1400,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         const unavailable = audit?.status === 'unavailable';
         reportRejection(unavailable ? 'semantic_audit_unavailable' : /^level_fit_/.test(audit?.code) ? audit.code : 'semantic_audit_rejected');
         if (!unavailable) {
-            if (['content_translation','content_option_meanings','content_review_missing'].includes(audit?.code)) {
+            if (['content_translation','content_option_meanings','content_option_overlap','content_review_missing'].includes(audit?.code)) {
                 state.levelFitRepairStage = checkpointInvalidationStageForIssues([audit.code]);
                 await saveVariantCheckpoint(invalidateVariantFromStage(state, checkpointInvalidationStageForIssues([audit.code])));
                 return null;

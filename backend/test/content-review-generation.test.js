@@ -43,3 +43,15 @@ test('content translation rejection resumes its context without generating unrel
     assert.equal(checkpoint.variants[0].contextTranslation,undefined);
     assert.equal(checkpoint.variants[0].context,context.replace('_____','catalogue'));
 });
+
+test('overlap rejection keeps context and translation and resumes only distractors',async()=>{
+    const checkpoint={variants:[]};let generated=0;
+    const audit=async()=>({approved:false,status:'rejected',code:'content_option_overlap'});
+    audit.contentPolicy='question-content-v1';
+    await buildCacheQuestionRowsForWord({...args(audit),generationCheckpoint:checkpoint,generateContext:async()=>{generated++;return 'He used the catalogue to find a title.';}});
+    assert.equal(generated,0);
+    assert.equal(checkpoint.variants[0].context,context.replace('_____','catalogue'));
+    assert.equal(checkpoint.variants[0].contextTranslation,translation);
+    assert.equal(checkpoint.variants[0].distractors,undefined);
+    assert.equal(checkpoint.variants[0].levelFitRepairStage,'distractors');
+});
