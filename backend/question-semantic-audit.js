@@ -166,7 +166,7 @@ async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
         if (!sense.approved) return {...withoutTeaching,...sense,proofChecks:2,senseChecks:1};
         const fit = parseLevelFitEvidence(question,extractJson(raw)?.levelFit);
         if (!fit.approved) return {...withoutTeaching,...fit,proofChecks:2,senseChecks:1};
-        const content=question.requireContentReview ? parseContentReview(question,extractJson(raw)?.contentReview) : {approved:true};
+        const content=question.requireContentReview ? parseContentReview(question,extractJson(raw)?.contentReview,{requireOptionSeparation:true}) : {approved:true};
         if (!content.approved) return {...withoutTeaching,...content,proofChecks:2,senseChecks:1};
         return {...verified,...sense,...fit,proofChecks:2,senseChecks:1,teachingAnalysis:{...teachingAnalysis,...(surface.surface ? {surface:surface.surface} : {}),senseVerified:true,...(fit.levelFit ? {levelFit:fit.levelFit} : {}),...(content.contentReview ? {contentReview:content.contentReview} : {})}};
     } catch (error) {

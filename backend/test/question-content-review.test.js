@@ -52,3 +52,33 @@ test('cache-shape canonical meanings cannot be replaced by the meaning stored in
         assert.equal(hasCurrentContentReview({...cacheQuestion, [key]:'编制目录'}, approved), false);
     }
 });
+
+test('fresh review must explicitly compare option meanings, while legacy evidence stays compatible', () => {
+    const e = evidence();
+    assert.equal(parseContentReview(q,e,{requireOptionSeparation:true}).code,'content_review_missing');
+    e.overlappingPairs=[];
+    const result=parseContentReview(q,e,{requireOptionSeparation:true});
+    assert.equal(result.approved,true);
+    assert.equal(hasCurrentContentReview(q,result.contentReview),true);
+    assert.equal(parseContentReview(q,evidence()).approved,true);
+});
+
+test('semantic overlap replaces distractors rather than relabeling correct glosses', () => {
+    const {checkpointInvalidationStageForIssues,invalidateVariantFromStage}=require('../question-generation-checkpoint');
+    const e=evidence();
+    e.overlappingPairs=[{letters:['A','B'],reason:'两个选项的真实词义存在同义或包含关系。'}];
+    const result=parseContentReview(q,e,{requireOptionSeparation:true});
+    assert.equal(result.code,'content_option_overlap');
+    const stage=checkpointInvalidationStageForIssues([result.code]);
+    assert.equal(stage,'distractors');
+    const repaired=invalidateVariantFromStage({context:q.context,contextTranslation:q.contextCN,options:q.options,optionMeanings:q.optionMeanings,audit:{}},stage);
+    assert.equal(repaired.context,q.context);
+    assert.equal(repaired.contextTranslation,q.contextCN);
+    assert.equal(repaired.options,undefined);
+});
+
+test('malformed pair comparisons cannot approve a fresh review', () => {
+    for(const pairs of [null,{},[{letters:['A','A'],reason:'同一个选项不能作为两个不同选项。'}],[{letters:['A','Z'],reason:'选项字母必须存在于真实的题目中。'}]]) {
+        assert.equal(parseContentReview(q,{...evidence(),overlappingPairs:pairs},{requireOptionSeparation:true}).approved,false);
+    }
+});
