@@ -1082,6 +1082,33 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
     ]);
 });
 
+test('retrying selected entries skips an already saved meaning and adds the remaining word', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const first = { word:'orange', meaning:'a citrus fruit', cnMeaning:'橙子', POS:'noun' };
+    const second = { word:'brisk', meaning:'quick and active', cnMeaning:'轻快的', POS:'adjective' };
+    const options = { selectedSenseFlow:true, confirmNewMeanings:true };
+    assert.equal((await adapter.addWords('qiuqiu',[first],options)).count,1);
+    const result = await adapter.addWords('qiuqiu',[first,second],options);
+    assert.equal(result.success,true);
+    assert.equal(result.count,1);
+    assert.equal(client.db.words.filter(row=>row.word==='orange').length,1);
+    assert.equal(client.db.words.filter(row=>row.word==='brisk').length,1);
+});
+
+test('selected-entry retry recovers a missing generation job without duplicating the saved word', async () => {
+    const failure = { failUpsertFor:'question_generation_jobs' };
+    const client = createFakeSupabase({users:[{id:'user-1',username:'qiuqiu',username_key:'qiuqiu'}]},failure);
+    const adapter = createSupabaseDataAdapter(client);
+    const words = [{word:'orange',meaning:'a citrus fruit',cnMeaning:'橙子',POS:'noun'}];
+    const options = {selectedSenseFlow:true,confirmNewMeanings:true};
+    assert.equal((await adapter.addWords('qiuqiu',words,options)).success,false);
+    failure.failUpsertFor = null;
+    assert.equal((await adapter.addWords('qiuqiu',words,options)).success,true);
+    assert.equal(client.db.words.length,1);
+    assert.equal(client.db.question_generation_jobs.length,1);
+});
+
 test('stats and formal quiz word reads do not join the parent-only parts-of-speech table', async () => {
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],

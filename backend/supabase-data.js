@@ -3028,9 +3028,30 @@ async function addWordsWithClient(client, targetUser, words, options = {}) {
             };
         }
     }
-    const entriesToAdd = options.skipDuplicateWords
+    let entriesToAdd = options.skipDuplicateWords
         ? entries.filter(entry => !duplicateWordSet.has(entry.word) && !duplicateInputWords.has(entry.word))
         : entries;
+    // A repeated confirmation (including a retry after a partial save) must not
+    // create a second record for the same selected meaning.
+    if (options.selectedSenseFlow) {
+        const saved = existingRows.filter(row => entriesToAdd.some(entry =>
+            row.word === entry.word && row.meaning_en === entry.meaning && row.meaning_zh === entry.meaningZh));
+        if (saved.length) {
+            const { data: jobs, error } = await client.from('question_generation_jobs').select('word_id')
+                .eq('user_id', user.id).in('word_id', saved.map(row => row.id));
+            ensureNoError(error, 'addWords.existingGenerationJobs');
+            const queued = new Set((jobs || []).map(job => job.word_id));
+            const missing = saved.filter(row => !queued.has(row.id)).map(row => ({user_id:user.id,word_id:row.id,
+                status:'pending',reason:'word_entry',attempt_count:0,next_attempt_at:row.entered_at}));
+            if (missing.length) {
+                const { error: jobError } = await client.from('question_generation_jobs')
+                    .upsert(missing, { onConflict:'word_id', ignoreDuplicates:true });
+                ensureNoError(jobError, 'addWords.recoverGenerationJobs');
+            }
+        }
+        entriesToAdd = entriesToAdd.filter(entry => !saved.some(row => row.word === entry.word
+            && row.meaning_en === entry.meaning && row.meaning_zh === entry.meaningZh));
+    }
     const errors = [];
     let count = 0;
 

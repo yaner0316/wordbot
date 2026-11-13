@@ -32,8 +32,6 @@ function buildWordUpdatePayload(userId, word, fields = {}) {
     userId,
     recordId: getRecordKey(word),
     word: String(word?.word || word || '').trim(),
-    meaning: fields.meaning ?? word?.meaning ?? '',
-    cnMeaning: fields.cnMeaning ?? word?.cnMeaning ?? '',
     context: fields.context ?? word?.context ?? '',
     distractors: fields.distractors ?? word?.distractors ?? '',
     status: fields.status ?? word?.status ?? 'Pending',

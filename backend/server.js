@@ -10,6 +10,7 @@ const { createApp } = require('./http-app');
 const { getParentCredentialStatus } = require('./data-source');
 const { getChallengeCandidates } = require('./data-source');
 const { lookupDictionarySenses } = require('./dictionary-senses');
+const { selectedEntries } = require('./dictionary-selection');
 const { getQuestionGenerationWorkerHealth, getRuntimeHealth, getLearningSupplyHealth } = require('./runtime-health');
 const { summarizeQuestionGenerationQueue } = require('./question-generation-observability');
 const { isValidGenerationWord } = require('./question-generation-eligibility');
@@ -767,19 +768,15 @@ app.get('/api/admin/history/diagnostics', async (req, res) => {
 
 app.post('/api/admin/addWord', async (req, res) => {
     try {
-        const { targetUser, word, meaning, pos, POS, partsOfSpeech, context, level } = req.body;
-        if (!targetUser || !word || !meaning) {
+        const { targetUser, word } = req.body;
+        if (!targetUser || !word) {
             return res.status(400).json({ error: '缺少参数' });
         }
-        const result = await addWord(targetUser, {
-            Word: word,
-            Meaning: meaning,
-            POS: partsOfSpeech || POS || pos,
-            Context: context,
-            Level: level,
-        });
-        res.json(result);
+        const words = selectedEntries(targetUser, [req.body]);
+        const result = await addWords(targetUser, words, { selectedSenseFlow: true, confirmNewMeanings: true });
+        res.status(result?.success === false ? 422 : 200).json(result);
     } catch (e) {
+        if (e.code === 'SELECTED_SENSE_REQUIRED') return res.status(422).json({ error: e.message, code: e.code });
         res.status(500).json({ error: e.message });
     }
 });
@@ -799,21 +796,18 @@ app.post('/api/admin/validateWords', async (req, res) => {
 
 app.post(['/api/admin/addWords', '/api/words'], async (req, res) => {
     try {
-        const { targetUser, words, confirmNewMeanings = false, skipDuplicateWords = false, selectedSenseFlow = false } = req.body;
+        const { targetUser, words } = req.body;
         if (!targetUser || !words || !Array.isArray(words) || words.length === 0) {
             return res.status(400).json({ error: '缺少参数' });
         }
-        const options = {
-            confirmNewMeanings: Boolean(confirmNewMeanings),
-            skipDuplicateWords: Boolean(skipDuplicateWords),
-        };
-        if (selectedSenseFlow) options.selectedSenseFlow = true;
-        const result = await addWords(targetUser, words, options);
+        const selected = selectedEntries(targetUser, words);
+        const result = await addWords(targetUser, selected, { selectedSenseFlow: true, confirmNewMeanings: true });
         const needsConfirmation = result?.code === 'DUPLICATE_WORD_CONFIRMATION_REQUIRED' ||
             result?.code === 'NEW_MEANING_REQUIRES_MEANING';
         const statusCode = needsConfirmation ? 409 : (result?.success === false ? 422 : 200);
         res.status(statusCode).json(result);
     } catch (e) {
+        if (e.code === 'SELECTED_SENSE_REQUIRED') return res.status(422).json({ error: e.message, code: e.code });
         res.status(500).json({ error: e.message });
     }
 });
@@ -863,6 +857,9 @@ app.get('/api/word', async (req, res) => {
 
 app.put('/api/word', async (req, res) => {
     try {
+        if (['meaning','cnMeaning','meaningZh','meaningEn','Meaning','CN_Meaning'].some(key => Object.hasOwn(req.body, key))) {
+            return res.status(422).json({ code: 'SELECTED_SENSE_REQUIRED', error: '词义不能手写修改，请通过录入入口重新选择具体词义' });
+        }
         const { userId, word, recordId, meaning, cnMeaning, pos, context, distractors, status, qualityFlags, qualityNote } = req.body;
         const effectiveUserId = userId || req.wordbotSession?.user || '';
         if (!recordId && (!effectiveUserId || !word)) return res.status(400).json({ error: '缺少参数' });

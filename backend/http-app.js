@@ -1,4 +1,5 @@
 const express = require('express');
+const { issueSenseSelection } = require('./dictionary-selection');
 const cors = require('cors');
 const { createAuthRateLimiter } = require('./auth-rate-limit');
 const { requireUserSession: defaultRequireUserSession } = require('./auth-middleware');
@@ -197,6 +198,8 @@ function createApp({
     const app = express();
     app.set('trust proxy', trustedProxyHops);
     app.use(cors(createCorsOptions(corsEnvironment)));
+    // A batch can contain up to 50 words with eight signed sense choices each.
+    app.use(['/api/words', '/api/admin/addWords', '/api/admin/addWord'], express.json({ limit: '1mb' }));
     app.use(express.json());
     app.use(addErrorContract);
 
@@ -377,7 +380,10 @@ function createApp({
             try {
                 const word = String(req.query.word || '').trim();
                 if (!word) return res.status(400).json({ error: '缺少单词' });
-                res.json({ word, senses: await lookupDictionarySenses(word) });
+                const senses = await lookupDictionarySenses(word);
+                const user = req.wordbotSession?.user;
+                res.json({ word, senses: senses.map(sense => user
+                    ? { ...sense, selectionToken: issueSenseSelection(word, sense, user) } : sense) });
             } catch (error) {
                 const status = isClientError(error) || error.message === 'DICTIONARY_WORD_REQUIRED' ? 400 : 502;
                 res.status(status).json({ error: error.message });

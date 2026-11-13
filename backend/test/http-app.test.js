@@ -2,6 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createApp } = require('../http-app');
+
+test('authenticated dictionary lookup issues receipts accepted only for that learner and sense', async () => {
+    const app=createApp({submitAnswers:async()=>({}),requireUserSession:(req,res,next)=>{req.wordbotSession={user:'learner'};next();},
+        lookupDictionarySenses:async()=>[{partOfSpeech:'noun',definition:'a financial institution',cnMeaning:'银行'}]});
+    await withServer(app,async base=>{
+        const data=await (await fetch(base+'/api/word-senses?word=bank')).json();
+        const entry={word:'bank',selectionToken:data.senses[0].selectionToken};
+        const {selectedEntries}=require('../dictionary-selection');
+        assert.equal(selectedEntries('learner',[entry])[0].cnMeaning,'银行');
+        assert.throws(()=>selectedEntries('another',[entry]),{code:'SELECTED_SENSE_REQUIRED'});
+    });
+});
 const { ACCOUNT_FAILURE_LIMIT, createAuthRateLimiter } = require('../auth-rate-limit');
 
 async function withServer(app, run) {

@@ -9,6 +9,53 @@ const SUPABASE_CLIENT_PATH = path.join(BACKEND_DIR, 'supabase-client.js');
 const QUESTION_GENERATION_BOOTSTRAP_PATH = path.join(BACKEND_DIR, 'question-generation-bootstrap.js');
 const FEISHU_PATH = path.join(BACKEND_DIR, 'feishu.js');
 
+function selectedTestWord(word, user = 'student') {
+    const sense = { definition: 'a selected meaning of ' + word, cnMeaning: '选定义项', partOfSpeech: 'noun' };
+    return { word, selectionToken: require('../dictionary-selection').issueSenseSelection(word, sense, user) };
+}
+
+test('all word entry endpoints reject unselected or handwritten senses before storage', async () => {
+    const writes=[];
+    const app=loadServerWithFeishu(createFakeFeishu({
+        addWord:async (...args)=>{writes.push(args);return {success:true};},
+        addWords:async (...args)=>{writes.push(args);return {success:true,count:1};},
+    }));
+    await withServer(app,async base=>{
+        for(const route of ['/api/words','/api/admin/addWords','/api/admin/addWord']) {
+            const response=await fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUser:'student',word:'course',meaning:'原因',words:[{word:'course',meaning:'原因',cnMeaning:'原因'}],selectedSenseFlow:true})});
+            assert.equal(response.status,422,route);
+            assert.equal((await response.json()).code,'SELECTED_SENSE_REQUIRED');
+        }
+    });
+    assert.equal(writes.length,0);
+});
+
+test('a mixed batch and handwritten edit fail before any adapter mutation', async () => {
+    const writes=[];
+    const app=loadServerWithFeishu(createFakeFeishu({addWords:async(...args)=>{writes.push(args);return {success:true};},updateWord:async(...args)=>{writes.push(args);return {success:true};}}));
+    await withServer(app,async base=>{
+        const response=await fetch(base+'/api/words',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUser:'student',words:[selectedTestWord('bank'),{word:'course',cnMeaning:'原因'}]})});
+        assert.equal(response.status,422);
+        const edited=await fetch(base+'/api/word',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:'student',word:'course',recordId:'existing',cnMeaning:'原因'})});
+        assert.equal(edited.status,422);
+        assert.equal(writes.length,0);
+    });
+});
+
+test('the supported batch size accepts signed choices larger than the default JSON limit', async () => {
+    const app=loadServerWithFeishu(createFakeFeishu());
+    const {issueSenseSelection}=require('../dictionary-selection');
+    const words=Array.from({length:400},(_,i)=>({word:'bank',selectionToken:issueSenseSelection('bank',{
+        definition:'A selected definition with contextual details. '.repeat(5)+i,cnMeaning:'选定义项',partOfSpeech:'noun'},'student')}));
+    const body=JSON.stringify({targetUser:'student',words});
+    assert.ok(Buffer.byteLength(body)>100*1024);
+    await withServer(app,async base=>{
+        const response=await fetch(base+'/api/words',{method:'POST',headers:{'Content-Type':'application/json'},body});
+        assert.equal(response.status,200);
+        assert.equal((await response.json()).count,400);
+    });
+});
+
 test('parent batch delete validates IDs and passes the owned scope to the adapter', async () => {
     const calls = [];
     const app = loadServerWithFeishu(createFakeFeishu({
@@ -555,7 +602,7 @@ test('student word entry accepts own session and rejects other users without par
     const cookie = sessionStore.cookie(sessionStore.issue('qiuqiu', 'user'));
     await withServer(app, async baseUrl => {
         for (const [targetUser, expected] of [['qiuqiu', 200], ['other', 403]]) {
-            const response = await fetch(`${baseUrl}/api/words`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUser, words: [{ word: 'bank', cnMeaning: '银行', meaning: 'a financial institution' }], selectedSenseFlow: true }) });
+            const response = await fetch(`${baseUrl}/api/words`, { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUser, words: [selectedTestWord('bank','qiuqiu')], selectedSenseFlow: true }) });
             assert.equal(response.status, expected);
         }
         assert.equal((await fetch(`${baseUrl}/api/words`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401);
@@ -577,12 +624,12 @@ test('parent addWords endpoint preserves payload contract', async () => {
         const response = await fetch(`${baseUrl}/api/admin/addWords`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUser: 'student', words: ['apple', 'banana'] }),
+            body: JSON.stringify({ targetUser: 'student', words: [selectedTestWord('apple'), selectedTestWord('banana')] }),
         });
 
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { success: true, count: 2 });
-        assert.deepEqual(calls, [['student', ['apple', 'banana'], { confirmNewMeanings: false, skipDuplicateWords: false }]]);
+        assert.deepEqual(calls, [['student', ['apple','banana'].map(word=>({word,meaning:'a selected meaning of '+word,cnMeaning:'选定义项',POS:'noun'})), { selectedSenseFlow: true, confirmNewMeanings: true }]]);
     });
 });
 
@@ -600,7 +647,7 @@ test('parent addWords endpoint does not return HTTP 200 when the data source rep
         const response = await fetch(`${baseUrl}/api/admin/addWords`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUser: 'student', words: ['apple'] }),
+            body: JSON.stringify({ targetUser: 'student', words: [selectedTestWord('apple')] }),
         });
 
         assert.equal(response.status, 422);
@@ -608,39 +655,14 @@ test('parent addWords endpoint does not return HTTP 200 when the data source rep
     });
 });
 
-test('parent addWord endpoint forwards level and parts of speech payload', async () => {
-    const calls = [];
-    const app = loadServerWithFeishu(createFakeFeishu({
-        addWord: async (...args) => {
-            calls.push(args);
-            return { success: true };
-        },
-    }));
-
-    await withServer(app, async baseUrl => {
-        const response = await fetch(`${baseUrl}/api/admin/addWord`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUser: 'student',
-                word: 'orange',
-                meaning: 'a citrus fruit',
-                level: '中学',
-                POS: ['noun'],
-            }),
-        });
-
-        assert.equal(response.status, 200);
-        assert.deepEqual(calls, [[
-            'student',
-            {
-                Word: 'orange',
-                Meaning: 'a citrus fruit',
-                POS: ['noun'],
-                Context: undefined,
-                Level: '中学',
-            },
-        ]]);
+test('legacy singular entry verifies and forwards a selected sense through the common path', async () => {
+    const calls=[];
+    const app=loadServerWithFeishu(createFakeFeishu({ addWords:async (...args)=>{calls.push(args);return {success:true,count:1};} }));
+    await withServer(app,async base=>{
+        const response=await fetch(base+'/api/admin/addWord',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetUser:'student',...selectedTestWord('orange')})});
+        assert.equal(response.status,200);
+        assert.equal(calls.length,1);
+        assert.deepEqual(calls[0],[ 'student', [{word:'orange',meaning:'a selected meaning of orange',cnMeaning:'选定义项',POS:'noun'}], {selectedSenseFlow:true,confirmNewMeanings:true} ]);
     });
 });
 
@@ -661,7 +683,6 @@ test('word update endpoint preserves status and field update payload', async () 
                 userId: 'student',
                 word: 'apple',
                 status: 'Mastered',
-                meaning: 'a fruit',
                 context: 'I ate an apple.',
                 distractors: ['orange', 'pear', 'peach'],
             }),
@@ -674,7 +695,7 @@ test('word update endpoint preserves status and field update payload', async () 
             'apple',
             {
                 recordId: undefined,
-                meaning: 'a fruit',
+                meaning: undefined,
                 cnMeaning: undefined,
                 pos: undefined,
                 context: 'I ate an apple.',
@@ -1146,7 +1167,7 @@ test('parent addWords endpoint returns 409 when duplicate confirmation is requir
         const response = await fetch(`${baseUrl}/api/admin/addWords`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUser: 'student', words: [{ word: 'promotion' }] }),
+            body: JSON.stringify({ targetUser: 'student', words: [selectedTestWord('promotion')] }),
         });
         const body = await response.json();
 

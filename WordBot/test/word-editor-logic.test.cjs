@@ -48,8 +48,6 @@ test('builds an update payload with the exact meaning record id', () => {
     userId: 'qiuqiu',
     recordId: 'meaning-bank-river',
     word: 'bank',
-    meaning: 'financial institution',
-    cnMeaning: '银行',
     context: 'I went to the bank.',
     distractors: 'shop,school,park',
     status: 'Pending',

@@ -12,10 +12,11 @@ const webAppPath = process.env.WORDBOT_WEB_APP_PATH
     || path.join(__dirname, '..', '..', '..', 'web', 'src', 'app.js');
 const webApp = fs.readFileSync(webAppPath, 'utf8');
 
-const rnWordSeparatorPattern = /split\(\/\[\\n,，;；\\s\]\+\//;
+const { parseEntryWords } = require('../../WordBot/word-entry-logic');
 
 test('word entry accepts newline, comma, and semicolon separators in RN and Web', () => {
-    assert.match(rnApp, rnWordSeparatorPattern);
+    assert.match(rnApp, /parseEntryWords\(newWord\)/);
+    assert.deepEqual(parseEntryWords('take care of, up to; library\ncarry the banner'), ['take care of','up to','library','carry the banner']);
     assert.match(webApp, /split\(\/\\n\+\//);
     const start=webApp.indexOf('function parseParentWordEntries('),end=webApp.indexOf('\nfunction ',start+1);
     const context={};vm.createContext(context);vm.runInContext(webApp.slice(start,end),context);

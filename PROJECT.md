@@ -8,6 +8,8 @@ This file is the authoritative product and domain rule set. `AGENTS.md` governs 
 
 ## Canonical domain model
 
+- New entries from every public client and API must select specific senses offered by the dictionary lookup. Batch input must resolve every word before submission. Handwritten meaning fields and bare-word submission are not valid entry paths. The server validates a learner/word/sense-bound selection receipt and derives the stored meaning and part of speech from it; a client boolean is not proof of selection. Existing meaning text is not freely editable through user-facing update endpoints. A lookup failure preserves the input for retry and never falls back to a guessed, blank, or self-repeated meaning. This applies to new input, not a retroactive rewrite of stored words.
+
 - The learning and cache unit is one user's one meaning, identified by canonical `user_id + meaning_id` (`words.id`; older code may call it `word_id`). Different meanings of the same spelling remain independent.
 - The user account's current selected learning level controls every generated and selected formal question. A meaning's historical entry level is metadata, not an eligibility filter and not a generation level.
 - New accounts persist junior-high difficulty (displayed as “初中”, stored as “中学”) at registration; setting this initial default is not a difficulty change. Changing the account difficulty uses the new level for future questions while preserving existing scores, assessments and immutable historical question snapshots. Cache rows referenced by history remain readable even when retired from future selection.

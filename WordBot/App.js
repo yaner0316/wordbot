@@ -1,6 +1,8 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput, Alert } from 'react-native';
 import { mergeWordPage, updateWordInList, removeWordFromList, hasMoreWordPages, getRecordKey, buildWordUpdatePayload } from './word-editor-logic';
+
+import { parseEntryWords, selectedEntryPayload } from './word-entry-logic';
 
 const API = process.env.EXPO_PUBLIC_API_URL || 'https://wordbot-1-w9il.onrender.com';
 const DEFAULT_LEVEL = '\u4e2d\u5b66';
@@ -14,6 +16,9 @@ const LEVEL_OPTIONS = [
 export default function App() {
   const [screen, setScreen] = useState('select');
   const [user, setUser] = useState(null);
+  const entryOwner = useRef(user); entryOwner.current = user;
+  const entryBusy = useRef(false);
+  const [senseBatch, setSenseBatch] = useState(null);
   const [quiz, setQuiz] = useState(null);
   const [testId, setTestId] = useState(null);
   const [current, setCurrent] = useState(0);
@@ -100,8 +105,6 @@ export default function App() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildWordUpdatePayload(user, editWord, {
-          meaning: editMeaning,
-          cnMeaning: editCnMeaning,
           context: editContext,
           distractors: editDistractors,
           status: editStatus,
@@ -216,30 +219,51 @@ export default function App() {
   };
 
   const submitWord = async () => {
-    const w = newWord.trim();
-    if (!w) { setMessage('请输入单词'); return; }
-    const words = w.split(/[\n,，;；\s]+/).map(x => x.trim()).filter(x => x);
-    if (words.length === 0) { setMessage('请输入至少一个单词'); return; }
-    for (const word of words) {
-      if (!/^[a-zA-Z]+$/.test(word)) { setMessage(`单词 "${word}" 包含非法字符`); return; }
-    }
-    setLoading(true);
-    setMessage('提交中...');
+    if (entryBusy.current) return;
+    let words;
+    try { words = parseEntryWords(newWord); } catch (e) { setMessage(e.message); return; }
+    const owner = user;
+    const items = words.map(word => senseBatch?.user === owner
+      ? senseBatch.items.find(item => item.word === word) || { word, senses: [], selected: [] }
+      : { word, senses: [], selected: [] });
+    entryBusy.current = true; setLoading(true); setMessage('正在查询词义...');
     try {
-      const res = await fetch(`${API}/api/admin/addWords`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetUser: user, words })
-      });
-      const data = await res.json();
-      if (data.error) { setMessage(data.error); }
-      else {
-        setMultiWords(words);
-        setMultiSelections(words.map(() => false));
-        setScreen('multi');
+      for (const item of items) {
+        if (item.senses.length) continue;
+        try {
+          const res = await fetch(API + '/api/word-senses?word=' + encodeURIComponent(item.word), { credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) throw new Error('词义查询失败');
+          item.senses = (data.senses || []).filter(sense => sense.selectionToken && sense.cnMeaning);
+          if (!item.senses.length) throw new Error('暂未查到词义');
+          item.error = '';
+        } catch (e) { item.error = '词义查询失败，请重试'; }
+        if (entryOwner.current !== owner) return;
       }
-    } catch (e) { setMessage('提交失败: ' + e.message); }
-    setLoading(false);
+      if (entryOwner.current !== owner) return;
+      setSenseBatch({ user: owner, input: words.join('\n'), items });
+      setMessage('每个词至少选择一个具体意思'); setScreen('sensePicker');
+    } finally { entryBusy.current = false; setLoading(false); }
+  };
+
+  const submitSenseBatch = async () => {
+    if (entryBusy.current || !senseBatch || senseBatch.user !== user) return;
+    let entries;
+    try { entries = selectedEntryPayload(senseBatch.items); } catch (e) { setMessage(e.message); return; }
+    const owner = user;
+    entryBusy.current = true; setLoading(true);
+    try {
+      const res = await fetch(API + '/api/words', { method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUser: owner, words: entries }) });
+      const data = await res.json();
+      if (entryOwner.current !== owner) return;
+      if (!res.ok || data.success === false || data.errors?.length) {
+        if (data.code === 'SELECTED_SENSE_REQUIRED') setSenseBatch({ ...senseBatch, items: senseBatch.items.map(item => ({ ...item, senses: [], selected: [], error: '词义选择已失效，请重新查询' })) });
+        throw new Error(data.error || '录入未完成，请重试');
+      }
+      setMessage('已录入所选词义'); setNewWord(''); setSenseBatch(null); setScreen('addWord');
+    } catch (e) { if (entryOwner.current === owner) setMessage(e.message); }
+    finally { entryBusy.current = false; setLoading(false); }
   };
 
   const confirmMulti = async () => {
@@ -417,7 +441,7 @@ export default function App() {
   if (screen === 'editWord') return (
     <ScrollView style={s.container}>
       <Text style={s.title}>编辑单词</Text>
-      <Text style={s.bigText}>{editWord}</Text>
+      <Text style={s.bigText}>{editWord?.word}</Text>
       <Text style={s.label}>状态</Text>
       <View style={s.statusRow}>
         <TouchableOpacity style={[s.statusBtn, editStatus === 'Pending' ? s.statusActive : null]} onPress={() => setEditStatus('Pending')}>
@@ -428,9 +452,9 @@ export default function App() {
         </TouchableOpacity>
       </View>
       <Text style={s.label}>英文释义</Text>
-      <TextInput style={s.input} value={editMeaning} onChangeText={setEditMeaning} multiline />
+      <TextInput style={s.input} value={editMeaning} editable={false} multiline />
       <Text style={s.label}>中文释义</Text>
-      <TextInput style={s.input} value={editCnMeaning} onChangeText={setEditCnMeaning} multiline />
+      <TextInput style={s.input} value={editCnMeaning} editable={false} multiline />
       <Text style={s.label}>例句</Text>
       <TextInput style={s.input} value={editContext} onChangeText={setEditContext} multiline />
       <Text style={s.label}>干扰词（逗号分隔）</Text>
@@ -443,13 +467,35 @@ export default function App() {
     </ScrollView>
   );
 
+  if (screen === 'sensePicker') return (
+    <ScrollView style={s.container}>
+      <Text style={s.title}>选择具体词义</Text>
+      {message ? <Text style={s.message}>{message}</Text> : null}
+      {senseBatch?.user === user && senseBatch.items.map((item, wi) => <View key={item.word} style={s.card}>
+        <Text style={s.bigText}>{item.word}</Text>
+        {item.error ? <Text style={s.message}>{item.error}</Text> : null}
+        {item.senses.map((sense, si) => <TouchableOpacity key={si} disabled={loading}
+          accessibilityRole="checkbox" accessibilityState={{ checked: item.selected.includes(si) }}
+          onPress={() => setSenseBatch(batch => ({ ...batch, items: batch.items.map((row, index) => index !== wi ? row : { ...row,
+            selected: row.selected.includes(si) ? row.selected.filter(value => value !== si) : [...row.selected, si] }) }))}>
+          <Text style={s.label}>{item.selected.includes(si) ? '☑ ' : '☐ '}{sense.cnMeaning}</Text>
+          {sense.example && sense.exampleCN ? <Text>{sense.example}{'\n'}{sense.exampleCN}</Text> : null}
+          {sense.usageNote ? <Text style={s.hint}>{sense.usageNote}</Text> : null}
+        </TouchableOpacity>)}
+      </View>)}
+      {senseBatch?.items.some(item => item.error) ? <TouchableOpacity disabled={loading} style={s.grayBtn} onPress={submitWord}><Text>重试未查到的词</Text></TouchableOpacity> : null}
+      <TouchableOpacity disabled={loading} style={s.greenBtn} onPress={submitSenseBatch}><Text style={s.btnText}>确认录入所选词义</Text></TouchableOpacity>
+      <TouchableOpacity disabled={loading} style={s.grayBtn} onPress={() => setScreen('addWord')}><Text>返回修改单词</Text></TouchableOpacity>
+    </ScrollView>
+  );
+
   if (screen === 'addWord') return (
     <ScrollView style={s.container}>
       <Text style={s.title}>录入单词 - {user}</Text>
       <TextInput style={s.input} value={newWord} onChangeText={setNewWord} placeholder="apple, banana；orange" />
-      <Text style={s.hint}>释义、例句自动生成</Text>
+      <Text style={s.hint}>只输入英文，一行一个单词或短语，下一步逐词选择具体意思。</Text>
       {message ? <Text style={s.message}>{message}</Text> : null}
-      <TouchableOpacity style={s.greenBtn} onPress={submitWord}><Text style={s.btnText}>提交</Text></TouchableOpacity>
+      <TouchableOpacity style={s.greenBtn} disabled={loading} onPress={submitWord}><Text style={s.btnText}>下一步：选择词义</Text></TouchableOpacity>
       <TouchableOpacity style={s.grayBtn} onPress={() => { setNewWord(''); setMessage(''); setScreen('actions'); }}><Text style={s.btnText}>返回</Text></TouchableOpacity>
     </ScrollView>
   );

@@ -73,4 +73,4 @@ function createSessionStore({ ttlMs = SESSION_TTL_MS, secret } = {}) {
     return { issue, read, cookie, clearCookie };
 }
 
-module.exports = { createSessionStore, normalizeUser };
+module.exports = { createSessionStore, normalizeUser, sessionSecret };
