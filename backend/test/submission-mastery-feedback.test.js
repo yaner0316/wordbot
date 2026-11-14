@@ -110,3 +110,14 @@ test('feedback uses the existing formal evidence rules for duplicate stems, timi
         assert.deepEqual(result.masteredWords, [], name);
     }
 });
+
+test('formal results report this test’s mastery stages and preserve the saved snapshot on replay', async () => {
+    const f = fixture();
+    const answers = Array(10).fill(0);
+    answers[2] = 1;
+    f.rows.splice(3, 1);
+    const result = await submitQuizWithDataSource({ username: 'synthetic', testId: 'real-stages',
+        questions: f.questions, answers, dataSource: f.dataSource, now: () => start + 24 * 3600 * 1000 });
+    assert.deepEqual(result.progressSummary, { newlyMastered: 7, consolidating: 1, recognized: 1 });
+    assert.deepEqual(f.getSnapshot().result.progressSummary, result.progressSummary);
+});
