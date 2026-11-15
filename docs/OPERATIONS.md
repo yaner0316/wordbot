@@ -8,13 +8,15 @@ Execution evidence and remaining work: [implementation plan](plans/2026-11-14-qu
 
 # WordBot Operations
 
-## Scheduled question-worker wake-up (2026-11-15)
+## Scheduled question-worker wake-up (2026-11-16)
 
-`.github/workflows/question-worker-wakeup.yml` requests the public backend health endpoint every ten minutes (UTC minutes 3/13/23/33/43/53). This wakes a sleeping free Render backend and checks that its existing worker is configured and running. It does not call the model directly, reset jobs, shorten retry backoff, or bypass approval gates. Only safe operational counters enter the public workflow log. No frontend change is required.
+Supabase's existing `pg_cron` / `pg_net` now own the single automatic wake-up schedule. Job `wordbot-worker-wakeup` runs `*/10 * * * *` and sends an unauthenticated GET to the fixed public backend health endpoint, with a 90-second network timeout to accommodate cold start. The operator-only registration SQL is `backend/scripts/schedule-worker-wakeup.sql`; do not add it to automatic schema migrations. No extra extension, service, credential, frontend change or paid Render Cron is needed. It leaves model backoff, question quality gates and saved learning data unchanged.
 
-Manual wake: `gh workflow run question-worker-wakeup.yml --repo yaner0316/wordbot --ref main`. Inspect the run's summary for trigger type, worker startup/claim/completion times and backlog. `queueStoredError` may represent an old task error, not a current provider failure. Success means a running worker was observed, not that new questions completed. Schedule acceptance requires a successful run with event `schedule`; an active workflow or manual dispatch is insufficient. Disable via GitHub Actions → Wake question worker → Disable workflow when this temporary measure is no longer needed.
+Verify actual automatic execution in `cron.job_run_details` for this job, then inspect the corresponding `net._http_response` HTTP result and worker startup/claim/completion times. A cron SQL success only queues the HTTP request; HTTP 200 and worker availability must be checked separately. Health `queueStoredError` in manual logs may represent an old task error, not a current provider failure. A running worker does not prove questions are ready. Disable with `cron.alter_job(job_id, active := false)` for this named job only; preserve other cron jobs.
 
-GitHub schedules are best-effort and can be delayed or dropped; public-repository scheduled workflows may be disabled after 60 days without repository activity. Render free-instance monthly limits still apply. The public repository's standard Ubuntu runner does not consume paid private-repository minutes; no artifact upload or paid Render Cron is used. This is temporary availability assistance, not an 18-hour completion guarantee.
+GitHub's prior automatic schedule produced no executions despite active state and re-registration. Its `schedule` trigger is removed to avoid duplicate schedulers; `.github/workflows/question-worker-wakeup.yml` remains manual-only. Manual wake: `gh workflow run question-worker-wakeup.yml --repo yaner0316/wordbot --ref main`. Do not count manual dispatch as proof of automatic scheduling.
+
+The database must remain available for its cron to run. Render free-instance monthly limits and model rate limits still apply. This is temporary availability assistance, not an 18-hour question-completion guarantee.
 
 ## Level-dependent target inflection (local patch, 2026-11-14)
 
