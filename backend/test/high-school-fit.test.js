@@ -24,38 +24,6 @@ test('indexed level clues reject invalid indices and conflicting literal evidenc
  assert.equal(parseLevelFitEvidence({...question,context:'_____ copied every page by hand.'},{...rest,clueIndex:0}).approved,false,'empty fragment is not evidence');
  assert.equal(parseLevelFitEvidence(question,{...rest,clue:question.context}).approved,false,'legacy blank-containing text remains invalid');
 });
-function model(levelFit, prompts=[]) {
- return async prompt => {
-  prompts.push(prompt);
-  if (prompt.startsWith('WORD SENSE CHECK')) return JSON.stringify({surface:{options:question.options.map((o,i)=>({letter:'ABCD'[i],word:o.slice(3),grammatical:true,reason:'词形和语法位置一致，拼写及大小写正确。'}))},providedSense:'抄写员', contextualSense:'抄写员',reason:'句中用手抄写书页的人属于给定的抄写员词义。',matches:true,...(levelFit ? {levelFit} : {})});
-  return JSON.stringify({certain:true, optionJudgments:question.options.map((option,i)=>({letter:'ABCD'[i], fits:i===0, exclusion:i===0?'none':'contradiction',clueIndex:1,meaning:question.optionMeanings[i],reason:i===0?'句中抄写书页的工作对应抄写员的词义。':'此处要求的职业是抄写书页，与该职业的工作性质不符。'}))});
- };
-}
-test('high-school approval requires grounded level evidence even when meaning and uniqueness pass', async()=>{
- const result=await auditUniqueAnswer(question,{callModel:model(null)});
- assert.equal(result.approved,false);
- assert.equal(result.code,'level_fit_evidence_invalid');
-});
-test('a long high-school sentence passes with grounded evidence without another model request', async()=>{
- const prompts=[];
- const result=await auditUniqueAnswer(question,{callModel:model(fit,prompts)});
- assert.equal(result.approved,true);
- assert.equal(prompts.length,3);
- assert.equal(result.teachingAnalysis.levelFit.status,'suitable');
- assert.equal(result.teachingAnalysis.levelFit.policyVersion,'high-school-fit-v1');
-});
-test('a blocking background requirement rejects an otherwise unique question', async()=>{
- const evidence={...fit,status:'unsuitable',barriers:[{text:'copied every page by hand',location:'context',impact:'blocking',reason:'此测试模拟审核发现该线索的具体用法形成理解障碍。'}],repairStage:'context'};
- const result=await auditUniqueAnswer(question,{callModel:model(evidence)});
- assert.equal(result.approved,false);
- assert.equal(result.code,'level_fit_context');
-});
-test('unsupported explicit learner levels cannot approve', async()=>{
- const result=await auditUniqueAnswer({...question,level:'unknown'},{callModel:model(null)});
- assert.equal(result.approved,false);
- assert.equal(result.code,'level_fit_unsupported');
-});
-
 test('fit evidence cannot be reused after level, sense, option or context changes',()=>{
  const {parseLevelFitEvidence,hasCurrentLevelFit}=require('../high-school-fit');
  const evidence=parseLevelFitEvidence(question,fit).levelFit;
@@ -77,20 +45,6 @@ test('fabricated evidence, contradictory approvals and unresolved concerns fail 
  assert.equal(parseLevelFitEvidence(question,uncertain).approved,false);
 });
 
-for (const level of ['小学','中学','CET4_6_TOEFL']) {
- test(level+' cannot approve without its own level-fit evidence',async()=>{
-  const result=await auditUniqueAnswer({...question,level},{callModel:model(null)});
-  assert.equal(result.approved,false);
-  assert.equal(result.code,'level_fit_evidence_invalid');
- });
- test(level+' approves valid evidence under a distinct level policy',async()=>{
-  const result=await auditUniqueAnswer({...question,level},{callModel:model(fit)});
-  assert.equal(result.approved,true);
-  assert.ok(result.teachingAnalysis.levelFit);
-  assert.notEqual(result.teachingAnalysis.levelFit.policyVersion,'high-school-fit-v1');
- });
-}
-
 test('level evidence and vocabulary hints remain separate across school bands',()=>{
  const {hasCurrentLevelFit,parseLevelFitEvidence,vocabularyHints,levelGuidance}=require('../high-school-fit');
  const evidence=parseLevelFitEvidence(question,fit).levelFit;
@@ -100,17 +54,21 @@ test('level evidence and vocabulary hints remain separate across school bands',(
  const q={...question,context:'We abandon the damaged plan.'};
  assert.equal(vocabularyHints(q).context.unlisted.includes('abandon'),false);
  assert.equal(vocabularyHints({...q,level:'中学'}).context.unlisted.includes('abandon'),true);
- assert.match(levelGuidance('小学'),/grades 5–6/);
+ assert.match(levelGuidance('小学'),/grades 4–6/);
  assert.match(levelGuidance('中学'),/grades 7–9/);
  assert.match(levelGuidance('CET4_6_TOEFL'),/NOT|mixed band/);
  assert.equal(hasCurrentLevelFit({...question,level:''},evidence),false);
 });
 
-test('the same sense request rejects grammar errors and missing surface evidence',async()=>{
- for(const bad of ['A','B',null]) {
-  const base=model(fit);const result=await auditUniqueAnswer(question,{callModel:async prompt=>{
-   const reply=JSON.parse(await base(prompt));if(prompt.startsWith('WORD SENSE CHECK')){if(bad===null) delete reply.surface;else reply.surface.options.find(o=>o.letter===bad).grammatical=false;}return JSON.stringify(reply);
-  }});
-  assert.equal(result.approved,false);assert.equal(result.code,bad==='A'?'surface_context':bad==='B'?'surface_distractors':'semantic_audit_surface_missing');
- }
+const {auditStem}=require('../question-semantic-audit');
+const stemQuestion={...question,word:'scribe',targetMeaning:'抄写员'};
+function stemEvidence(){return {certain:true,checks:Object.fromEntries(['grammar','naturalness','sense','form','level','clue','burden'].map(k=>[k,{pass:true,evidence:'copied every page by hand',reason:'这一明确的手工抄写线索使用常用语言，关系清楚。'}]))};}
+for(const level of ['小学低年级','小学','中学','高中','CET4_6_TOEFL']) test(level+' requires its own stem-level and burden evidence',async()=>{
+ const missing=stemEvidence();delete missing.checks.level;
+ assert.equal((await auditStem({...stemQuestion,level},{callModel:async()=>JSON.stringify(missing)})).approved,false);
+ const good=await auditStem({...stemQuestion,level},{callModel:async()=>JSON.stringify(stemEvidence())});assert.equal(good.approved,true);
+ const bad=stemEvidence();bad.checks.level.pass=false;bad.checks.level.reason='当前背景知识要求超出了学习者理解线索的能力。';
+ assert.equal((await auditStem({...stemQuestion,level},{callModel:async()=>JSON.stringify(bad)})).code,'level_fit_context');
 });
+test('no word-count ceiling replaces an actual burden judgment',async()=>{const context=stemQuestion.context+' '+Array(110).fill('word').join(' ');let calls=0;const good=await auditStem({...stemQuestion,context},{callModel:async p=>{calls++;assert.match(p,/NO word-count/);return JSON.stringify(stemEvidence());}});assert.equal(good.approved,true);assert.equal(calls,1);});
+test('unsupported learner levels cannot approve',async()=>{assert.equal((await auditStem({...stemQuestion,level:'unknown'},{callModel:async()=>JSON.stringify(stemEvidence())})).code,'level_fit_unsupported');});

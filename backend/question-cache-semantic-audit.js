@@ -4,8 +4,6 @@ const MULTI_ANSWER_READINESS_ISSUES = new Set([
     'ambiguous_elementary_context',
     'ambiguous_fill_in_context',
     'distractor_form_overlap',
-    'duplicate_option_meanings',
-    'overlapping_option_meanings',
 ]);
 
 function parseList(value) {
@@ -56,9 +54,6 @@ function auditQuestionCacheRows(rows, users = []) {
             context: row.question_text || '', options, answer: row.answer || '',
             optionMeanings: optionMeanings.value, correctMeaning: row.correct_meaning || '',
         }).filter(issue => MULTI_ANSWER_READINESS_ISSUES.has(issue));
-        if (hasCompleteOptionMeanings) {
-            readinessIssues.push(...getDuplicateOptionMeaningIssue(optionMeanings.value));
-        }
         reasons.push(...readinessIssues);
         const uniqueReasons = [...new Set(reasons)];
         if (uniqueReasons.length) affected.push({

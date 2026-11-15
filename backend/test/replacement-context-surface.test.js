@@ -36,7 +36,7 @@ test('replacement generation rejects duplicate markers and extra target occurren
  assert.equal(await generate('toss','Please __TARGET__ the ball and __TARGET__ the coin.'),'');
  assert.equal(await generate('toss','Please __TARGET__ the coin after a toss of the ball.'),'');
 });
-test('replacement generation still accepts literal target output and refuses inflected output',async()=>{
+test('replacement generation accepts a literal target but refuses an undeclared changed form',async()=>{
  assert.equal(await generate('toss','Please toss the coin upward to decide which team starts today.'),'Please toss the coin upward to decide which team starts today.');
  assert.equal(await generate('toss','The horse tossed its head as the rider pulled the reins.'),'');
 });

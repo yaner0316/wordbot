@@ -1,19 +1,21 @@
 'use strict';
 
+const {QUESTION_POLICY}=require('./question-policy');
+const {CONTENT_REVIEW_POLICY}=require('./question-content-review');
 const STAGE_FIELDS = {
     context: [
-        'context', 'contextTranslation', 'distractors', 'optionWords', 'options',
+        'context', 'targetForm', 'stemReview', 'optionReview', 'contextTranslation', 'distractors', 'optionWords', 'options',
         'answer', 'optionMeanings', 'localValidated', 'audit', 'row',
     ],
     distractors: [
-        'distractors', 'optionWords', 'options', 'answer', 'optionMeanings',
+        'distractors', 'optionReview', 'optionWords', 'options', 'answer', 'optionMeanings',
         'localValidated', 'audit', 'row',
     ],
     option_layout: [
-        'optionWords', 'options', 'answer', 'optionMeanings', 'localValidated',
+        'optionWords', 'options', 'answer', 'optionReview', 'optionMeanings', 'localValidated',
         'audit', 'row',
     ],
-    option_meanings: ['optionMeanings', 'localValidated', 'audit', 'row'],
+    option_meanings: ['optionMeanings', 'optionMeaningsPolicy', 'localValidated', 'audit', 'row'],
     context_translation: ['contextTranslation', 'localValidated', 'audit', 'row'],
     local_validation: ['localValidated', 'audit', 'row'],
     semantic_audit: ['audit', 'row'],
@@ -22,6 +24,13 @@ const STAGE_FIELDS = {
 
 function cleanText(value) {
     return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function retireTranslationCheckpoint(variant, requireVersion = false) {
+    const policies=[variant.optionMeaningsPolicy, variant.audit?.teachingAnalysis?.contentReview?.policy, variant.row?.teaching_analysis?.contentReview?.policy].filter(Boolean);
+    return policies.some(policy=>policy!==CONTENT_REVIEW_POLICY)
+        || (requireVersion && variant.optionMeanings && !policies.length)
+        ? invalidateVariantFromStage(variant,'option_meanings') : {...variant};
 }
 
 function invalidateVariantFromStage(variant, stage) {
@@ -39,6 +48,7 @@ function checkpointInvalidationStageForIssues(issues) {
     if (issues.includes('level_fit_context')) return 'context';
     if (issues.includes('level_fit_distractors')) return 'distractors';
     if (issues.includes('level_fit_evidence_invalid')) return 'semantic_audit';
+    if (issues.includes('option_meaning_collision') || issues.includes('content_option_overlap') || issues.includes('overlapping_option_meanings') || issues.includes('bad_distractor_shape')) return 'distractors';
     if (issues.some(issue => /^semantic_audit_/.test(issue))) return 'semantic_audit';
     if (issues.some(issue => /context/.test(issue) && !/translation/.test(issue))) return 'context';
     if (issues.some(issue => /context.*translation|translation.*context/.test(issue))) return 'context_translation';
@@ -53,7 +63,7 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
     const previousWord = cleanText(previous.word);
     const currentWord = cleanText(input.word);
     const sameWordIgnoringCase = previousWord.toLowerCase() === currentWord.toLowerCase();
-    const materialChange = cleanText(previous.level) !== cleanText(input.level)
+    const materialChange = previous.policyVersion !== QUESTION_POLICY || cleanText(previous.level) !== cleanText(input.level)
         || cleanText(previous.meaning) !== cleanText(input.meaning)
         || !sameWordIgnoringCase;
     const casingChanged = !materialChange && previousWord !== currentWord;
@@ -61,10 +71,15 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
 
     return {
         schemaVersion: 1,
+        policyVersion: QUESTION_POLICY,
         wordVersion: input.wordVersion,
         level: input.level,
         word: input.word,
         meaning: input.meaning,
+        ...(!materialChange && Array.isArray(previous.hardExcludedDistractors)
+            ? {hardExcludedDistractors:[...previous.hardExcludedDistractors]} : {}),
+        ...(!materialChange && Array.isArray(previous.repairFeedback)
+            ? {repairFeedback:previous.repairFeedback.slice(-4)} : {}),
         ...(!materialChange && Array.isArray(previous.rejectedContexts) && previous.rejectedContexts.length
             ? {rejectedContexts:[...previous.rejectedContexts]} : {}),
         ...(!materialChange && Array.isArray(previous.rejectedAlternatives) && previous.rejectedAlternatives.length
@@ -75,11 +90,12 @@ function normalizeGenerationCheckpoint(checkpoint, current) {
             ? []
             : casingChanged
                 ? variants.map(variant => invalidateVariantFromStage(variant, 'option_layout'))
-                : variants.map(variant => ({ ...variant })),
+                : variants.map(variant => retireTranslationCheckpoint(variant)),
     };
 }
 
 module.exports = {
+    retireTranslationCheckpoint,
     checkpointInvalidationStageForIssues,
     invalidateVariantFromStage,
     normalizeGenerationCheckpoint,

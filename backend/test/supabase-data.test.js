@@ -8,10 +8,9 @@ const {
     buildCacheQuestionRowsForWord,
     generateReplacementContextWithAI,
     hydrateFormalChallengeSnapshot,
-    resolveDistinctOptionDistractors,
     buildOptionMeanings,
 } = require('../supabase-data');
-const { getOverlappingOptionPairs } = require('../option-meaning-distinctness');
+const {attestRow,approveAudit}=require('./current-policy-fixture');
 
 const DEFAULT_TEST_CONTEXT_TRANSLATION = '这是当前英文题干对应的完整中文句子翻译';
 test('history completeness follows review type without rewriting original assessment snapshots',async()=>{
@@ -88,6 +87,7 @@ function createSupabaseDataAdapter(client, options = {}) {
     };
     return createRawSupabaseDataAdapter(client, {
         translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
+        semanticAudit: async q=>approveAudit(q),
         ...options,
         translateWords,
     });
@@ -755,7 +755,7 @@ test('cache generation persists a translated target meaning without overwriting 
         generateContext: async (wordText, meaning, level, previous) => previous
             ? `After lunch, the student shared a ${wordText} with a friend.`
             : `The student ate a ${wordText} after lunch.`,
-        semanticAudit: async question => ({ approved: true, status: 'approved', validLetters: [question.answer] }),
+        semanticAudit: async question => approveAudit(question),
     });
 
     await build(untranslated);
@@ -1177,6 +1177,7 @@ test('question cache status summarizes Supabase rows by level', async () => {
         generated_at: '2026-07-19T12:00:00.000Z',
     };
     client.db.question_cache[0].option_meanings = ['水果', '梨子', '座位', '家具'];
+    client.db.question_cache[0]=attestRow(client.db.question_cache[0],'apple');
 
     const status = await adapter.getQuestionCacheStatus('qiuqiu');
 
@@ -1287,7 +1288,7 @@ test('question cache status reports formal eligible meanings by level', async ()
             question_fingerprint: `fp-${id}`,
             question_type: 1,
             question_text: `We used the word ${targetWord} naturally in example ${id}.`,
-            options: [`A. ${targetWord}`, `B. chair-${id}`, `C. pencil-${id}`, `D. window-${id}`],
+            options: [`A. ${targetWord}`, `B. chair${id.endsWith('1')?'one':'two'}`, `C. pencil${id.endsWith('1')?'one':'two'}`, `D. window${id.endsWith('1')?'one':'two'}`],
             answer: 'A',
             option_meanings: ['正确词义', '错误词义一', '错误词义二', '错误词义三'],
             correct_meaning: '正确词义',
@@ -1334,11 +1335,13 @@ test('question cache status reports formal eligible meanings by level', async ()
             },
         ],
     });
+    client.db.question_cache=client.db.question_cache.map(r=>attestRow(r,client.db.words.find(w=>w.id===r.word_id)?.word));
     const adapter = createSupabaseDataAdapter(client);
 
     const status = await adapter.getQuestionCacheStatus('qiuqiu');
 
     assert.deepEqual(status.eligibleReadyMeaningsByLevel, {
+        '小学低年级': 0,
         [String.fromCharCode(0x5c0f, 0x5b66)]: 0,
         [MIDDLE]: 0,
         [String.fromCharCode(0x9ad8, 0x4e2d)]: 0,
@@ -2548,6 +2551,7 @@ test('rebuildQuestionCacheForUser preserves complete pairs beyond ten while repa
             ...cachePairFor(repairWord, { invalidTranslationSlot: 1 }),
         ],
     });
+    client.db.question_cache=client.db.question_cache.map(r=>attestRow(r,client.db.words.find(w=>w.id===r.word_id)?.word));
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, '\u4e2d\u6587\u91ca\u4e49'])),
         generateContext: async word => `The second ${word} sentence is ready.`,
@@ -2778,7 +2782,7 @@ test('wrong-answer cache prebuild uses injected generators for both replacement 
     const contextCalls = [];
     const adapter = createSupabaseDataAdapter(client, {
         translateWords: async words => Object.fromEntries(words.map(word => [word, word === 'apple' ? '苹果' : '干扰项'])),
-        semanticAudit: async question => ({ approved: true, status: 'approved', validLetters: [question.answer] }),
+        semanticAudit: async question => approveAudit(question),
         requireSemanticAudit: true,
         generateDistractors: contextualDistractorsForTest,
         generateContext: async (word, meaning, level, previous) => {
@@ -2796,7 +2800,7 @@ test('wrong-answer cache prebuild uses injected generators for both replacement 
         assert.equal(result.prepared, 1);
         assert.equal(contextCalls.length, 2);
         assert.equal(client.db.question_cache.some(row => row.id === 'cache-old'), false);
-        assert.equal(client.db.question_cache.some(row => row.source_version?.includes('|unique-answer-v2')), true);
+        assert.equal(client.db.question_cache.some(row => row.source_version?.includes('|unique-answer-v3')), true);
     } finally {
         if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = previousKey;
@@ -2825,7 +2829,7 @@ test('context generation uses the shared bounded MiniMax request', async () => {
         assert.equal(body.model, 'MiniMax-M2.5');
         assert.equal(body.max_tokens, 2048);
         assert.equal(body.temperature, 0.1);
-        assert.match(body.messages[0].content, /grades 5–6/);
+        assert.match(body.messages[0].content, /grades 4–6/);
         assert.ok(body.messages[0].content.length < 5000, 'include the bounded rubric without the full wordlist');
     } finally {
         if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
@@ -3055,30 +3059,12 @@ test('mandatory new cache generation returns no ready rows when semantic auditor
     assert.deepEqual(rows, []);
 });
 
-test('new cache generation rejects deterministic quality failures before calling semantic AI', async () => {
-    let auditCalls = 0;
-    const rows = await buildCacheQuestionRowsForWord({
-        user: { id: 'user-1' },
-        word: {
-            id: 'word-local-reject',
-            user_id: 'user-1',
-            word: 'lucky',
-            meaning_zh: '幸运的',
-            context_en: 'She felt lucky before the game.',
-        },
-        level: MIDDLE,
-        generateContext: async () => 'They were lucky during the final match.',
-        generateDistractors: contextualDistractorsForTest,
-        translateWords: async words => Object.fromEntries(words.map(word => [word, '相同释义'])),
-        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
-        semanticAudit: async () => {
-            auditCalls += 1;
-            return { approved: true, status: 'approved', validLetters: ['A'] };
-        },
-    });
-
-    assert.deepEqual(rows, []);
-    assert.equal(auditCalls, 0);
+test('new cache generation rejects malformed option shapes before semantic AI',async()=>{
+ let calls=0;
+ const rows=await buildCacheQuestionRowsForWord({user:{id:'u'},word:{id:'w',word:'lucky',meaning_zh:'幸运的',context_en:'She felt lucky before the game.'},level:MIDDLE,
+ generateContext:async()=>'',generateDistractors:async()=>['aaa--bbb','ccc--ddd','eee--fff'],translateWords:async()=>({}),translateContext:async()=>DEFAULT_TEST_CONTEXT_TRANSLATION,
+ semanticAudit:async()=>{calls++;return {approved:true};}});
+ assert.deepEqual(rows,[]);assert.equal(calls,0);
 });
 
 test('new cache generation records approved semantic audit before ready publication', async () => {
@@ -3088,9 +3074,9 @@ test('new cache generation records approved semantic audit before ready publicat
         words: [word], assessments: [], question_cache: rebuildCoverageInvalidPair(word),
     });
     const result = await createRebuildCoverageAdapter(client, {
-        semanticAudit: async question => ({ approved: true, status: 'approved', validLetters: [question.answer] }),
+        semanticAudit: async question => approveAudit(question),
     }).rebuildQuestionCacheForUser('qiuqiu');
-    const published = client.db.question_cache.filter(row => String(row.source_version).includes('unique-answer-v2'));
+    const published = client.db.question_cache.filter(row => String(row.source_version).includes('unique-answer-v3'));
 
     assert.equal(result.count, 2);
     assert.equal(published.length, 2);
@@ -3125,11 +3111,7 @@ test('cache generation retains approved candidates while replacing a rejected si
         semanticAudit: async question => {
             auditCalls += 1;
             const approved = auditCalls !== 2;
-            return {
-                approved,
-                status: approved ? 'approved' : 'rejected',
-                validLetters: approved ? [question.answer] : ['A', 'B'],
-            };
+            return approved ? approveAudit(question) : {approved:false,status:'rejected',validLetters:['A','B']};
         },
         renewLease: async () => { renewals += 1; },
         requireSemanticAudit: true,
@@ -3167,7 +3149,7 @@ test('cache generation publishes zero rows when only one of four candidates is a
         semanticAudit: async question => {
             auditCalls += 1;
             const approved = auditCalls === 1;
-            return { approved, status: approved ? 'approved' : 'rejected', validLetters: approved ? [question.answer] : [] };
+            return approved ? approveAudit(question) : {approved:false,status:'rejected',validLetters:[]};
         },
         requireSemanticAudit: true,
     });
@@ -4099,6 +4081,7 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
         optionMeanings: ['\u91ca\u4e49', '\u6cb3\u6d41', '\u9053\u8def', '\u684c\u5b50'],
     }));
 
+    for (const q of questions) {q.level=MIDDLE;q.correctMeaning=q.optionMeanings[0];const p=attestRow(q);q.aiAuditStatus=p.ai_audit_status;q.sourceVersion=p.source_version;q.teachingAnalysis=p.teaching_analysis;}
     const result = await adapter.createFormalQuizChallenge({
         username: 'qiuqiu',
         testId: 'real-challenge-1',
@@ -4120,6 +4103,7 @@ test('formal challenge adapter creates the authoritative Supabase challenge thro
         cache_question_id: question.cacheRecordId,
         stem: question.context,
         question_fingerprint: question.questionFingerprint,
+        ai_audit_status: question.aiAuditStatus,
     })));
 });
 
@@ -4151,10 +4135,11 @@ test('strict formal challenge accepts approved AI-audited cache questions', asyn
             contextCN: '这是一个完整的中文句子。',
             optionMeanings: ['释义', '河流', '道路', '桌子'],
             aiAuditStatus: 'approved',
-            sourceVersion: 'supabase-contextual-variant-v3|unique-answer-v2',
+            sourceVersion: 'supabase-contextual-variant-v3|unique-answer-v3',
         }));
 
-        const result = await adapter.createFormalQuizChallenge({
+        for (const q of questions) {q.level=MIDDLE;q.correctMeaning=q.optionMeanings[0];const p=attestRow(q);q.aiAuditStatus=p.ai_audit_status;q.sourceVersion=p.source_version;q.teachingAnalysis=p.teaching_analysis;}
+    const result = await adapter.createFormalQuizChallenge({
             username: 'qiuqiu', testId: 'real-approved-audit', level: MIDDLE, questions,
         });
 
@@ -4489,7 +4474,7 @@ test('durable candidate generation retains a single approved row for the next at
         semanticAudit: async question => {
             auditCalls += 1;
             const approved = auditCalls === 1;
-            return { approved, status: approved ? 'approved' : 'rejected', validLetters: approved ? [question.answer] : [] };
+            return approved ? approveAudit(question) : {approved:false,status:'rejected',validLetters:[]};
         },
         requireSemanticAudit: true,
         allowPartialCandidates: true,
@@ -4589,77 +4574,10 @@ test('server mastery snapshot retries a CAS conflict and freezes baseline and re
     assert.equal(await adapter.getQuizSubmissionMastery('sync', 'real-missing'), null);
 });
 
-test('a distractor whose Chinese meaning collides is replaced instead of rejecting the candidate', async () => {
-    // Production shape: the answer and one distractor translate to the same Chinese gloss
-    // (career/occupation both 职业), so the question is ambiguous and used to be rejected
-    // only after the whole candidate had been built, audited and retried from scratch.
-    const GLOSS = {
-        apple: '\u82f9\u679c',
-        pear: '\u82f9\u679c',      // collides with the answer
-        desk: '\u684c\u5b50',
-        chair: '\u6905\u5b50',
-        river: '\u6cb3\u6d41',
-        delta: '\u4e09\u89d2\u6d32',
-        echo: '\u56de\u58f0',
-        foxtrot: '\u72d0\u6b65\u821e',
-    };
-    const excludedSeen = [];
-    const client = createFakeSupabase({
-        users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu', learning_level: MIDDLE }],
-        words: [{
-            id: 'word-1', feishu_record_id: 'rec-word-1', user_id: 'user-1', word: 'apple',
-            meaning_en: 'a fruit', meaning_zh: '\u82f9\u679c', level: MIDDLE,
-            context_en: 'The child ate an apple after school.',
-            distractors: ['pear', 'desk', 'chair'], old_distractors: [],
-            mastery_status: 'pending', entered_at: '2026-07-30T00:00:00.000Z',
-        }],
-        assessments: [],
-        question_cache: [],
-    });
-    const adapter = createRawSupabaseDataAdapter(client, {
-        translateWords: async words => Object.fromEntries(words.map(word => [word, GLOSS[word] || ''])),
-        translateContext: async () => DEFAULT_TEST_CONTEXT_TRANSLATION,
-        generateContext: async (word, meaning, level, previous) =>
-            previous ? 'The child packed an apple for the long trip.' : previous,
-        generateDistractors: async ({ excludedDistractors = [] }) => {
-            excludedSeen.push([...excludedDistractors]);
-            const excluded = new Set(excludedDistractors);
-            if (excluded.has('pear')) return ['desk', 'chair', 'river'];
-            if (excluded.size > 0) return ['delta', 'echo', 'foxtrot'];
-            return ['pear', 'desk', 'chair'];
-        },
-    });
-
-    const result = await adapter.rebuildQuestionCacheForUser('qiuqiu');
-    const rows = client.db.question_cache.filter(row => row.round_type === 'primary');
-
-    assert.equal(result.count, 2);
-    assert.equal(rows.length, 2);
-    // The colliding distractor was excluded and a replacement was requested.
-    assert.ok(excludedSeen.some(list => list.includes('pear')), 'the colliding word must be excluded on repair');
-    for (const row of rows) {
-        const meanings = row.option_meanings;
-        assert.equal(meanings.length, 4);
-        assert.equal(new Set(meanings.map(value => String(value).toLowerCase())).size, 4);
-        assert.deepEqual(getOverlappingOptionPairs(meanings), []);
-        assert.equal(row.options.some(option => /pear/i.test(option)), false);
-    }
-});
-
-test('option-meaning gate stops with a specific rejection once replacements keep colliding', async () => {
-    const reported = [];
-    const result = await resolveDistinctOptionDistractors({
-        distractors: ['occupation', 'chair', 'river'],
-        wordText: 'career',
-        meaning: '\u804c\u4e1a',
-        translateWords: async words => Object.fromEntries(words.map(word =>
-            [word, { occupation: '\u804c\u4e1a', chair: '\u804c\u4e1a', river: '\u6cb3\u6d41' }[word] || ''])),
-        regenerate: async () => ['occupation', 'chair', 'river'],
-        reportRejection: code => reported.push(code),
-    });
-
-    assert.equal(result, null);
-    assert.deepEqual(reported, ['option_meaning_collision']);
+test('Chinese gloss overlap does not invoke a separate distractor regeneration gate',async()=>{
+ assert.equal(require('../supabase-data').resolveDistinctOptionDistractors,undefined);
+ const meanings=await buildOptionMeanings({optionWords:['apple','desk','table','pear'],correctWord:'apple',correctMeaning:'苹果',translateWords:async()=>({desk:'桌子',table:'桌子',pear:'梨'})});
+ assert.deepEqual(meanings,['苹果','桌子','桌子','梨']);
 });
 
 test('option meanings already translated by the gate are not paid for a second time', async () => {

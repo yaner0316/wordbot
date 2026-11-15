@@ -1,3 +1,4 @@
+const {hasCurrentQuestionPolicy}=require('./question-policy');
 const crypto = require('crypto');
 const { CONTENT_REVIEW_POLICY, hasCurrentContentReview } = require('./question-content-review');
 const { getQuestionQualityIssues, hasMeaningfulChineseMeaning, isQuestionQualityAcceptable } = require('./question-quality');
@@ -33,7 +34,7 @@ function userKey(value) {
 }
 
 function requireApprovedAiAudit() {
-    return String(process.env.WORDBOT_REQUIRE_AI_AUDIT || '').trim() === '1';
+    return true; // Formal supply never downgrades through an environment flag.
 }
 
 function buildCacheQuestionFields({ question, sourceVersion, now = Date.now() }) {
@@ -144,7 +145,8 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
     const normalized = row && row.question ? row : normalizeCacheRow(row);
     const question = normalized.question || {};
     const issues = [];
-    if (String(normalized.sourceVersion || '').split('|').includes(CONTENT_REVIEW_POLICY)
+    if (requireAiAudit && Number(question.type)===1 && !hasCurrentQuestionPolicy({...question,sourceVersion:normalized.sourceVersion})) issues.push('question_policy_retired');
+    if (String(normalized.sourceVersion || '').split('|').some(version=>/^question-content-v\d+$/.test(version))
         && !hasCurrentContentReview(question,question.teachingAnalysis?.contentReview)) issues.push('content_review_missing');
     const markedAuditMethod = String(normalized.sourceVersion || '').split('|').reverse()
         .find(method => INPUT_BOUND_SEMANTIC_AUDIT_METHODS.includes(method));
@@ -186,12 +188,6 @@ function getCacheQuestionReadinessIssues(row, { requireAiAudit = requireApproved
         return hasMeaningfulChineseMeaning(value) && !isFailedOptionMeaning(value);
     })) {
         issues.push('bad_option_meanings');
-    } else {
-        const normalizedMeanings = question.optionMeanings
-            .map(meaning => String(meaning || '').trim().toLowerCase());
-        if (new Set(normalizedMeanings).size !== normalizedMeanings.length) {
-            issues.push('duplicate_option_meanings');
-        }
     }
     return [...new Set(issues)];
 }
@@ -261,7 +257,7 @@ function buildSelectableCachePool({ rows, userId, level, roundType = 'primary', 
         .filter(row => row.qualityStatus === QUESTION_CACHE_STATUS.READY)
         .filter(row => ['active', 'reserved_next_day'].includes(row.cacheState))
         .filter(row => row.cacheState !== 'reserved_next_day' || !row.availableFrom || Date.parse(row.availableFrom) <= Date.now())
-        .filter(row => isCacheQuestionReady(row))
+        .filter(row => isCacheQuestionReady(row,{requireAiAudit:true}))
         .filter(row => !normalizedExcluded.has(String(row.wordRecordId || '').trim()));
     return dedupeSelectableRows(shuffleWithinUsedCount(eligible));
 }

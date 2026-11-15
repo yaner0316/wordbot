@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {auditUniqueAnswer} = require('../question-semantic-audit');
+const {auditOptions:auditUniqueAnswer} = require('../question-semantic-audit');
 const question = {type:1,context:'She packed a shiny red _____ in her lunchbox for school today.',options:['A. apple','B. banana','C. grape','D. orange'],answer:'A',optionMeanings:['苹果','香蕉','葡萄','橙子']};
 const reply = {
   certain:true,validLetters:['A'],clue:'shiny red',clueReason:'颜色和外观是句中提供的线索。',correctReason:'这个上下文描写的是红色水果。',
@@ -28,7 +28,7 @@ test('grounded evidence is keyed to the option word so shuffled answers keep the
     {letter:'C',fits:true,meaning:'苹果',reason:'苹果是句中苹果派所需要的水果。'},
     {letter:'D',fits:false,meaning:'香蕉',reason:'香蕉不能满足句中明确的苹果派用途。'},
   ]};
-  const result=await auditUniqueAnswer(q,{callModel:async p=>p.startsWith('WORD SENSE CHECK')?JSON.stringify({matches:true,providedSense:'苹果',contextualSense:'苹果',reason:'句中烤苹果派使用的水果与给定苹果词义一致。'}):JSON.stringify({...evidence,optionJudgments:evidence.optionJudgments.map(item=>({...item,exclusion:item.fits?'none':'contradiction',clue:evidence.clue}))})});
+  const result=await auditUniqueAnswer(q,{callModel:async p=>p.startsWith('WORD SENSE CHECK')?JSON.stringify({matches:true,providedSense:'苹果',contextualSense:'苹果',reason:'句中烤苹果派使用的水果与给定苹果词义一致。'}):JSON.stringify({...evidence,semanticDiscrimination:true,optionJudgments:evidence.optionJudgments.map(item=>({...item,word:q.options['ABCD'.indexOf(item.letter)].slice(3),exclusion:item.fits?'none':'contradiction',clue:evidence.clue,grammatical:true,wordValid:true,levelSuitable:true,addedPremises:[]}))})});
   assert.equal(result.approved,true);
   assert.equal(result.teachingAnalysis.options.find(item=>item.word==='grape').reason,evidence.optionJudgments[1].reason);
   const {getTeachingAnalysisIssues}=require('../teaching-analysis');

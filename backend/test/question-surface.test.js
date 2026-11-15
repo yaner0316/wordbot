@@ -10,7 +10,7 @@ async function build(context,word,distractors,checkpoint={variants:[]}){
  const meanings={cambodia:'柬埔寨',laos:'老挝',tanzania:'坦桑尼亚',indonesia:'印度尼西亚',although:'虽然',because:'因为',unless:'除非',until:'直到'};
  return buildCacheQuestionRowsForWord({user:{id:'u'},word:{id:'w',word,meaning_zh:meanings[word.toLowerCase()],context_en:context},level:'高中',requiredCount:1,reportRejection:issue=>console.log('surface-rejection',issue),generationCheckpoint:checkpoint,saveGenerationCheckpoint:async()=>{},
  generateContext:async()=>'',generateDistractors:async()=>distractors,translateWords:async words=>Object.fromEntries(words.map(w=>[w.toLowerCase(),meanings[w.toLowerCase()]])),translateContext:async()=> '他们在假期期间前往了这个国家。',
- semanticAudit:async q=>({approved:true,status:'approved',validLetters:[q.answer]}),requireSemanticAudit:true});
+ semanticAudit:require('./current-policy-fixture').approveAudit,requireSemanticAudit:true});
 }
 test('production cache assembly keeps target spelling from context and proper-noun options',async()=>{
  const rows=await build('They travelled to Cambodia during their holiday.','cambodia',['Laos','Tanzania','Indonesia']);
@@ -46,7 +46,7 @@ test('new generation rejects old checkpoint approval while retaining context and
  const old={question_text:surfaceQuestion.context,options:surfaceQuestion.options,answer:'A',option_meanings:surfaceQuestion.optionMeanings,question_fingerprint:'old'};
  let generated=0,published=0;
  const service=createQuestionGenerationService({requiredSurfacePolicy:'english-surface-v1',maxAttempts:1,loadWord:async()=>({id:'w',word:'recreation',level:'高中',meaning_zh:'娱乐'}),validateCandidate:()=>[],
- loadCheckpoint:async()=>({word:'recreation',level:'高中',meaning:'["","娱乐"]',variants:[{slot:1,context:'They can recreation at the park.',contextTranslation:'他们可以在公园娱乐。',row:old,audit:{approved:true}}]}),
+ loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'recreation',level:'高中',meaning:'["","娱乐"]',variants:[{slot:1,context:'They can recreation at the park.',contextTranslation:'他们可以在公园娱乐。',row:old,audit:{approved:true}}]}),
  generateCandidates:async request=>{generated++;const v=request.generationCheckpoint.variants[0];assert.ok(!v.row&&!v.audit);assert.equal(v.contextTranslation,'他们可以在公园娱乐。');return [old];},publishReadyVariants:async()=>{published++;}});
  await assert.rejects(service.process({word_id:'w',user_id:'u'}),error=>error.code==='INSUFFICIENT_DISTINCT_READY_VARIANTS'&&error.rejectionReasons.semantic_audit_surface_missing>0);assert.equal(generated,1);assert.equal(published,0);
 });

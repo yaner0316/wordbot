@@ -70,7 +70,8 @@ function rowCheckpoint(row, slot, wordText) {
         : -1;
     return {
         slot,
-        context: String(row.question_text || row.questionText || '').replace(/_{3,}/, String(wordText || '')),
+        context: String(row.question_text || row.questionText || '').replace(/_{3,}/, optionWords[answerIndex] || String(wordText || '')),
+        targetForm:optionWords[answerIndex], stemReview:row.teaching_analysis?.stemReview,
         contextTranslation: row.context_zh || row.contextCN,
         distractors: optionWords.filter((option, index) => index !== answerIndex),
         optionWords,
@@ -131,26 +132,17 @@ function createQuestionGenerationService({
                 throw error;
             }
             const excludedStems = new Set((word.excludedQuestionStems || []).map(normalizeText));
-            // Only already-published, still-eligible cache rows retain legacy compatibility.
-            // Unpublished checkpoints and newly built rows must carry the new evidence.
-            const legacyCacheFingerprints = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint)
-                .map(row => [row.question_fingerprint,levelFitFingerprint({...row,level:word.level})]));
-            const publishedSurface = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint).map(row => [row.question_fingerprint,surfaceFingerprint(row)]));
-            const publishedContent = new Map((word.cachedVariants || []).filter(row => row.question_fingerprint).map(row => [row.question_fingerprint,contentFingerprint({...row,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en})]));
-            const candidateIssues = (candidate, allowPublishedLegacy = false) => [
+            const candidateIssues = (candidate) => [
                 ...validationIssues(validateCandidate, candidate, word),
                 ...(requiredAuditMethod && (candidate?.teaching_analysis?.auditMethod !== requiredAuditMethod
                     || !String(candidate?.source_version || '').split('|').includes(requiredAuditMethod)
                     || candidate.teaching_analysis.inputFingerprint !== require('./teaching-analysis').semanticAuditInputFingerprint({context:candidate.question_text,options:candidate.options,answer:candidate.answer}))
                     ? ['semantic_audit_outdated'] : []),
-                ...(requiredSurfacePolicy && !(allowPublishedLegacy && publishedSurface.get(candidate?.question_fingerprint) === surfaceFingerprint(candidate))
-                    && !hasCurrentSurfaceEvidence(candidate,candidate?.teaching_analysis?.surface) ? ['semantic_audit_surface_missing'] : []),
-                ...(requiredContentPolicy && !(allowPublishedLegacy && publishedContent.get(candidate?.question_fingerprint) === contentFingerprint({...candidate,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en}))
-                    && !hasCurrentContentReview({...candidate,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en},candidate?.teaching_analysis?.contentReview) ? ['content_review_missing'] : []),
+                ...(requiredSurfacePolicy && !hasCurrentSurfaceEvidence(candidate,candidate?.teaching_analysis?.surface) ? ['semantic_audit_surface_missing'] : []),
+                ...(requiredContentPolicy && !hasCurrentContentReview({...candidate,level:word.level,targetMeaning:word.meaning_zh || word.meaning_en},candidate?.teaching_analysis?.contentReview) ? ['content_review_missing'] : []),
                 ...(requiredSenseAudit && (candidate?.teaching_analysis?.senseVerified !== true || !candidate?.teaching_analysis?.senseFingerprint
                     || candidate.teaching_analysis.senseFingerprint !== require('./teaching-analysis').semanticSenseFingerprint(candidate)) ? ['semantic_audit_sense_missing'] : []),
-                ...(requiredLevelFitPolicy && !(allowPublishedLegacy && legacyCacheFingerprints.get(candidate?.question_fingerprint) === levelFitFingerprint({...candidate,level:word.level}))
-                    && !hasCurrentLevelFit({...candidate,level:word.level},candidate?.teaching_analysis?.levelFit) ? ['level_fit_evidence_invalid'] : []),
+                ...(requiredLevelFitPolicy && !hasCurrentLevelFit({...candidate,level:word.level},candidate?.teaching_analysis?.levelFit) ? ['level_fit_evidence_invalid'] : []),
                 ...(excludedStems.has(normalizeText(candidate?.question_text || candidate?.questionText)) ? ['context_already_displayed'] : []),
             ];
 
@@ -165,7 +157,7 @@ function createQuestionGenerationService({
             const exposedPracticeFingerprints = new Set();
             const exposePracticeSingle = async rows => {
                 if (!publishPracticeVariant) return;
-                const valid = rows.filter(row => row?.question_fingerprint && !candidateIssues(row,true).length);
+                const valid = rows.filter(row => row?.question_fingerprint && !candidateIssues(row).length);
                 if (valid.length !== 1) return;
                 const variant = { ...valid[0], user_id: userId, word_id: wordId,
                     round_type: 'primary', quality_status: 'ready', variant_slot: 1, cache_state: 'active' };
@@ -180,7 +172,7 @@ function createQuestionGenerationService({
                 const variant = checkpointRow(savedVariant);
                 const fingerprint = String(variant?.question_fingerprint || '').trim();
                 if (!fingerprint) return savedVariant;
-                const issues = candidateIssues(variant,true);
+                const issues = candidateIssues(variant);
                 if (issues.length) {
                     restoredInvalidRow = true;
                     for (const issue of issues) rejectionReasons[issue] = (rejectionReasons[issue] || 0) + 1;
@@ -197,7 +189,7 @@ function createQuestionGenerationService({
             for (const variant of word.cachedVariants || []) {
                 if (variantsByFingerprint.size >= required) break;
                 const fingerprint = String(variant.question_fingerprint || '');
-                if (!fingerprint || candidateIssues(variant,true).length || variantsByFingerprint.has(fingerprint)) continue;
+                if (!fingerprint || candidateIssues(variant).length || variantsByFingerprint.has(fingerprint)) continue;
                 if ([...variantsByFingerprint.values()].some(existing =>
                     normalizeText(existing.question_text) === normalizeText(variant.question_text)
                     || distractorOverlap(candidateDistractors(existing), candidateDistractors(variant)) > 1)) continue;

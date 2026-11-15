@@ -36,6 +36,7 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
 
     function matches(row, filters) {
         return filters.every(filter => {
+            if (filter.type === 'is') return (row[filter.column] ?? null) === filter.value;
             if (filter.type === 'eq') return String(row[filter.column]) === String(filter.value);
             if (filter.type === 'in') return filter.values.map(String).includes(String(row[filter.column]));
             if (filter.type === 'gt') return new Date(row[filter.column]).getTime() > new Date(filter.value).getTime();
@@ -76,6 +77,8 @@ function createFakeSupabase({ jobs = [], words = [], users = [], cache = [], fai
             return this;
         }
 
+        is(column,value) { this.filters.push({type:'is',column,value}); return this; }
+        limit() { return this; }
         in(column, values) {
             this.filters.push({ type: 'in', column, values: [...values] });
             return this;
@@ -292,7 +295,7 @@ function generationJob(overrides = {}) {
 }
 
 function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
-    return {
+    const result = {
         question_type: '1',
         question_text: questionText,
         context_zh: '这是与当前英文题干对应的完整中文句子翻译。',
@@ -302,6 +305,7 @@ function candidate(questionText, distractors = ['shore', 'desk', 'road']) {
         correct_meaning: '银行',
         ai_audit_status: 'approved',
     };
+    return {...require('./current-policy-fixture').attestRow(result)};
 }
 
 for (const contexts of [
@@ -382,7 +386,7 @@ test('Supabase job store saves a checkpoint only through the owned live lease', 
     const active = generationJob();
     const fake = createFakeSupabase({ jobs: [active] });
     const store = createSupabaseQuestionGenerationJobStore({ client: fake.client, now: () => new Date(NOW) });
-    const checkpoint = { schemaVersion: 1, variants: [{ question_fingerprint: 'approved-1' }] };
+    const checkpoint = { schemaVersion: 1, policyVersion:'context-learning-v3', variants: [{ question_fingerprint: 'approved-1' }] };
 
     const saved = await store.saveCheckpoint(active, checkpoint, { workerId: 'worker-a' });
 
@@ -448,7 +452,7 @@ test('word loader requires both job user_id and word_id', async () => {
 
     assert.equal((await loadWord('word-bank-finance', 'user-1')).meaning_zh, '银行');
     assert.equal(await loadWord('word-bank-finance', 'user-2'), null);
-    assert.deepEqual(fake.calls.filter(call => call.table === 'words').map(call => call.filters), [
+    assert.deepEqual(fake.calls.filter(call => call.table === 'words' && call.filters.some(f=>f.column==='id')).map(call => call.filters), [
         [
             { type: 'eq', column: 'id', value: 'word-bank-finance' },
             { type: 'eq', column: 'user_id', value: 'user-1' },
@@ -747,6 +751,7 @@ test('runtime resumes an approved checkpoint variant and durably saves its new s
     const first = candidate('She deposited her savings at the bank.');
     const active = generationJob({
         generation_checkpoint: {
+            policyVersion: require("../question-policy").QUESTION_POLICY,
             schemaVersion: 1,
             wordVersion: 1,
             level: String.fromCharCode(0x4e2d, 0x5b66),
@@ -948,7 +953,7 @@ test('durable runtime blocks publication without required content evidence',asyn
     const active=generationJob();
     const fake=createFakeSupabase({jobs:[active],words:[{id:active.word_id,user_id:active.user_id,word:'bank',meaning_zh:'银行',level:'middle'}]});
     const audit=async()=>{};audit.contentPolicy='question-content-v1';
-    const runtime=createQuestionGenerationRuntime({client:fake.client,workerId:'worker-a',now:()=>new Date(NOW),maxGenerationAttempts:1,candidateBuilderOptions:{semanticAudit:audit},buildCandidates:async()=>[candidate('She deposited her savings at the bank.'),candidate('The bank approved the loan yesterday.',['branch','coin','road'])],runImmediately:false});
+    const runtime=createQuestionGenerationRuntime({client:fake.client,workerId:'worker-a',now:()=>new Date(NOW),maxGenerationAttempts:1,candidateBuilderOptions:{semanticAudit:audit},buildCandidates:async()=>[candidate('She deposited her savings at the bank.'),candidate('The bank approved the loan yesterday.',['branch','coin','road'])].map(v=>({...v,teaching_analysis:null})),runImmediately:false});
     await assert.rejects(runtime.generationService.process(active),e=>e.rejectionReasons?.content_review_missing>0);
     assert.equal(fake.calls.some(call=>call.type==='cache_upsert'),false);
 });

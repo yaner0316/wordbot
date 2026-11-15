@@ -1,3 +1,4 @@
+const {hasCurrentQuestionPolicy}=require('./question-policy');
 'use strict';
 
 const { createQuestionGenerationJobStore } = require('./question-generation-job');
@@ -187,8 +188,12 @@ function createSupabaseWordLoader({ client } = {}) {
             .eq('user_id', exactUserId).eq('word_id', exactWordId).eq('round_type', 'primary');
         throwSupabaseError(cacheError, 'questionGeneration.loadExistingCache');
         const level = normalizeLevel(user?.learning_level);
+        const {data: vocabulary,error:vocabularyError}=await supabase.from(WORD_TABLE).select('word,mastery_status')
+            .eq('user_id',exactUserId).is('deleted_at',null).limit(200);
+        throwSupabaseError(vocabularyError,'questionGeneration.loadLearnerVocabulary');
         return {
             ...data,
+            learnerVocabulary:(vocabulary || []).sort((a,b)=>Number(['recognized','consolidating','mastered'].includes(b.mastery_status))-Number(['recognized','consolidating','mastered'].includes(a.mastery_status))).map(item=>item.word),
             excludedQuestionStems: (displays || []).map(row=>row.stem),
             cachedVariants: (cached || []).filter(row => row.level === level && !getCacheQuestionReadinessIssues({
                 ...row, user:exactUserId, word:data.word, word_record_id:exactWordId, context_cn:row.context_zh,
@@ -298,8 +303,6 @@ function defaultValidateCandidate(candidate, word) {
         : [];
     if (optionMeanings.length !== 4 || !optionMeanings.every(hasMeaningfulChineseMeaning)) {
         issues.push('bad_option_meanings');
-    } else if (new Set(optionMeanings.map(value => value.toLowerCase())).size !== 4) {
-        issues.push('duplicate_option_meanings');
     }
     if (!hasMeaningfulChineseMeaning(candidate?.correct_meaning)) {
         issues.push('bad_correct_meaning');
@@ -320,6 +323,7 @@ function defaultValidateCandidate(candidate, word) {
         issues.push(...require('./teaching-analysis').getTeachingAnalysisIssues({context:candidate.question_text,options:candidate.options,answer:candidate.answer},candidate.teaching_analysis));
     }
     const questionType = Number(candidate?.question_type || candidate?.questionType);
+    if (questionType===1 && !hasCurrentQuestionPolicy({...candidate,level:candidate?.level || word?.level,word:word?.word || candidate?.word})) issues.push('question_policy_retired');
     if (questionType === 1 && String(candidate?.ai_audit_status || '').trim().toLowerCase() !== 'approved') {
         issues.push('ai_audit_not_approved');
     }

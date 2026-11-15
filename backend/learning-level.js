@@ -2,9 +2,12 @@ const ELEMENTARY_LEVEL = String.fromCharCode(0x5c0f, 0x5b66);
 const JUNIOR_HIGH_LEVEL = String.fromCharCode(0x4e2d, 0x5b66);
 const HIGH_LEVEL = String.fromCharCode(0x9ad8, 0x4e2d);
 const DEFAULT_LEARNING_LEVEL = JUNIOR_HIGH_LEVEL;
-const LEVELS = [ELEMENTARY_LEVEL, JUNIOR_HIGH_LEVEL, HIGH_LEVEL, 'CET4_6_TOEFL'];
+const LOWER_ELEMENTARY_LEVEL = '小学低年级';
+const LEVELS = [LOWER_ELEMENTARY_LEVEL, ELEMENTARY_LEVEL, JUNIOR_HIGH_LEVEL, HIGH_LEVEL, 'CET4_6_TOEFL'];
 
 const LEVEL_ALIASES = new Map([
+    ['小学高年级', ELEMENTARY_LEVEL],
+    ['lower_primary', LOWER_ELEMENTARY_LEVEL],
     ['CET/TOEFL', 'CET4_6_TOEFL'],
     ['CET4_6_TOEFL', 'CET4_6_TOEFL'],
     ['elementary', ELEMENTARY_LEVEL],
@@ -30,7 +33,10 @@ function normalizeLevel(level, { allowNull = false, defaultLevel = DEFAULT_LEARN
     return normalized;
 }
 
+function isPrimaryLevel(level) { return [ELEMENTARY_LEVEL, LOWER_ELEMENTARY_LEVEL, '小学高年级'].includes(level); }
+
 module.exports = {
+    isPrimaryLevel, LOWER_ELEMENTARY_LEVEL,
     DEFAULT_LEARNING_LEVEL,
     ELEMENTARY_LEVEL,
     HIGH_LEVEL,

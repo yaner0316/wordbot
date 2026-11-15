@@ -44,7 +44,7 @@ function word(index, overrides = {}) {
 
 function cache(index, overrides = {}) {
     const { fields: fieldOverrides = {}, ...rowOverrides } = overrides;
-    return {
+    const result = {
         record_id: `cache-${index}`,
         fields: {
             user: 'student',
@@ -68,6 +68,8 @@ function cache(index, overrides = {}) {
         },
         ...rowOverrides,
     };
+    result.fields={...require('./current-policy-fixture').attestRow(result.fields),...fieldOverrides};
+    return result;
 }
 
 function cacheVariant(wordIndex, variantSlot, overrides = {}) {
@@ -78,7 +80,7 @@ function cacheVariant(wordIndex, variantSlot, overrides = {}) {
             variant_slot: variantSlot,
             question_fingerprint: `fp-${wordIndex}-${variantSlot}`,
             question_text: `Variant ${variantSlot} sentence for word-${wordIndex}.`,
-            options: JSON.stringify(['A. word-' + wordIndex, 'B. distractor-' + variantSlot + '-1', 'C. distractor-' + variantSlot + '-2', 'D. distractor-' + variantSlot + '-3']),
+            options: JSON.stringify(['A. word-' + wordIndex, 'B. distractor' + String.fromCharCode(96+variantSlot) + 'one', 'C. distractor' + String.fromCharCode(96+variantSlot) + 'two', 'D. distractor' + String.fromCharCode(96+variantSlot) + 'three']),
             ...overrides,
         },
     });

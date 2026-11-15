@@ -77,6 +77,13 @@ with claim_proc as (
   group by rpc.name, rpc.oid, proc.prosecdef, proc.proconfig
 )
 select
+  coalesce((select position('question-content-v3' in prosrc)>0 from pg_proc where oid=to_regprocedure('public.is_current_question_policy(jsonb)')),false) as question_policy_function,
+  exists(select 1 from pg_trigger where tgname='guard_question_policy_write' and not tgisinternal and tgenabled='O') as question_policy_cache_guard,
+  exists(select 1 from pg_trigger where tgname='guard_new_question_policy_snapshot' and not tgisinternal and tgenabled='O') as question_policy_snapshot_guard,
+  coalesce((select position('QUESTION_POLICY_RETIRED' in prosrc)>0 from pg_proc where oid=to_regprocedure('public.publish_question_generation_variants(uuid,text,bigint,uuid,jsonb)')),false) as question_policy_pair_publisher,
+  coalesce((select position('QUESTION_POLICY_RETIRED' in prosrc)>0 from pg_proc where oid=to_regprocedure('public.publish_question_generation_practice_variant(uuid,text,bigint,uuid,jsonb)')),false) as question_policy_practice_publisher,
+  coalesce((select position('is_current_question_policy' in prosrc)>0 from pg_proc where oid=to_regprocedure('public.enqueue_question_generation_job_if_needed(uuid,uuid,text)')),false) as question_policy_coverage,
+  exists(select 1 from pg_enum e join pg_type t on t.oid=e.enumtypid where t.typname='wordbot_level' and e.enumlabel='小学低年级') as question_policy_lower_primary,
   coalesce((select prosrc like '%v_practice%' and prosrc like '%counts_for_cooldown%' and prosrc like '%not v_practice%'
     from pg_catalog.pg_proc where oid=to_regprocedure('public.create_formal_quiz_challenge(uuid,text,text,jsonb,timestamptz)')),false) as custom_practice_creation_contract,
   exists(select 1 from pg_catalog.pg_constraint where conrelid=to_regclass('public.quiz_challenges')
@@ -484,6 +491,7 @@ const MIGRATION_PATHS = Object.freeze([
   path.resolve(__dirname, '..', 'migrations', '20261013_custom_practice.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261025_unserved_challenge_demand.sql'),
   path.resolve(__dirname, '..', 'migrations', '20261025_practice_single_publication.sql'),
+  path.resolve(__dirname, '..', 'migrations', '20261115_question_policy_retirement.sql'),
 ]);
 
 const RPC_EXPECTATION_KEYS = Object.freeze([
@@ -515,6 +523,8 @@ const RPC_EXPECTATION_KEYS = Object.freeze([
 }));
 
 const EXPECTED_STATE = Object.freeze({
+  question_policy_function:true, question_policy_cache_guard:true, question_policy_snapshot_guard:true,
+  question_policy_pair_publisher:true, question_policy_practice_publisher:true, question_policy_coverage:true, question_policy_lower_primary:true,
   custom_practice_creation_contract: true,
   custom_practice_mode_constraint: true,
   teaching_analysis_cache_column: true,
@@ -663,7 +673,9 @@ async function applyQuestionGenerationMigrations({
 
     const appliedMigrations = [];
     const missing = verificationFailures(verification);
-    const paths = missing.length === 1 && missing[0] === 'practice_single_publish_contract'
+    const paths = missing.every(key=>key.startsWith('question_policy_'))
+      ? MIGRATION_PATHS.filter(file=>path.basename(file)==='20261115_question_policy_retirement.sql')
+      : missing.length === 1 && missing[0] === 'practice_single_publish_contract'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261025_practice_single_publication.sql')
       : missing.length === 1 && missing[0] === 'challenge_demand_unserved_priority'
       ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261025_unserved_challenge_demand.sql')
@@ -684,6 +696,9 @@ async function applyQuestionGenerationMigrations({
       : missing.length === 1 && missing[0] === 'display_replenishment_trigger'
         ? MIGRATION_PATHS.filter(file => path.basename(file) === '20261009_display_replenishment.sql')
       : MIGRATION_PATHS;
+    // Replaying an older publisher/coverage migration must restore the current fence last.
+    const retirement = MIGRATION_PATHS.at(-1);
+    if (!paths.includes(retirement) && paths.some(file => /(?:practice_single_publication|parent_word_archive|teaching_analysis_snapshots)\.sql$/.test(file))) paths.push(retirement);
     for (const migrationPath of paths) {
       const sql = await readFile(migrationPath, 'utf8');
       if (!String(sql).trim()) throw new Error(`Migration file is empty: ${path.basename(migrationPath)}`);

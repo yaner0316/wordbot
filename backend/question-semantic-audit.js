@@ -1,13 +1,16 @@
-const { SURFACE_POLICY, parseSurfaceEvidence } = require('./question-surface');
+const {QUESTION_POLICY,stemInput,stemFingerprint,optionFingerprint,hasCurrentStemReview}=require('./question-policy');
+const {isPrimaryLevel}=require('./learning-level');
+const {levelGuidance,isSupportedLevel}=require('./high-school-fit');
+const {admitsGrammarDefect}=require('./audit-reason-consistency');
 const { CONTENT_REVIEW_POLICY, contentReviewPrompt, parseContentReview } = require('./question-content-review');
 const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { teachingAnalysisFromAudit, SEMANTIC_AUDIT_METHOD, semanticAuditInputFingerprint, semanticSenseFingerprint } = require('./teaching-analysis');
-const { LEVEL_FIT_POLICY, levelFitPrompt, parseLevelFitEvidence } = require('./high-school-fit');
 
-const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v2';
+
+const CURRENT_SEMANTIC_AUDIT_POLICY_VERSION = 'unique-answer-v3';
 
 function buildAttestedQuestionSourceVersion(baseVersion) {
-    return `${String(baseVersion || 'v1').trim()}|${CURRENT_SEMANTIC_AUDIT_POLICY_VERSION}`;
+    return `${String(baseVersion || 'v1').trim()}|${CURRENT_SEMANTIC_AUDIT_POLICY_VERSION}|${QUESTION_POLICY}`;
 }
 
 function extractJson(text) {
@@ -40,15 +43,20 @@ async function callMiniMax(prompt) {
 
 function buildSemanticAuditPrompt(question) {
     return [
-        'You are checking whether English sentences can be true, NOT guessing a missing vocabulary word. No intended answer is provided.',
-        'Independently evaluate EVERY completed sentence below, including every modifier and action. A sentence is possible if it has an ordinary coherent reading. Do not rank the options. Multiple possible sentences is a valid result. certain means confidence in these four fit judgments, not confidence that a unique answer exists.',
+        'You are checking whether English sentences have an ordinary coherent reading supported by the stated context, NOT guessing a missing vocabulary word. No intended answer is provided.',
+        'Independently evaluate EVERY completed sentence below, including every modifier, action and causal link. A sentence fits when its ordinary reading follows the stated situation without adding a rescue story. Do not rank the options. Multiple supported readings is a valid result. certain means confidence in these four fit judgments, not confidence that a unique answer exists.',
         'Use ordinary literal senses or recognized existing variants, not mere physical conceivability. Do not invent modified objects, hypothetical product designs, role-play, or missing parts to give an option the defining structure of another object. A cover or component is not the whole named object. A nonstandard reading needs an identifiable real sense or existing variant; saying it could be designed or cannot be ruled out is not evidence. Assess ordinary language, not every imaginable modification.',
-        'Rejecting an option requires an explicit contradiction with words actually in that completed sentence, or a grammatical impossibility. Less usual, less typical, less convenient, and an unstated preference do NOT make it impossible. Do not invent restrictions about ownership, usual locations, portability, animal behavior, container lids, or an unstated body part. Do not silently narrow an ambiguous action to one intended sense: a quick brush does not specify teeth rather than hair.',
+        'Reject an option for a grammatical impossibility, a contradiction with the stated context, or a reading that requires an unstated premise. Do not add unstated motives, actions, or background to rescue an option. Possibility in a story you can imagine is not support in this sentence. In particular, do not invent hidden intentions or preferences, extra events before or after the stated action, an accidental second action, or a special role or setting solely to make a distractor fit. Preserve the printed causal, temporal and referential links.',
+        'Distinguish missing rescue premises from ordinary word meanings and shared world knowledge. The action explicitly asserted by a completion is not itself an added premise. A person can perform an ordinary stated action outside their usual profession without inventing a second occupation or hobby. Less usual or less typical alone is NOT a reason to exclude. Do not invent restrictions about ownership, locations, portability or body parts. Do not silently narrow a genuinely ambiguous action to one intended sense: a quick brush does not specify teeth rather than hair. Apply the same standard to ALL options; do not force uniqueness.',
+        'For EVERY judgment return addedPremises: an array of the specific unstated motives, actions or background required to make that reading work. Use [] if none are required. If a reading works only after adding such premises, set fits=false, exclusion=unstated_premise, list them and explain why the printed context does not supply them. fits=true requires addedPremises=[] and exclusion=none. For grammar or contradiction exclusions use addedPremises=[] and identify the printed defect. If unsure whether a premise is needed, set certain=false. Do not label a real, already supported alternative as an unstated premise just to exclude it.',
         'A capable instrument can play a song regardless of how common it is in school. A flask can have a screw cap. A quilt can be on a couch. But an animal lacking a trunk cannot satisfy USING ITS TRUNK, even if it can drink water.',
         'EVERY judgment, including fits=true, must provide a non-null clueIndex pointing to an original fragment of at least three characters. A fitting sentence needs an explicit supporting clue just as an exclusion needs evidence. Do not omit the index or set it to null for the fitting option.',
         'Judge the printed English words across ALL their ordinary senses. No hidden option glossary may restrict a distractor to one dictionary sense: the learner sees the English option, so any ordinary meaning that fits counts. The intended learning sense is checked separately only after English uniqueness is established.',
         'For each judgment also copy word exactly from that completion. Keep letter and word paired: never explain one word under another letter. The meaning field is the meaning of that word alone, not a paraphrase of the whole sentence or the desired answer. Choose the fragment containing the actual distinguishing clue, not a generic subject or introductory verb. Explain only the printed option; do not silently replace it with a synonym.',
-        'Return valid JSON only: certain (boolean) and optionJudgments (all four, one per letter). Each judgment has letter, word (copy the completion input word exactly), fits (boolean), exclusion (none/grammar/contradiction), clueIndex (integer index of the relevant original fragment below), meaning (Chinese dictionary meaning of word ALONE, 2-12 characters, never the surrounding clue, attribute, or full action), reason (Chinese: justify the entire completed sentence; for exclusions identify the actual contradiction, not mere rarity). Do not put double-quote characters inside string values. Do NOT quote an expanded completion as evidence; cite a provided original fragment by its index. When all four judgments are grounded, set certain=true even if several fit. If a judgment remains unresolved, set certain=false and state the unresolved reading or fact in reason. No answer letter, no choice of the best option.',
+        'Also return wordValid (boolean: real correctly formed word/phrase, independent of fitting this blank), levelSuitable (boolean: no unsupported lexical burden), and grammatical (boolean) for each exact completion. Judge grammar separately from semantic truth. Do not silently correct a verb or insert words: if the printed completion needs such a correction, grammatical=false, fits=false, exclusion=grammar. Every conclusion must agree with its reason, even if this means no option fits.',
+        'A different part of speech may legitimately fail this blank; that does not make the option malformed. Do not reject two wrong choices just because their meanings overlap. Return semanticDiscrimination:boolean: at least one grammatically usable wrong alternative must require meaning/context to exclude; reject a question solvable solely by POS or option formatting.',
+        levelGuidance(question.level),
+        'Return valid JSON only: semanticDiscrimination (boolean), certain (boolean) and optionJudgments (all four, one per letter). Each judgment has grammatical (boolean), wordValid (boolean), levelSuitable (boolean), letter, word (copy the completion input word exactly), fits (boolean), exclusion (none/grammar/contradiction/unstated_premise), addedPremises (array of Chinese strings), clueIndex (integer index of the relevant original fragment below), meaning (Chinese dictionary meaning of word ALONE, 2-12 characters, never the surrounding clue, attribute, or full action), reason (Chinese: justify the entire completed sentence; for exclusions identify the actual contradiction, grammatical defect or required unstated premise, not mere rarity). Do not put double-quote characters inside string values. Do NOT quote an expanded completion as evidence; cite a provided original fragment by its index. When all four judgments are grounded, set certain=true even if several fit. If a judgment remains unresolved, set certain=false and state the unresolved reading or fact in reason. No answer letter, no choice of the best option.',
         JSON.stringify({original:question?.context,fragments:String(question?.context || '').split(/_{3,}/).map((text,index)=>({index,text:text.trim()})).filter(f=>f.text.length>=3),completions:(question?.options || []).map((option,index)=>({letter:'ABCD'[index],word:String(option).replace(/^[A-D]\.\s*/,''),sentence:String(question?.context || '').replace(/_{3,}/g,String(option).replace(/^[A-D]\.\s*/,''))}))}),
     ].join('\n');
 }
@@ -66,15 +74,24 @@ async function evaluateUniqueAnswer(question, { callModel = callMiniMax } = {}) 
         const declared = Array.isArray(parsed?.validLetters) ? [...new Set(parsed.validLetters)].sort() : null;
         const validLetters = complete ? judgments.filter(item=>item.fits).map(item=>item.letter).sort() : declared || [];
         const context = String(question?.context || '');
+        // Formal evidence must say whether a reading needs invented circumstances.
+        // A contradictory label is a re-audit request, never an automatic exclusion.
+        const premiseEvidenceValid = complete && judgments.every(item=>{
+            if (item.addedPremises === undefined && !question.requireContentReview && item.exclusion !== 'unstated_premise') return true;
+            if (!Array.isArray(item.addedPremises) || !item.addedPremises.every(p=>typeof p==='string' && p.trim().length>0)) return false;
+            return item.exclusion === 'unstated_premise'
+                ? item.fits === false && item.addedPremises.length>0
+                : item.addedPremises.length===0;
+        });
         const grounded = complete && judgments.every(item=>item.fits ? item.exclusion === 'none'
-            : ['grammar','contradiction'].includes(item.exclusion))
+            : ['grammar','contradiction','unstated_premise'].includes(item.exclusion)) && premiseEvidenceValid
             && judgments.every(item=>typeof item.clue === 'string' && item.clue.length >= 3 && !/_{3,}/.test(item.clue) && context.includes(item.clue));
         const consistent = !declared || JSON.stringify(declared) === JSON.stringify(validLetters);
         const fitting = judgments.find(item=>item.fits);
         const teachingAnalysis = parsed?.certain === true && grounded && consistent && validLetters.length === 1
             ? teachingAnalysisFromAudit(question,{optionJudgments:judgments,clue:fitting.clue,clueReason:fitting.reason,correctReason:fitting.reason}) : null;
         const approved = validLetters[0] === answer && !!teachingAnalysis;
-        const code = !complete ? 'semantic_evidence_invalid' : parsed?.certain !== true ? 'semantic_audit_uncertain'
+        const code = !complete || !premiseEvidenceValid ? 'semantic_evidence_invalid' : parsed?.certain !== true ? 'semantic_audit_uncertain'
             : validLetters.length !== 1 ? 'semantic_non_unique' : validLetters[0] !== answer ? 'semantic_expected_mismatch'
             : !approved ? 'semantic_evidence_invalid' : 'semantic_unique';
         const inputFingerprint = semanticAuditInputFingerprint(question);
@@ -91,6 +108,7 @@ async function evaluateUniqueAnswer(question, { callModel = callMiniMax } = {}) 
             inputFingerprint,
             ...(senseFingerprint?{senseFingerprint}:{}),
             optionJudgments: judgments,
+            semanticDiscrimination:parsed?.semanticDiscrimination,
             ...(approved ? {teachingAnalysis} : {}),
         };
     } catch (error) {
@@ -105,79 +123,118 @@ async function evaluateUniqueAnswer(question, { callModel = callMiniMax } = {}) 
     }
 }
 
-function buildCriticalExclusionPrompt(question) {
-    const lines = buildSemanticAuditPrompt(question).split('\n');
-    const input = lines.pop();
-    return [...lines,
-        'CRITICAL EXCLUSION CHECK: independently look for an ordinary coherent reading of EVERY completed sentence before excluding it. You receive no prior reviewer judgments or proposed answer. A statement about a standard or usual form does not rule out a real variant. Consider real alternatives, polysemy and existing instrument variants; do not invent fantasy exceptions. Six-string banjos and six-string ukuleles exist, and a violin can be plucked. Mere standard string counts cannot establish impossibility. When the evidence does not establish a contradiction and you cannot decide, set certain=false. Return your own complete four judgments using the same schema.',
-        input].join('\n');
-}
-
-function buildWordSensePrompt(question) {
-    const index='ABCD'.indexOf(String(question.answer).toUpperCase());
-    const word=String(question.options[index]).replace(/^[A-D]\.\s*/,'');
-    const providedSense=(question.optionMeanings || question.option_meanings)[index];
-    return [
-            'WORD SENSE CHECK. 独立核对：英文单词在当前完整句中实际使用的词义，是否属于给定中文释义？只比较当前输入，不是在选答案。拼写相同不代表同一义项，材质与用这种材质制成的整件物品不是同一词义。例：nickel 给定镍时指金属元素，不能扩充为镍币或五美分硬币；但给定五美分硬币时可以指该硬币。calf 给定小腿时指身体部位，给定小牛时则可以指母牛产下的幼崽。例子不是对当前输入的预判。若给定释义明确列出多个义项，句中符合其中一个即可；不要擅自补入未列出的义项。相符就 matches=true，不相符或无法判断就 false；不要编造相关词不能同时出现等额外条件。',
-            '给定释义可以比句中实例宽泛：没有额外限定的键盘包括电脑键盘和钢琴键盘，杯子包括陶瓷杯；不能因为释义没有逐项列出普通子类或用途就拒绝。只有给定释义本身明确限定为电脑键盘时，钢琴键盘才不符。具体实例与一般类别的关系，不等于另一词义或材质与制品的关系。',
-            '只判断 markedSentence 中用« »标出的那个词，不要把同句其他词或主句的情绪误当成它的词义。先说明该词在所在分句中的实际用法和词义，再对照给定释义，最后给出布尔结论；解释若承认属于给定义项，matches不能又写false。',
-            'Return ONE JSON object with top-level providedSense (copy the input exactly), contextualSense (short Chinese), reason (brief Chinese justification), matches (boolean), surface, levelFit, and contentReview when requested. If uncertain, matches=false. Each evidence section is an object, never an array of objects. Do not put double-quote characters inside string values.',
-            'Also check the EXACT printed grammar, inflection, spelling and capitalization of ALL FOUR completions. Do not silently correct them. Ignore semantic contradictions for this grammar check. All four options must be grammatically usable in the blank: grammatical mismatch is not an acceptable distractor clue. Check modals followed by base verbs, subject agreement, noun number, parallel lists, proper names and sentence-initial capitalization.',
-            'Add surface: {options:[{letter,word,grammatical,reason}]} for all four letters; copy word exactly; grammatical is boolean, reason is a brief Chinese explanation. A noun such as recreation cannot follow can as a verb. A correct answer with invalid grammar requires a new context; a malformed distractor requires replacement.',
-            'Separate syntax from truth: a grammatically formed sentence may describe a false or impossible event. For example, The wooden spoon has a graphite tip is grammatically correct even though ordinary spoons have no graphite tip. Such a semantic contradiction must NOT set grammatical=false. If your reason admits the syntax is valid, grammatical must be true. Do not repeat the uniqueness decision as a grammar judgment.',
-            levelFitPrompt(question),
-            question.requireContentReview ? contentReviewPrompt(question) : '',
-            'Before returning, check JSON shape: surface must be {"options":[...four judgments...]}, not [{"options":[...]}]. levelFit.clueIndex must select an originalFragments item beside the blank. Do not return levelFit.clue or a completed sentence as evidence. Do not omit other evidence sections after a negative sense judgment.',
-            JSON.stringify({word,providedSense,completedSentence:question.context.replace(/_{3,}/g,word),markedSentence:question.context.replace(/_{3,}/g,'«'+word+'»'),completions:question.options.map((option,index)=>({letter:'ABCD'[index],word:String(option).replace(/^[A-D]\.\s*/,''),sentence:question.context.replace(/_{3,}/g,String(option).replace(/^[A-D]\.\s*/,''))}))}),
-        ].join('\n');
-}
-
 function parseWordSenseEvidence(question,raw) {
     const sense=extractJson(raw),index='ABCD'.indexOf(String(question.answer).toUpperCase());
+    const printedWord=String(question.options[index]).replace(/^[A-D]\.\s*/,'');
+    const changed=question.word && String(question.word).toLowerCase()!==printedWord.toLowerCase();
+    if (changed) {
+        const e=sense?.targetInflection;
+        const complete=e?.baseWord===question.word && e?.printedWord===printedWord && typeof e.sameLexeme==='boolean'
+            && ['noun_number','verb_inflection','adjective_degree','other_inflection','invalid'].includes(e.change)
+            && /[\u3400-\u9fff]/.test(String(e.reason || '')) && String(e.reason || '').length>=8;
+        if (!complete || !e.sameLexeme || e.change==='invalid' || isPrimaryLevel(question.level) && e.change!=='noun_number')
+            return {approved:false,status:'rejected',code:complete?'semantic_expected_sense_mismatch':'semantic_evidence_invalid',reason:e?.reason || 'target inflection evidence missing',senseAudit:sense};
+    }
     const providedSense=(question.optionMeanings || question.option_meanings)?.[index];
     const grounded=typeof sense?.matches==='boolean' && String(sense.providedSense || '').trim()===String(providedSense || '').trim()
             && /[\u3400-\u9fff]/.test(String(sense.contextualSense || '')) && /[\u3400-\u9fff]/.test(String(sense.reason || '')) && String(sense.reason || '').trim().length>=8;
     if (!grounded || !sense.matches) return {approved:false,status:'rejected',code:grounded?'semantic_expected_sense_mismatch':'semantic_evidence_invalid',reason:grounded?sense.reason:'sense evidence invalid',senseAudit:sense};
-    return {approved:true,status:'approved',senseVerified:true,senseFingerprint:semanticSenseFingerprint(question),senseAudit:sense};
+    return {approved:true,status:'approved',senseVerified:true,...(changed?{targetFormVerified:true}:{}),senseFingerprint:semanticSenseFingerprint(question),senseAudit:sense};
 }
 
-async function auditUniqueAnswer(question, { callModel = callMiniMax } = {}) {
-    const initial = await evaluateUniqueAnswer(question, {callModel});
-    if (!initial.approved) return initial;
-    // A malformed distractor is a repair request, not proof of vocabulary mastery.
-    // Never let a subsequent model response overwrite a recorded grammar failure.
-    const grammarFailure = review => question.level && review.optionJudgments?.some(item => item.exclusion === 'grammar')
-        ? {...review, approved:false, status:'rejected', code:'surface_distractors', teachingAnalysis:undefined} : null;
-    if (grammarFailure(initial)) return grammarFailure(initial);
-    // Approval requires the exclusions to survive an explicit counterexample check.
-    const verified = await evaluateUniqueAnswer(question, {callModel:() => callModel(buildCriticalExclusionPrompt(question))});
-    if (!verified.approved) return {...verified, proofChecks:2};
-    if (grammarFailure(verified)) return {...grammarFailure(verified), proofChecks:2};
-    if (!semanticSenseFingerprint(question)) return question.level
-        ? {...verified,approved:false,status:'rejected',code:'level_fit_evidence_invalid',teachingAnalysis:undefined,proofChecks:2}
-        : {...verified,proofChecks:2};
-    // Reuse the two actual uniqueness judgments; verify the specified sense separately.
-    const {teachingAnalysis,...withoutTeaching}=verified;
-    try {
-        const raw = await callModel(buildWordSensePrompt(question));
-        const surface = question.level ? parseSurfaceEvidence(question,extractJson(raw)?.surface) : {approved:true};
-        if (!surface.approved) return {...withoutTeaching,...surface,proofChecks:2,senseChecks:1};
-        const sense=parseWordSenseEvidence(question,raw);
-        if (!sense.approved) return {...withoutTeaching,...sense,proofChecks:2,senseChecks:1};
-        const fit = parseLevelFitEvidence(question,extractJson(raw)?.levelFit);
-        if (!fit.approved) return {...withoutTeaching,...fit,proofChecks:2,senseChecks:1};
-        const content=question.requireContentReview ? parseContentReview(question,extractJson(raw)?.contentReview,{requireOptionSeparation:true}) : {approved:true};
-        if (!content.approved) return {...withoutTeaching,...content,proofChecks:2,senseChecks:1};
-        return {...verified,...sense,...fit,proofChecks:2,senseChecks:1,teachingAnalysis:{...teachingAnalysis,...(surface.surface ? {surface:surface.surface} : {}),senseVerified:true,...(fit.levelFit ? {levelFit:fit.levelFit} : {}),...(content.contentReview ? {contentReview:content.contentReview} : {})}};
-    } catch (error) {
-        miniMaxFallback(error,null);
-        return {...withoutTeaching,approved:false,status:'unavailable',proofChecks:2,code:'semantic_audit_unavailable',reason:'sense audit unavailable'};
+const STEM_CHECKS=['grammar','naturalness','sense','form','level','clue','burden'];
+const validReason=value=>typeof value==='string' && value.trim().length>=8 && /[\u3400-\u9fff]/.test(value);
+function buildStemReviewPrompt(question) {
+    const input=stemInput(question);
+    return [
+        'STEM REVIEW. Review ONLY the English stem with the printed target filled in, before options or translations exist. No uniqueness judgment at this stage.',
+        'Check grammar/completeness (no sentence fragments), naturalness, selected sense/POS, legal target form, learner level, a useful stated clue to the target meaning, and reading burden. Multiple complete sentences are allowed. There is NO word-count or clause-count ceiling. Identify actual unsupported language, inference/background knowledge or unnecessary padding; length alone is not a defect.',
+        'The selected sense must actually be used in the sentence. A broad meaning may include its ordinary concrete subtypes; a noun cannot silently become a different verb sense. If the sentence uses another sense, revise English, never rewrite the selected Chinese meaning.',
+        isPrimaryLevel(input.level)
+            ? '小学两档：Only noun singular/plural changes are permitted. Keep target verbs exactly in the supplied form, and do not change adjective degree. This restriction concerns the target, not every supporting verb in the sentence.'
+            : 'Junior-secondary and above permit grammatical inflection of the same lexical entry, sense and POS. No synonyms or derivationally different words.',
+        levelGuidance(input.level),
+        'Return JSON {certain:boolean,checks:{grammar:{pass:boolean,evidence:exact substring of completedSentence,reason:Chinese},naturalness:{...},sense:{...},form:{...},level:{...},clue:{...},burden:{...}}}. Each check must cite the actual input and explain its conclusion (at least 8 Chinese/mixed characters), not just appropriate. A stated defect cannot accompany pass=true. Uncertain evidence cannot approve.',
+        input.word.toLowerCase()!==input.targetForm.toLowerCase()
+            ? 'Also return targetInflection:{baseWord:copy canonical word,printedWord:copy targetForm,sameLexeme:boolean,change:noun_number/verb_inflection/adjective_degree/other_inflection/invalid,reason:Chinese evidence}. Similar spelling alone is not lexical identity.' : '',
+        JSON.stringify({...input,completedSentence:input.context.replace(/_{3,}/g,input.targetForm)}),
+    ].filter(Boolean).join('\n');
+}
+function parseStemReview(question,parsed) {
+    const input=stemInput(question),completed=input.context.replace(/_{3,}/g,input.targetForm);
+    if (!isSupportedLevel(input.level)) return {approved:false,status:'rejected',code:'level_fit_unsupported',reason:'不支持的学习难度。'};
+    const checks=parsed?.checks;
+    const invalid=()=>({approved:false,status:'rejected',code:'stem_evidence_invalid',reason:'题干审核证据缺失或与输入不一致。'});
+    if (!input.word || !input.targetForm || !input.targetMeaning || !input.level || !checks
+        || !STEM_CHECKS.every(key=>typeof checks[key]?.pass==='boolean' && validReason(checks[key]?.reason)
+            && typeof checks[key]?.evidence==='string' && checks[key].evidence.length>=2 && completed.includes(checks[key].evidence))) return invalid();
+    const failures=STEM_CHECKS.filter(key=>!checks[key].pass);
+    if (checks.grammar.pass && admitsGrammarDefect(checks.grammar.reason)) return invalid();
+    if (failures.length) {
+        const code=failures.includes('sense') || failures.includes('form') ? 'semantic_expected_sense_mismatch'
+            : failures.includes('level') || failures.includes('burden') ? 'level_fit_context' : 'surface_context';
+        return {approved:false,status:'rejected',code,reason:failures.map(key=>checks[key].reason).join('; '),repairEvidence:failures.map(key=>({check:key,...checks[key]}))};
     }
+    if (parsed.certain!==true) return invalid();
+    const changed=input.word.toLowerCase()!==input.targetForm.toLowerCase();
+    if (changed) {
+        const e=parsed.targetInflection;
+        if (e?.baseWord!==input.word || e?.printedWord!==input.targetForm || e.sameLexeme!==true || !validReason(e.reason)
+            || !['noun_number','verb_inflection','adjective_degree','other_inflection'].includes(e.change)
+            || isPrimaryLevel(input.level) && e.change!=='noun_number')
+            return {approved:false,status:'rejected',code:'semantic_expected_sense_mismatch',reason:e?.reason || '目标词形缺少同词条证据。',repairEvidence:[e || {}]};
+    }
+    return {approved:true,status:'approved',policy:QUESTION_POLICY,inputFingerprint:stemFingerprint(question),checks,
+        ...(changed?{targetFormVerified:true,targetInflection:parsed.targetInflection}:{})};
 }
-auditUniqueAnswer.auditMethod = SEMANTIC_AUDIT_METHOD;
-auditUniqueAnswer.senseAware = true;
-auditUniqueAnswer.surfacePolicy = SURFACE_POLICY;
-auditUniqueAnswer.contentPolicy = CONTENT_REVIEW_POLICY;
-auditUniqueAnswer.levelFitPolicy = LEVEL_FIT_POLICY;
-
-module.exports = { CURRENT_SEMANTIC_AUDIT_POLICY_VERSION, buildAttestedQuestionSourceVersion, buildSemanticAuditPrompt, buildCriticalExclusionPrompt, buildWordSensePrompt, parseWordSenseEvidence, auditUniqueAnswer };
+async function auditStem(question,{callModel=callMiniMax}={}) {
+    try {return parseStemReview(question,extractJson(await callModel(buildStemReviewPrompt(question))));}
+    catch(error) {miniMaxFallback(error,null);return {approved:false,status:'unavailable',code:'stem_audit_unavailable',reason:'题干审核暂不可用。'};}
+}
+async function auditOptions(question,{callModel=callMiniMax}={}) {
+    const result=await evaluateUniqueAnswer({...question,requireContentReview:true},{callModel});
+    const correct=result.optionJudgments?.find(item=>item.letter===question.answer);
+    if (correct && (correct.grammatical===false || admitsGrammarDefect(correct.reason)))
+        return {...result,approved:false,status:'rejected',code:'surface_context',reason:correct.reason,repairEvidence:[correct],teachingAnalysis:undefined};
+    if (!result.approved) return result;
+    const invalid=code=>({...result,approved:false,status:'rejected',code,teachingAnalysis:undefined,
+        reason:result.optionJudgments.map(item=>item.word+': '+item.reason).join('; '),repairEvidence:result.optionJudgments});
+    if (!result.optionJudgments.every(item=>typeof item.grammatical==='boolean' && typeof item.wordValid==='boolean' && typeof item.levelSuitable==='boolean'
+        && (!item.fits || item.grammatical) && (item.grammatical || item.exclusion==='grammar')
+        && !(item.grammatical && admitsGrammarDefect(item.reason)))) return invalid('semantic_evidence_invalid');
+    if (result.optionJudgments.some(item=>!item.wordValid)) return invalid('surface_distractors');
+    if (result.optionJudgments.some(item=>!item.levelSuitable)) return invalid('level_fit_distractors');
+    if (result.semanticDiscrimination!==true || !result.optionJudgments.some(item=>!item.fits && item.grammatical)) return invalid('options_no_semantic_discrimination');
+    return {...result,policy:QUESTION_POLICY,optionFingerprint:optionFingerprint(question),proofChecks:1};
+}
+async function auditTranslation(question,{callModel=callMiniMax}={}) {
+    try {
+        const parsed=extractJson(await callModel(contentReviewPrompt(question))),e=parsed?.contentReview;
+        if (typeof e?.targetSense?.matches!=='boolean' || !validReason(e.targetSense.reason) || !/[\u3400-\u9fff]/.test(e.targetSense.contextualSense || ''))
+            return {approved:false,status:'rejected',code:'content_review_missing',reason:'词义核对证据不完整。'};
+        if (!e.targetSense.matches) return {approved:false,status:'rejected',code:'semantic_expected_sense_mismatch',reason:e.targetSense.reason,repairEvidence:[e.targetSense]};
+        return parseContentReview(question,e);
+    } catch(error) {miniMaxFallback(error,null);return {approved:false,status:'unavailable',code:'translation_audit_unavailable',reason:'翻译审核暂不可用。'};}
+}
+async function auditUniqueAnswer(question,{callModel=callMiniMax}={}) {
+    const stem=hasCurrentStemReview(question,question.stemReview) ? question.stemReview : await auditStem(question,{callModel});
+    if (!stem.approved) return stem;
+    const saved=question.optionReview;
+    const options=saved?.approved && saved.policy===QUESTION_POLICY && saved.optionFingerprint===optionFingerprint(question)
+        ? saved : await auditOptions(question,{callModel});
+    if (!options.approved) return options;
+    const translation=await auditTranslation(question,{callModel});
+    if (!translation.approved) return {...translation,validLetters:options.validLetters,proofChecks:1};
+    const senseFingerprint=semanticSenseFingerprint(question);
+    return {...options,senseVerified:true,senseFingerprint,targetFormVerified:stem.targetFormVerified===true,
+        teachingAnalysis:{...options.teachingAnalysis,policy:QUESTION_POLICY,canonicalWord:question.word,stemReview:stem,
+            senseVerified:true,senseFingerprint,contentReview:translation.contentReview}};
+}
+auditUniqueAnswer.auditMethod=SEMANTIC_AUDIT_METHOD;
+auditUniqueAnswer.senseAware=true;
+auditUniqueAnswer.contentPolicy=CONTENT_REVIEW_POLICY;
+auditUniqueAnswer.questionPolicy=QUESTION_POLICY;
+auditUniqueAnswer.auditStem=auditStem;
+auditUniqueAnswer.auditOptions=auditOptions;
+module.exports={CURRENT_SEMANTIC_AUDIT_POLICY_VERSION,buildAttestedQuestionSourceVersion,buildSemanticAuditPrompt,
+    buildStemReviewPrompt,parseStemReview,parseWordSenseEvidence,auditStem,auditOptions,auditTranslation,auditUniqueAnswer};

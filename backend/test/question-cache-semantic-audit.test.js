@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { auditQuestionCacheRows } = require('../question-cache-semantic-audit');
 
-test('dry-run reports cache ids and per-user counts without changing rows', () => {
+test('Chinese gloss overlap alone is not a semantic rejection and the scan remains read-only', () => {
     const rows = [
         { id: 'cache-cushion', user_id: 'u1', word: 'cushion', quality_status: 'ready', cache_state: 'active', question_type: 1, question_text: 'Use a soft _____.', options: ['A. cushion','B. pillow','C. bolster','D. pad'], answer: 'A', option_meanings: ['垫子,软垫','枕头','长枕','垫子'], ai_audit_status: 'approved' },
         { id: 'cache-conference', user_id: 'u1', word: 'conference', quality_status: 'ready', cache_state: 'reserved_next_day', question_type: 1, question_text: 'Attend the _____.', options: ['A. seminar','B. conference','C. forum','D. symposium'], answer: 'B', option_meanings: ['研讨会','会议,研讨会','论坛','专题讨论会'], ai_audit_status: 'approved' },
@@ -11,9 +11,9 @@ test('dry-run reports cache ids and per-user counts without changing rows', () =
     const before = JSON.stringify(rows);
     const report = auditQuestionCacheRows(rows, [{ id: 'u1', username: 'yusi' }, { id: 'u2', username: 'qiuqiu' }]);
 
-    assert.equal(report.affectedCount, 2);
-    assert.deepEqual(report.byUser, { yusi: 2 });
-    assert.deepEqual(report.affected.map(item => item.cacheId), ['cache-cushion', 'cache-conference']);
+    assert.equal(report.affectedCount, 0);
+    assert.deepEqual(report.byUser, {});
+    assert.deepEqual(report.affected, []);
     assert.equal(JSON.stringify(rows), before);
 });
 

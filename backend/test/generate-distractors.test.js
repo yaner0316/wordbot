@@ -14,7 +14,7 @@ test('returns three clean single-word distractors from LLM JSON', async () => {
     assert.deepEqual(result, ['pear', 'banana', 'orange']);
 });
 
-test('rejects phrase distractors so fill-in rebuild can fall back safely', async () => {
+test('accepts natural phrase candidates for contextual review', async () => {
     const result = await selectContextualDistractors({
         word: 'apple',
         context: 'I ate an apple after lunch.',
@@ -22,7 +22,7 @@ test('rejects phrase distractors so fill-in rebuild can fall back safely', async
         callLLM: async () => '{"distractors":["agree to","banana","orange"]}',
     });
 
-    assert.equal(result, null);
+    assert.deepEqual(result, ['agree to','banana','orange']);
 });
 test('prompt uses the real stem and asks the model to avoid prior variant distractors', async () => {
     let capturedPrompt = '';
@@ -42,18 +42,11 @@ test('prompt uses the real stem and asks the model to avoid prior variant distra
     assert.match(capturedPrompt, /The child packed an ___ for the long trip\./);
     assert.match(capturedPrompt, /Required meaning: \"a fruit\"/);
     assert.match(capturedPrompt, /orange, peach, plum/);
-    assert.match(capturedPrompt, /exactly one English word/i);
-    assert.ok(capturedPrompt.length < 700, 'reasoning-model prompt must stay compact');
+    assert.match(capturedPrompt, /natural phrases/i);
+
 });
 
-test('high-school prompt keeps distractors accessible and in the same category while forbidding gloss collisions', async () => {
-    // Two production failures shaped this contract:
-    //  - Asking for the same category with no Chinese-meaning constraint produced synonym
-    //    glosses that repeated (职业/职业), which rejected candidates at 50%+ of attempts.
-    //  - Then asking for words that are "not associated" produced unrelated and harder
-    //    distractors (saucer -> sprocket/lagoon/buttress), so difficulty and plausibility
-    //    must be required explicitly, and the collision limit must be stated about the
-    //    Chinese meaning rather than by banning associated words.
+test('high-school prompt supports several candidate sources without hidden overlap veto', async () => {
     let capturedPrompt = '';
     const result = await selectContextualDistractors({
         word: 'saucer',
@@ -68,12 +61,12 @@ test('high-school prompt keeps distractors accessible and in the same category w
     });
 
     assert.deepEqual(result, ['cup', 'bowl', 'tray']);
-    assert.match(capturedPrompt, /same part of speech/i);
-    assert.match(capturedPrompt, /distractors must not add unsupported vocabulary barriers/i);
+    assert.match(capturedPrompt, /same-POS/i);
+    assert.match(capturedPrompt, /Do not add unsupported vocabulary barriers/i);
     assert.doesNotMatch(capturedPrompt, /similar difficulty as the answer/i);
-    assert.match(capturedPrompt, /plausible same-category words/i);
+    assert.match(capturedPrompt, /antonyms, related concepts or natural phrases/i);
     assert.doesNotMatch(capturedPrompt, /never synonyms, antonyms or associated words/i);
-    assert.match(capturedPrompt, /Chinese meaning must not repeat or contain another option/i);
+    assert.doesNotMatch(capturedPrompt, /Chinese meaning must not repeat or contain another option/i);
     assert.match(capturedPrompt, /\u9ad8\u4e2d/);
     // The local rubric is included; the full curriculum vocabulary must not be.
     assert.ok(capturedPrompt.length < 5000, 'include a bounded rubric, not the complete reference corpus');

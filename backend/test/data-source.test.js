@@ -113,7 +113,7 @@ function formalCacheRows(count = 10) {
         feishu_record_id: `cache-rec-${index + 1}-${variantSlot}`,
         source_word_record_id: `rec-word-${index + 1}`,
         word: `word${index + 1}`,
-        level: 'middle',
+        level: '中学',
         round_type: 'primary',
         quality_status: 'ready',
         cache_state: 'active',
@@ -122,12 +122,12 @@ function formalCacheRows(count = 10) {
         question_type: 1,
         question_text: `Variant ${variantSlot} uses word${index + 1} naturally today.`,
         context_zh: '\u8fd9\u662f\u5f53\u524d\u9898\u5e72\u5bf9\u5e94\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002',
-        options: [`A. word${index + 1}`, `B. pear-${variantSlot}`, `C. desk-${variantSlot}`, `D. chair-${variantSlot}`],
+        options: [`A. word${index + 1}`, `B. pear${variantSlot}`, `C. desk${variantSlot}`, `D. chair${variantSlot}`],
         answer: 'A',
         option_meanings: ['\u91ca\u4e49', '\u6c34\u679c', '\u684c\u5b50', '\u6905\u5b50'],
         correct_meaning: '\u91ca\u4e49',
         used_count: 0,
-    }))).flat();
+    }))).flat().map(row=>require('./current-policy-fixture').attestRow(row));
 }
 
 

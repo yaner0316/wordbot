@@ -1,0 +1,48 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises');
+const {PGlite}=require('@electric-sql/pglite');
+const {MIGRATION_PATHS,VERIFICATION_SQL,verificationFailures,normalizeVerification}=require('../scripts/apply-question-generation-migrations');
+const {attestRow}=require('./current-policy-fixture');
+const uid='11111111-1111-4111-8111-111111111111',wid='22222222-2222-4222-8222-222222222222';
+test('policy migration fences old workers and new selection, preserves history and replaces stale coverage',async()=>{
+ const source=await fs.readFile(require.resolve('./question-generation-version.integration.test'),'utf8');
+ const base=source.split('const BASE_SCHEMA_SQL = `')[1].split('`;')[0].replaceAll('${USER_ID}',uid).replaceAll('${WORD_ID}',wid);
+ const db=new PGlite();
+ try {
+  await db.exec(base);
+  for(const p of MIGRATION_PATHS.filter(p=>!p.endsWith('20261115_question_policy_retirement.sql'))) await db.exec(await fs.readFile(p,'utf8'));
+  await db.query("insert into question_cache(user_id,word_id,level,question_type,round_type,quality_status,question_text,context_zh,options,answer,option_meanings,correct_meaning,ai_audit_status,source_version,question_fingerprint,cache_state,variant_slot) values($1,$2,'middle','1','primary','ready','She picked an _____ from the apple tree.','她从苹果树上摘了一个苹果。','[\"A. apple\",\"B. pear\",\"C. desk\",\"D. book\"]','A','[\"苹果\",\"梨\",\"书桌\",\"书\"]','苹果','approved','unique-answer-v2','legacy-policy-test','active',1)",[uid,wid]);
+  await db.query("insert into question_cache select (jsonb_populate_record(null::question_cache,to_jsonb(c)||jsonb_build_object('id',gen_random_uuid(),'question_fingerprint','legacy-second','variant_slot',2,'cache_state','reserved_next_day','question_text','He picked an _____ from the tree.'))).* from question_cache c");
+  await db.query("insert into assessments(user_id,question_text,options,correct_answer) values($1,'Historical original','[]','A')",[uid]);
+  const before=(await db.query('select to_jsonb(a) value from assessments a')).rows;
+  const migration=await fs.readFile(MIGRATION_PATHS.at(-1),'utf8');await db.exec(migration);await db.exec(migration);
+  assert.deepEqual((await db.query('select to_jsonb(a) value from assessments a')).rows,before);
+  assert.equal((await db.query('select public.is_current_question_policy(to_jsonb(c)) valid from question_cache c')).rows[0].valid,false);
+  await assert.rejects(db.query("insert into question_cache select (jsonb_populate_record(null::question_cache,to_jsonb(c)||jsonb_build_object('id',gen_random_uuid(),'question_fingerprint','new-old','variant_slot',2))).* from question_cache c"),/QUESTION_POLICY_RETIRED/);
+  await db.query("update question_cache set used_count=used_count+1 where question_fingerprint='legacy-policy-test'");
+  await db.query("select enqueue_question_generation_job_if_needed($1,$2,'coverage_reconcile')",[uid,wid]);
+  const job=(await db.query("select * from claim_question_generation_jobs('policy-worker',1,60000)")).rows[0];assert.ok(job);
+  const variants=[0,1].map(i=>attestRow({level:'middle',question_type:'1',question_text:i?'He picked an _____ from the apple tree.':'She picked an _____ from the apple tree.',context_zh:i?'他从苹果树上摘了一个苹果。':'她从苹果树上摘了一个苹果。',options:i?['A. apple','B. pen','C. table','D. chair']:['A. apple','B. pear','C. desk','D. book'],answer:'A',option_meanings:i?['苹果','钢笔','桌子','椅子']:['苹果','梨','书桌','书'],correct_meaning:'苹果',question_fingerprint:'new-policy-'+i},'apple'));
+  const publish=vs=>db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[job.id,'policy-worker',job.word_version,job.lease_token,JSON.stringify(vs)]);
+  const staleContent=structuredClone(variants);
+  for(const v of staleContent)v.teaching_analysis.contentReview.policy='question-content-v2';
+  await assert.rejects(publish(staleContent),/QUESTION_POLICY_RETIRED/);
+  await assert.rejects(publish(variants.map(v=>({...v,source_version:'unique-answer-v2'}))),/QUESTION_POLICY_RETIRED/);
+  const practice=vs=>db.query('select * from publish_question_generation_practice_variant($1,$2,$3,$4,$5::jsonb)',[job.id,'policy-worker',job.word_version,job.lease_token,JSON.stringify(vs)]);
+  await assert.rejects(practice([{...variants[0],source_version:'unique-answer-v2'}]),/QUESTION_POLICY_RETIRED/);
+  assert.equal((await practice([variants[0]])).rows[0].published,1,'old active cache must not suppress current practice publication');
+  assert.equal((await publish(variants)).rows[0].published,2);
+  const challenge=(await db.query("insert into quiz_challenges(test_id,user_id,level,expires_at) values('policy-snapshot',$1,'middle',now()+interval '1 hour') returning id",[uid])).rows[0];
+  const snapshot=r=>db.query("insert into quiz_challenge_questions(challenge_id,ordinal,meaning_id,cache_question_id,stem,question_fingerprint,question_snapshot,history_expires_at) values($1,1,$2,$3,$4,$5,$6::jsonb,now()+interval '30 days')",[challenge.id,wid,r.id,r.question_text,r.question_fingerprint,JSON.stringify({answer:r.answer,options:r.options,context:r.question_text,contextCN:r.context_zh,optionMeanings:r.option_meanings,teachingAnalysis:r.teaching_analysis})]);
+  const oldCache=(await db.query("select * from question_cache where question_fingerprint='legacy-policy-test'")).rows[0];
+  await assert.rejects(snapshot(oldCache),/QUESTION_POLICY_RETIRED/);
+  const currentCache=(await db.query("select * from question_cache where question_fingerprint='new-policy-0'")).rows[0];await snapshot(currentCache);
+  const original=(await db.query('select question_snapshot from quiz_challenge_questions')).rows;
+  await db.query('update quiz_challenge_questions set history_expires_at=history_expires_at');assert.deepEqual((await db.query('select question_snapshot from quiz_challenge_questions')).rows,original);
+  const state=(await db.query(VERIFICATION_SQL)).rows[0];
+  for(const key of Object.keys(state).filter(k=>k.startsWith('question_policy_'))) assert.equal(state[key],true,key);
+  const quality=(await db.query("select prosrc from pg_proc where oid='public.validate_formal_challenge_question_quality()'::regprocedure")).rows[0].prosrc;
+  assert.doesNotMatch(quality,/duplicate_option_meanings/);
+  const history=(await db.query("select count(*) n from question_cache where question_fingerprint='legacy-policy-test'")).rows[0];assert.equal(history.n,1);
+ } finally {await db.close();}
+});

@@ -22,7 +22,7 @@ const UNIVERSITY = String.fromCharCode(0x5927, 0x5b66);
 const CN_CHEST = String.fromCharCode(0x80f8, 0x90e8);
 
 function question(overrides) {
-    return {
+    const row = {
         user: 'qiuqiu',
         word_record_id: 'rec-1',
         word: 'apple',
@@ -41,6 +41,7 @@ function question(overrides) {
         correct_meaning: '苹果',
         ...overrides,
     };
+    return {...require('./current-policy-fixture').attestRow(row),...overrides};
 }
 
 function makeTraversalRows(count, usedCount = 0, overrides = {}) {
@@ -55,20 +56,19 @@ function makeTraversalRows(count, usedCount = 0, overrides = {}) {
     }));
 }
 
-test('AI-approved legacy fill-in cache cannot supply a Chinese stem', () => {
+test('current-policy fill-in cache cannot supply a Chinese stem', () => {
     const approved = question({
         ai_audit_status: 'approved',
-        source_version: 'supabase-contextual-variant-v3|unique-answer-v2',
     });
     assert.equal(isCacheQuestionReady(approved, { requireAiAudit: true }), true);
     const invalid = { ...approved, question_text: '我吃了一个_____。' };
     assert.ok(getCacheQuestionReadinessIssues(invalid, { requireAiAudit: true }).includes('non_english_context'));
     assert.equal(isCacheQuestionReady(invalid, { requireAiAudit: true }), false);
 });
-test('new teaching policy cannot supply a missing or contradictory snapshot while legacy policy stays compatible',()=>{
+test('legacy published approval is retired and missing teaching evidence remains blocked',()=>{
     const legacy=question({ai_audit_status:'approved',source_version:'supabase-contextual-variant-v3|unique-answer-v2'});
-    assert.equal(getCacheQuestionReadinessIssues(legacy,{requireAiAudit:true}).length,0);
-    const current={...legacy,source_version:legacy.source_version+'|teaching-analysis-v1'};
+    assert.ok(getCacheQuestionReadinessIssues(legacy,{requireAiAudit:true}).includes('question_policy_retired'));
+    const current={...legacy,source_version:legacy.source_version+'|teaching-analysis-v1',teaching_analysis:null};
     assert.ok(getCacheQuestionReadinessIssues(current,{requireAiAudit:true}).includes('teaching_analysis_missing'));
 });
 
@@ -464,8 +464,8 @@ test('cache status summary counts only questions that are actually selectable', 
 
 test('approved-only cache gate requires the current semantic audit policy after the rollout flag is enabled', () => {
     const skipped = question({ ai_audit_status: 'skipped' });
-    const approved = question({ ai_audit_status: 'approved' });
-    const current = question({ ai_audit_status: 'approved', source_version: 'supabase-contextual-variant-v3|unique-answer-v2' });
+    const approved = question({ ai_audit_status: 'approved',source_version:'' });
+    const current = question({ ai_audit_status: 'approved' });
 
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: false }), true);
     assert.equal(isCacheQuestionReady(skipped, { requireAiAudit: true }), false);
@@ -573,13 +573,13 @@ test('rejects cached elementary fill-in rows with sense-mismatched contexts', ()
     })), false);
 });
 
-test('rejects cached questions whose option meanings are duplicated', () => {
+test('duplicate glosses are not an independent exclusion of an attested question', () => {
     const row = question({
         option_meanings: JSON.stringify(['同一个释义', '同一个释义', '桌子', '椅子']),
     });
     const issues = getCacheQuestionReadinessIssues(row);
-    assert.ok(issues.includes('duplicate_option_meanings'));
-    assert.equal(isCacheQuestionReady(row), false);
+    assert.ok(!issues.includes('duplicate_option_meanings'));
+    assert.equal(isCacheQuestionReady(row), true);
 });
 
 test('rejects cached questions without a question fingerprint', () => {
@@ -617,7 +617,7 @@ test('reports readiness reject reasons for cached elementary quality failures', 
     }));
 
     assert.ok(issues.includes('sense_mismatch_chest'));
-    assert.ok(issues.includes('not_elementary_context'));
+    assert.ok(!issues.includes('not_elementary_context'));
 });
 
 test('rejects cached sense-mismatched fill-in rows across learning levels', () => {
@@ -712,7 +712,7 @@ test('does not apply type-one translation requirements to type-four review quest
 
 test('current audit attestation survives database adapter and question snapshot', () => {
     const { toFeishuCacheRow } = require('../quiz-adapter');
-    const version = 'supabase-contextual-variant-v3|unique-answer-v2';
+    const version = question({}).source_version;
     const row = question({id:'cache-1',source_word_record_id:'rec-1',word_id:'word-1',context_zh:'我吃了一个苹果。',source_version:version,ai_audit_status:'approved'});
     row.options=JSON.parse(row.options); row.option_meanings=JSON.parse(row.option_meanings);
     const adapted=toFeishuCacheRow(row,{username:'qiuqiu'});

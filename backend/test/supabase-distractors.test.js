@@ -50,7 +50,7 @@ test('Supabase distractor wrapper sends the real stem and prior distractors to M
         assert.equal(body.temperature, 0.1);
         assert.match(body.messages[0].content, /The child packed an ___ for the long trip\./);
         assert.match(body.messages[0].content, /orange, peach, plum/);
-        assert.match(body.messages[0].content, /level "小学"/);
+        assert.match(body.messages[0].content, /Learner level: 小学/);
     } finally {
         if (previousKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = previousKey;

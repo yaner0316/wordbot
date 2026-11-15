@@ -1,4 +1,16 @@
+# Current policy activation notice (2026-11-15)
+
+The current product authority is [PROJECT.md](../PROJECT.md#current-question-policy--context-learning-v3). Older instructions below that allow published legacy-cache compatibility, two blind reviews, all-four grammatical fit, or six-pair meaning separation are retired. Do not execute those older policy variants. Historical migration files remain append-only. The unpublished `20261115_question_policy_retirement.sql` is still the pending release artifact; it now requires `question-content-v3`, and its verifier checks the function body for that translation version. No production migration was applied.
+
+Prepared change: migration `20261115_question_policy_retirement.sql` plus the backend policy module and frontend primary bands. This preparation does not authorize production application. When a release is authorized: pause generation workers, apply the version barrier with the existing migration verifier, release matching backend/frontend, verify policy checks and affected learning flows, then resume workers. Old workers must be stopped; the database rejects their old-policy publications. Old cache rows do not count toward coverage and do not block current-policy practice publication. Normal reconciliation replenishes supply; do not bulk-delete history or silently fall back while supply is being prepared. Rollback to old code alone is intentionally blocked by the database barrier.
+
+Execution evidence and remaining work: [implementation plan](plans/2026-11-14-question-policy-retirement.md).
+
 # WordBot Operations
+
+## Level-dependent target inflection (local patch, 2026-11-14)
+
+Primary generation permits noun number changes only; junior-secondary and higher permit grammatical inflection without changing lexical identity or the selected sense. The context generator still returns a string and reports the exact printed `targetForm` to the formal builder; the existing JSON checkpoint retains it with the context, and context invalidation clears it. Blanking, option generation and meanings reuse use this printed form while the learning record remains canonical. Changed forms require `targetInflection` evidence in the stem review; both primary bands require a contextual noun for a changed target. Current-policy migration and validation requirements above supersede the older code-only release assumptions. Historical option spelling remains preserved.
 
 ## Required selected-sense entry (2026-11-13)
 
@@ -6,17 +18,9 @@ Dictionary responses for authenticated users include signed `selectionToken` rec
 
 Companion web and native changes are required. Stage the backend (which offers receipts and rejects old bare submissions), then the compatible frontend; old clients fail closed and must refresh/update. No migration, production dictionary call, data repair, cache purge or question policy change is part of this implementation. Release verification must cover a real authenticated lookup, selected batch save and rejected bare/manual submission; local tests alone do not prove release.
 
-## Option meaning separation (2026-11-07)
+## Retired question review contracts (2026-11-15)
 
-The existing third semantic-review request now compares all six pairs of supplied option meanings, including distractor pairs. Fresh responses must include six distinct `contentReview.optionPairs` judgments with grounded reasons and `distinct`, `synonymous`, or `includes` relations; missing or malformed evidence fails with `content_review_missing`. A synonymous or inclusion relation fails with `content_option_overlap`, which uses the existing distractor-stage invalidation and retains context/translation. Accepted pair evidence is stored by option word so shuffled letters remain compatible. No extra model request or database migration is added. Previously saved compatible evidence remains readable and is not bulk invalidated. This does not certify legacy option sets; repair evidence remains per-row. Validate the prompt with real synonym/inclusion cases and a distinct same-category control, in addition to the parser and checkpoint tests. No frontend change is required because the response shape for learners is unchanged.
-
-## Content and printed-option review contract (2026-11-07)
-
-New generation requires `question-content-v1` in both generation-service entry points. The existing sense-review request also receives the real sentence translation and canonical target sense; no extra model stage is added. Its content evidence is saved in teaching JSON, bound to exact content, and checked at candidate publication, checkpoint reuse and tagged cache selection. Translation and gloss failures invalidate only their corresponding stages; absent evidence resumes semantic review. Existing published legacy rows are not certified or repaired by this code change.
-
-Release requires real content checks in addition to software contract tests; report them separately. Stored repair proposals stay outside Git with original cache IDs/content and local verification results; proposals alone are not production approval. Apply the existing exact-row, history-preserving repair procedure below after preparing current-version comparisons and receipts. Do not stamp local authored drafts as AI-approved or overwrite existing audit evidence.
-
-The frontend companion preserves the spelling of options carrying `english-surface-v1`; deploy it before verifying newly reviewed questions. This is a code-only change with no cache purge, word rewrite or schema migration. Existing compatible published rows remain available; incorrect stored questions are repaired separately by exact ID. A rollback must retain corrected data and immutable history.
+The former six-pair meaning separation, question-content-v1/v2, two-blind-review and published-legacy exemptions have been removed from this runbook. They must not be used for new generation, repairs or selection. Use the current policy and coordinated migration above. Original release evidence remains in Git history; learner assessment history remains unchanged.
 
 ## Code-only level-fit release (2026-11-05)
 
@@ -35,7 +39,7 @@ For an authorized stored-question repair, back up exact rows and original histor
 
 Apply `20261013_teaching_analysis_snapshots.sql` through the existing migration runner before this backend. It adds nullable `teaching_analysis` JSONB to cache and assessments, extends the installed atomic publisher while retaining lease/archive/edit fences and ACLs, and validates tagged cache rows and challenge snapshots. The change is repeatable; an otherwise current schema applies only this migration. No startup-time DDL, data backfill, cache purge or history rewrite occurs.
 
-Newly audited rows carry `teaching-analysis-v1`. The semantic audit must supply all four contextual judgments and grounded reasons; missing, conflicting or ungrounded output fails closed and remains in the existing durable retry/checkpoint flow. A legacy partial audit without analysis resumes at the audit only, reusing saved context, layout, meanings and translation. Old complete `unique-answer-v2` rows stay compatible and are not mass-enqueued merely for missing analysis. Normal display replacement gradually supplies the new snapshots; old history explicitly reports absent teaching fields. This compatibility does not certify the semantic correctness of any particular legacy question.
+Newly audited rows carry `teaching-analysis-v1`. The semantic audit must supply all four contextual judgments and grounded reasons; missing, conflicting or ungrounded output fails closed and remains in the existing durable retry/checkpoint flow. Old-policy partial checkpoints restart under context-learning-v3, and published old-policy rows cannot supply new questions. Historical snapshots remain readable and are not rewritten.
 
 History review uses the existing `/api/reviews` chain. Restoration/submission apply the same active-meaning filter and stable ordering; a word set changed since display is rejected for reload rather than assigning answers to another row. Original formal assessments and game minutes are preserved. Completed chains are not restarted; archived-only and no-wrong-answer responses are explicit.
 

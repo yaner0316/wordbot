@@ -111,7 +111,7 @@ test('script reads the real schema, joins words, paginates, and remains read-onl
         user: 'yusi',
         cacheId: 'cache-cushion',
         word: 'cushion',
-        reasons: ['not_ai_approved', 'overlapping_option_meanings', 'duplicate_option_meanings'],
+        reasons: ['not_ai_approved'],
         sourceVersion: 'legacy-v1',
         aiAuditStatus: 'skipped',
     }]);

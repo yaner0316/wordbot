@@ -32,7 +32,7 @@ test('a complete old-method audit resumes only semantic review instead of bypass
  const {SEMANTIC_AUDIT_METHOD,semanticAuditInputFingerprint}=require('../teaching-analysis');
  const options=['A. apple','B. pear','C. chair','D. book'];let audits=0;
  const analysis={schemaVersion:1,clue:'grow apples',clueReason:'树上结苹果是句中明确的来源。',correctWord:'apple',correctReason:'这种树结的是苹果，因此要填苹果。',options:options.map((o,i)=>({word:o.slice(3),fits:i===0,meaning:['苹果','梨','椅子','书'][i],reason:'树上结苹果明确了这个句子中所说的果实。'}))};
- const audit=Object.assign(async q=>{audits++;const inputFingerprint=semanticAuditInputFingerprint(q);return {approved:true,status:'approved',validLetters:['A'],auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint,teachingAnalysis:{...analysis,auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint}};},{auditMethod:SEMANTIC_AUDIT_METHOD});
+ const audit=Object.assign(async q=>{audits++;const inputFingerprint=semanticAuditInputFingerprint(q);return {...require('./current-policy-fixture').approveAudit(q),validLetters:['A']};},{auditMethod:SEMANTIC_AUDIT_METHOD});
  const rows=await buildCacheQuestionRowsForWord({user,word,level:LEVEL,requiredCount:1,allowPartialCandidates:true,requireSemanticAudit:true,semanticAudit:audit,
  generationCheckpoint:{variants:[{slot:1,context:'The child picked an apple from the tree used to grow apples.',distractors:['pear','chair','book'],optionWords:['apple','pear','chair','book'],options,answer:'A',optionMeanings:['苹果','梨','椅子','书'],contextTranslation:'这个孩子从结苹果的树上摘了一个苹果。',localValidated:true,audit:{approved:true,status:'approved',validLetters:['A'],teachingAnalysis:analysis}}]},
  generateContext:async()=>assert.fail('valid context must be reused'),generateDistractors:async()=>assert.fail('valid distractors must be reused'),translateWords:async()=>assert.fail('valid meanings must be reused'),translateContext:async()=>assert.fail('valid translation must be reused')});
@@ -47,7 +47,7 @@ test('legacy partial audit missing teaching resumes only the audit and persists 
   saveGenerationCheckpoint:async value=>saved.push(structuredClone(value)),
   generateContext:async()=>{contexts++;return filled;},generateDistractors:async()=>{distractors++;return ['pear','chair','book'];},
   translateWords:async()=>{translations++;return {};},translateContext:async()=>{translations++;return '';},
-  semanticAudit:async q=>{audits++;return {approved:true,status:'approved',validLetters:[q.answer],teachingAnalysis:{schemaVersion:1,clue:'grow apples',clueReason:'树上结苹果是句中明确的来源。',correctWord:'apple',correctReason:'这种树结的是苹果，因此要填苹果。',options:q.options.map((opt,i)=>({word:opt.slice(3),fits:i===0,meaning:['苹果','梨','椅子','书'][i],reason:i===0?'苹果对应句中明确的果实来源。':'这个选项不符合句中明确的果实来源。'}))}};}
+  semanticAudit:async q=>{audits++;return {approved:true,status:'approved',validLetters:[q.answer],teachingAnalysis:{...require('./current-policy-fixture').approveAudit(q).teachingAnalysis,schemaVersion:1,clue:'grow apples',clueReason:'树上结苹果是句中明确的来源。',correctWord:'apple',correctReason:'这种树结的是苹果，因此要填苹果。',options:q.options.map((opt,i)=>({word:opt.slice(3),fits:i===0,meaning:['苹果','梨','椅子','书'][i],reason:i===0?'苹果对应句中明确的果实来源。':'这个选项不符合句中明确的果实来源。'}))}};}
  });
  assert.equal(rows.length,1);assert.equal(audits,1);assert.equal(contexts,0);assert.equal(translations,0);assert.equal(distractors,0);
  assert.equal(rows[0].teaching_analysis.schemaVersion,1);assert.match(rows[0].source_version,/teaching-analysis-v1/);assert.equal(saved.at(-1).variants[0].row.teaching_analysis.schemaVersion,1);
@@ -214,7 +214,7 @@ test('cache builder resumes at semantic audit without regenerating approved upst
         generateDistractors: async () => { throw new Error('distractors must be reused'); },
         translateWords: async () => { throw new Error('option meanings must be reused'); },
         translateContext: async () => { throw new Error('context translation must be reused'); },
-        semanticAudit: async () => ({ approved: true, status: 'approved', validLetters: ['A'] }),
+        semanticAudit:require('./current-policy-fixture').approveAudit,
         requireSemanticAudit: true,
     });
 
@@ -275,7 +275,7 @@ test('semantic rejection invalidates distractors and downstream stages before re
         ...common,
         generationCheckpoint: checkpoint,
         generateDistractors: async () => { repairedDistractors += 1; return ['snack', 'sandwich', 'biscuit']; },
-        semanticAudit: async ({ answer }) => ({ approved: true, status: 'approved', validLetters: [answer] }),
+        semanticAudit:require('./current-policy-fixture').approveAudit,
     });
 
     assert.equal(repaired.length, 1);

@@ -4,7 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const { PGlite } = require('@electric-sql/pglite');
-const { MIGRATION_PATHS, VERIFICATION_SQL } = require('../scripts/apply-question-generation-migrations');
+const { MIGRATION_PATHS: ALL_MIGRATIONS, VERIFICATION_SQL } = require('../scripts/apply-question-generation-migrations');
+// Historical migration contracts through 2026-10-25 deliberately use pre-retirement fixtures.
+// Latest-policy publication, selection and history upgrade are tested in question-policy-migration.test.js.
+const MIGRATION_PATHS=ALL_MIGRATIONS.filter(p=>!p.endsWith('20261115_question_policy_retirement.sql'));
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORD_ID = '22222222-2222-4222-8222-222222222222';
@@ -1173,9 +1176,9 @@ test('practice single publication is fenced, additive and leaves the two-questio
   await assert.rejects(db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[...args,JSON.stringify([first])]),/EXACTLY_TWO_VARIANTS_REQUIRED/);
   const {selectCachedQuestionsForWordQueue}=require('../quiz-word-queue');
   const mapped=rows.map(r=>({...r,user:'child',word:'apple',word_record_id:WORD_ID,context_cn:r.context_zh,level:'中学'}));
-  assert.deepEqual(require('../question-cache').getCacheQuestionReadinessIssues(mapped[0]),[]);
+  assert.ok(require('../question-cache').getCacheQuestionReadinessIssues(mapped[0]).includes('question_policy_retired')); // historical SQL may publish; current selector must refuse
   const selection={cacheRows:mapped,queue:[WORD_ID],userId:'child',level:'中学',limit:1};
-  assert.equal(selectCachedQuestionsForWordQueue({...selection,requireReadyPair:false}).length,1);
+  assert.equal(selectCachedQuestionsForWordQueue({...selection,requireReadyPair:false}).length,0);
   assert.equal(selectCachedQuestionsForWordQueue({...selection,requireReadyPair:true}).length,0);
   assert.equal((await db.query('select * from publish_question_generation_variants($1,$2,$3,$4,$5::jsonb)',[...args,JSON.stringify([first,second])])).rows[0].published,2);
   assert.equal((await db.query("select count(*)::int n from question_cache where word_id=$1 and cache_state in ('active','reserved_next_day')",[WORD_ID])).rows[0].n,2);

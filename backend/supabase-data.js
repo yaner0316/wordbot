@@ -1,5 +1,6 @@
+const {QUESTION_POLICY,hasCurrentStemReview,optionFingerprint}=require('./question-policy');
 const { formatOptionSurface, targetSurface, hasCurrentSurfaceEvidence } = require('./question-surface');
-const { hasCurrentContentReview } = require('./question-content-review');
+const { CONTENT_REVIEW_POLICY, hasCurrentContentReview } = require('./question-content-review');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
@@ -34,14 +35,13 @@ const { createSupabaseAdminAdapter } = require('./supabase-admin');
 const { createSupabaseAuthAdapter } = require('./supabase-auth');
 const { createSupabaseMaintenanceAdapter } = require('./supabase-maintenance');
 const { fingerprintQuestion } = require('./question-generation-service');
-const { invalidateVariantFromStage, checkpointInvalidationStageForIssues } = require('./question-generation-checkpoint');
+const { invalidateVariantFromStage, checkpointInvalidationStageForIssues, retireTranslationCheckpoint } = require('./question-generation-checkpoint');
 const { levelPolicy, isSupportedLevel, levelGuidance, hasCurrentLevelFit } = require('./high-school-fit');
 const { summarizeQuestionGenerationJobs } = require('./question-generation-job');
 const { summarizeUserQuestionReadiness } = require('./question-generation-observability');
 const { normalizeGenerationWord, isValidGenerationWord, invalidGenerationWordError, classifyGenerationJobs } = require('./question-generation-eligibility');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { countEligibleReadyMeaningsByLevel, summarizeQuizLearningAvailability } = require('./quiz-word-queue');
-const { getOverlappingOptionPairs } = require('./option-meaning-distinctness');
 const {
     toFeishuWordRecord,
     toFeishuAssessmentRecord,
@@ -52,7 +52,7 @@ const { translateSupabaseContext, translateSupabaseWords } = require('./supabase
 const { SELECTED_SENSE_FLOW_FLAG, hasSelectedSenseFlowFlag, buildMeaningChoiceOptions } = require('./selected-sense-flow');
 const {
     DEFAULT_LEARNING_LEVEL,
-    ELEMENTARY_LEVEL,
+    ELEMENTARY_LEVEL, isPrimaryLevel,
     HIGH_LEVEL,
     JUNIOR_HIGH_LEVEL,
     LEVELS,
@@ -1204,15 +1204,15 @@ function stableWordOffset(word, size) {
     return hash % size;
 }
 
-async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, translateWords, knownMeanings = null }) {
+async function buildOptionMeanings({ optionWords, correctWord, correctMeaning, context, translateWords, knownMeanings = null, repairFeedback = [] }) {
     const known = knownMeanings && typeof knownMeanings === 'object' ? knownMeanings : {};
     const knownValue = option => String(known[option] || Object.entries(known).find(([key]) => key.toLowerCase() === option.toLowerCase())?.[1] || '').trim();
-    // Words the distinctness gate already translated are reused, not paid for twice.
+    // Reuse only glosses retained by this question's current translation checkpoint.
     const missingWords = optionWords.filter(option =>
         !hasMeaningfulChineseMeaning(knownValue(option))
         && (option !== correctWord || !hasMeaningfulChineseMeaning(correctMeaning))
     );
-    const translated = missingWords.length ? await translateWords(missingWords) : {};
+    const translated = missingWords.length ? await translateWords(missingWords,{repairFeedback,context,correctWord,correctMeaning,optionWords}) : {};
     const meanings = optionWords.map(option =>
         option === correctWord
             ? String(translated?.[option] || translated?.[option.toLowerCase()] || correctMeaning || '').trim()
@@ -1225,52 +1225,6 @@ function rotateFallbackDistractors(pool, word) {
     return [...pool.slice(offset), ...pool.slice(0, offset)];
 }
 
-// The four option meanings must be clearly different from each other. Overlapping
-// glosses ("career"/"occupation" both 职业, or "小的" inside "极小的") are the single
-// largest source of rejected candidates in production, and the question quality gate
-// rejects them only after the whole candidate has been built and audited.
-//
-// This gate checks the collision before building the question and asks the distractor
-// generator for a replacement of the offending word, so one bad option costs one
-// extra distractor call instead of a wasted candidate, audit and retry.
-async function resolveDistinctOptionDistractors({
-    distractors,
-    wordText,
-    meaning,
-    translateWords,
-    regenerate,
-    reportRejection = () => {},
-    maxRepairs = 2,
-}) {
-    let current = Array.isArray(distractors) ? [...distractors] : [];
-    if (current.length !== 3) return { distractors: current, meanings: null };
-    if (typeof translateWords !== 'function' || typeof regenerate !== 'function') return { distractors: current, meanings: null };
-    if (!hasMeaningfulChineseMeaning(meaning)) return { distractors: current, meanings: null };
-
-    const excluded = [];
-    for (let attempt = 0; attempt <= maxRepairs; attempt += 1) {
-        const translated = await translateWords(current).catch(error => miniMaxFallback(error, null));
-        const meanings = current.map(word => String(translated?.[word] || translated?.[word.toLowerCase()] || '').trim());
-        // Without usable translations the existing downstream behaviour decides.
-        if (!meanings.every(hasMeaningfulChineseMeaning)) return { distractors: current, meanings: null };
-        const optionMeanings = [String(meaning).trim(), ...meanings];
-        const pairs = getOverlappingOptionPairs(optionMeanings);
-        // Hand the translations downstream so the same words are not paid for twice.
-        if (!pairs.length) {
-            return { distractors: current, meanings: Object.fromEntries(current.map((word, index) => [word, meanings[index]])) };
-        }
-        const conflicting = [...new Set(pairs
-            .flatMap(([, right]) => [right])
-            .filter(index => index >= 1)
-            .map(index => current[index - 1]))];
-        excluded.push(...conflicting);
-        const replacement = await regenerate([...new Set(excluded)]).catch(() => null);
-        if (!Array.isArray(replacement) || replacement.length !== 3) break;
-        current = [...replacement];
-    }
-    reportRejection('option_meaning_collision');
-    return null;
-}
 async function buildType3CacheQuestionRowsForWord() {
     return [];
 }
@@ -1282,15 +1236,18 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     requireTeachingAnalysis = requireTeachingAnalysis || semanticAudit === auditUniqueAnswer;
     const wordText = String(word.word || '').trim().toLowerCase();
     const meaning = word.meaning_zh || word.meaning_en || wordText;
-    let state = { ...variantCheckpoint, slot, context };
-    const blankedContext = blankWordInContext(state.context, wordText);
-    const approvedDistractors = uniqueWords(state.distractors || distractors || [], wordText).slice(0, 3);
+    let state = { ...(variantCheckpoint.context && variantCheckpoint.context !== context
+        ? invalidateVariantFromStage(variantCheckpoint,'context') : variantCheckpoint), slot, context };
+    const printedTarget = state.targetForm || wordText;
+    const blankedContext = blankWordInContext(state.context, printedTarget);
+    const approvedDistractors = uniqueWords(state.distractors || distractors || [], wordText)
+        .filter(value=>value.toLowerCase()!==printedTarget.toLowerCase()).slice(0, 3);
     if (approvedDistractors.length < 3) {
         reportRejection('insufficient_distractors');
         await saveVariantCheckpoint(invalidateVariantFromStage(state, 'distractors'));
         return null;
     }
-    const displayWord = formatOptionSurface(targetSurface(context, wordText), blankedContext);
+    const displayWord = formatOptionSurface(targetSurface(context, printedTarget), blankedContext);
     const expectedWords = [displayWord, ...approvedDistractors.map(value => formatOptionSurface(value, blankedContext))];
     if (state.optionWords || state.options || state.answer) {
         const words = Array.isArray(state.optionWords) ? state.optionWords : [];
@@ -1312,21 +1269,47 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     const options = Array.isArray(state.options) && state.options.length === 4
         ? [...state.options]
         : optionWords.map((option, index) => letters[index] + '. ' + option);
+    Object.assign(state,{optionWords,options,answer});
+    if (typeof semanticAudit?.auditOptions==='function') {
+        const input={word:wordText,targetMeaning:meaning,level,context:blankedContext,options,answer};
+        const review=state.optionReview?.approved && state.optionReview.optionFingerprint===optionFingerprint(input)
+            ? state.optionReview : await semanticAudit.auditOptions(input);
+        if (!review.approved) {
+            reportRejection(review.code || 'semantic_audit_unavailable');
+            state.repairFeedback=[{code:review.code,reason:review.reason,evidence:review.repairEvidence || review.optionJudgments || [],rejectedVersion:{context:state.context,options}}];
+            const alternatives=(review.validLetters || []).filter(letter=>letter!==answer).map(letter=>optionWords['ABCD'.indexOf(letter)]).filter(Boolean);
+            state.hardExcludedDistractors=[...new Set([...(state.hardExcludedDistractors || []),...alternatives.map(value=>value.toLowerCase())])];
+            const stage=['semantic_non_unique','semantic_expected_mismatch','surface_context'].includes(review.code) ? 'context'
+                : review.status==='unavailable' || ['semantic_evidence_invalid','semantic_audit_uncertain'].includes(review.code) ? 'semantic_audit' : 'distractors';
+            if (stage==='context') state.rejectedContexts=[...(state.rejectedContexts || []),blankedContext];
+            state.levelFitRepairStage=stage;
+            await saveVariantCheckpoint(invalidateVariantFromStage(state,stage));
+            return null;
+        }
+        state.optionReview=review;
+        await saveVariantCheckpoint(state);
+    }
+    if (semanticAudit?.contentPolicy && state.optionMeaningsPolicy !== CONTENT_REVIEW_POLICY) {
+        state = invalidateVariantFromStage(state,'option_meanings');
+        knownDistractorMeanings = null;
+    }
     const optionMeanings = Array.isArray(state.optionMeanings) && state.optionMeanings.length === 4
         ? [...state.optionMeanings]
         : await buildOptionMeanings({
             optionWords,
             correctWord: displayWord,
             correctMeaning: String(meaning || wordText),
+            context: blankedContext,
             translateWords,
             knownMeanings: knownDistractorMeanings,
+            repairFeedback: state.repairFeedback || [],
         });
     if (!optionMeanings) { reportRejection('bad_option_meanings'); return null; }
     const contextTranslation = state.contextTranslation || (typeof translateContext === 'function'
-        ? String(await translateContext(state.context) || '').trim()
+        ? String(await translateContext(state.context,{repairFeedback:state.repairFeedback || [],previousTranslation:state.rejectedTranslation || null}) || '').trim()
         : '');
     if (!contextTranslation) { reportRejection('context_translation_missing'); return null; }
-    Object.assign(state, { optionWords, options, answer, optionMeanings, contextTranslation });
+    Object.assign(state, { optionWords, options, answer, optionMeanings, contextTranslation, optionMeaningsPolicy:CONTENT_REVIEW_POLICY });
     await saveVariantCheckpoint(state);
 
     const row = {
@@ -1371,9 +1354,10 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         return requireSemanticAudit ? null : row;
     }
 
-    const auditInput = {context:blankedContext,options,answer,optionMeanings,level,contextCN:contextTranslation,targetMeaning:meaning};
+    const auditInput = {word:wordText,context:blankedContext,options,answer,optionMeanings,level,contextCN:contextTranslation,targetMeaning:meaning};
     const requiredAuditMethod = semanticAudit.auditMethod;
-    const reusableAudit = state.audit && (!requireTeachingAnalysis || !getTeachingAnalysisIssues(auditInput,state.audit.teachingAnalysis).length)
+    const reusableAudit = state.audit && (displayWord.toLowerCase() === wordText || state.audit.targetFormVerified === true)
+        && (!requireTeachingAnalysis || !getTeachingAnalysisIssues(auditInput,state.audit.teachingAnalysis).length)
         && (!requiredAuditMethod || (state.audit.auditMethod === requiredAuditMethod
             && state.audit.inputFingerprint === require('./teaching-analysis').semanticAuditInputFingerprint(auditInput)))
         && (!semanticAudit.senseAware || (state.audit?.senseVerified === true && state.audit.senseFingerprint === require('./teaching-analysis').semanticSenseFingerprint(auditInput)))
@@ -1391,6 +1375,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         contextCN: contextTranslation,
         targetMeaning: meaning,
         requireContentReview: Boolean(semanticAudit.contentPolicy),
+        stemReview:state.stemReview, optionReview:state.optionReview,
     });
     const validLetters = Array.isArray(audit?.validLetters)
         ? [...new Set(audit.validLetters.map(value => String(value || '').trim().toUpperCase()))]
@@ -1400,6 +1385,11 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
         const unavailable = audit?.status === 'unavailable';
         reportRejection(unavailable ? 'semantic_audit_unavailable' : /^level_fit_/.test(audit?.code) ? audit.code : 'semantic_audit_rejected');
         if (!unavailable) {
+            state.repairFeedback = [{code:audit.code,reason:audit.reason || audit.code,evidence:audit.repairEvidence || [],rejectedVersion:{context:state.context,options:state.options,translation:state.contextTranslation,optionMeanings:state.optionMeanings}}];
+            if (audit.code==='content_translation') state.rejectedTranslation=state.contextTranslation;
+            if (audit.rejectedDistractors?.length) state.hardExcludedDistractors = [...new Set([
+                ...(state.hardExcludedDistractors || []),...audit.rejectedDistractors.map(value=>value.toLowerCase()),
+            ])];
             if (['content_translation','content_option_meanings','content_option_overlap','content_review_missing'].includes(audit?.code)) {
                 state.levelFitRepairStage = checkpointInvalidationStageForIssues([audit.code]);
                 await saveVariantCheckpoint(invalidateVariantFromStage(state, checkpointInvalidationStageForIssues([audit.code])));
@@ -1476,6 +1466,7 @@ async function buildType1CacheRow({ user, word, level, context, distractors, slo
     state.audit = audit;
     delete state.levelFitRepairStage;
     delete state.levelFitFeedback;
+    delete state.repairFeedback;
     state.row = row;
     await saveVariantCheckpoint(state);
     return row;
@@ -1509,22 +1500,35 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     const checkpoint = generationCheckpoint && typeof generationCheckpoint === 'object'
         ? generationCheckpoint
         : { variants: [] };
+    if (semanticAudit?.questionPolicy && checkpoint.policyVersion!==QUESTION_POLICY) {
+        for (const key of Object.keys(checkpoint)) delete checkpoint[key];
+        Object.assign(checkpoint,{policyVersion:QUESTION_POLICY,variants:[]});
+    }
     if (!Array.isArray(checkpoint.variants)) checkpoint.variants = [];
-    const repairFeedback = () => ({rejectedAlternatives:[...new Set([
+    if (semanticAudit?.contentPolicy) checkpoint.variants = checkpoint.variants.map(variant=>retireTranslationCheckpoint(variant,true));
+    const contextForms = new Map(checkpoint.variants.filter(v=>v.context && v.targetForm).map(v=>[v.context,v.targetForm]));
+    const formFor = context => contextForms.get(context) || wordText;
+    const usableContext = context => hasWholeWord(context,formFor(context));
+    const repairFeedback = () => ({onTargetForm:({context,targetForm})=>contextForms.set(context,targetForm),rejectedAlternatives:[...new Set([
         ...(checkpoint.rejectedAlternatives || []),
         ...checkpoint.variants.flatMap(variant=>variant?.row ? [] : variant?.rejectedAlternatives || []),
-    ])].slice(-12), levelFitFeedback: checkpoint.levelFitFeedback || []});
+    ])].slice(-12), levelFitFeedback: checkpoint.levelFitFeedback || [],
+        hardExcludedDistractors: checkpoint.hardExcludedDistractors || [], repairFeedback:checkpoint.repairFeedback || []});
     const excludedStems = new Set([
         ...(word.excludedQuestionStems || []),
         ...(approvedVariants || []).map(variant => variant?.question_text || variant?.questionText),
         ...checkpoint.variants.flatMap(variant=>variant?.rejectedContexts || []),
         ...(checkpoint.rejectedContexts || []),
     ].map(normalizeQuestionStem).filter(Boolean));
-    const contextIsExcluded = context => excludedStems.has(normalizeQuestionStem(blankWordInContext(context, wordText)));
+    const contextIsExcluded = context => excludedStems.has(normalizeQuestionStem(blankWordInContext(context, formFor(context))));
     const resumableVariants = checkpoint.variants
         .filter(variant => variant && !variant.row && variant.context && !contextIsExcluded(variant.context))
         .sort((left, right) => Number(left.slot || 0) - Number(right.slot || 0));
     const persistVariant = async variant => {
+        if (variant.hardExcludedDistractors?.length) checkpoint.hardExcludedDistractors = [...new Set([
+            ...(checkpoint.hardExcludedDistractors || []),...variant.hardExcludedDistractors.map(value=>value.toLowerCase()),
+        ])];
+        if (variant.repairFeedback?.length) checkpoint.repairFeedback = variant.repairFeedback.slice(-4);
         if (variant.levelFitFeedback?.length) checkpoint.levelFitFeedback = variant.levelFitFeedback.slice(0,8);
         if (variant.rejectedAlternatives?.length) checkpoint.rejectedAlternatives = [...new Set([
             ...(checkpoint.rejectedAlternatives || []),...variant.rejectedAlternatives,
@@ -1548,44 +1552,47 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         }
     }
     const meaning = cacheWord.meaning_zh || cacheWord.meaning_en || wordText;
-    let firstContext = resumableVariants[0]?.context || (level === ELEMENTARY_LEVEL
+    let firstContext = resumableVariants[0]?.context || (isPrimaryLevel(level)
         ? generateElementaryTemplateContext(wordText, cacheWord.meaning_en || cacheWord.meaning_zh || '')
         : word.context_en || '');
-    if ((!hasWholeWord(firstContext, wordText) || contextIsExcluded(firstContext)) && typeof generateContext === 'function') {
+    if ((!usableContext(firstContext) || contextIsExcluded(firstContext)) && typeof generateContext === 'function') {
         const previousContext = firstContext;
         firstContext = '';
         for (let attempt = 0; attempt < 3 && !firstContext; attempt++) {
             const candidate = await generateContext(wordText, meaning, level, previousContext, repairFeedback()).catch(error => miniMaxFallback(error, ''));
-            if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate)) firstContext = candidate;
+            if (usableContext(candidate) && !contextIsExcluded(candidate)) firstContext = candidate;
         }
     }
-    if (!hasWholeWord(firstContext, wordText)) { reportRejection('context_generation_failed'); return []; }
+    if (!usableContext(firstContext)) { reportRejection('context_generation_failed'); return []; }
     if (typeof generateContext !== 'function') return [];
 
-    const levelReferenceDistractors = level === ELEMENTARY_LEVEL
+    const levelReferenceDistractors = isPrimaryLevel(level)
         ? [...generateElementaryDistractors(wordText), 'apple', 'book', 'cat', 'dog', 'house', 'school']
         : [];
     const candidateDistractors = uniqueWords([
+        ...(cacheWord.learnerVocabulary || []),
         ...levelReferenceDistractors,
         ...(cacheWord.distractors || []),
         ...(cacheWord.old_distractors || []),
-    ], wordText).slice(0, 8);
-    const generateForContext = async (context, excludedDistractors = []) => {
+    ], wordText).slice(0, 24);
+    const generateForContext = async (context, excludedDistractors = [], hardExcludedDistractors = []) => {
         if (typeof generateDistractors !== 'function') return null;
-        const questionStem = blankWordInContext(context, wordText);
+        const questionStem = blankWordInContext(context, formFor(context));
         for (let attempt = 0; attempt < 3; attempt++) {
             const generated = await generateDistractors({
-                word: wordText,
+                word: formFor(context),
                 meaning,
                 level,
                 context: questionStem,
                 candidates: candidateDistractors,
                 excludedDistractors: [...excludedDistractors],
                 ...repairFeedback(),
+                hardExcludedDistractors: [...new Set([...repairFeedback().hardExcludedDistractors,...hardExcludedDistractors])],
             }).catch(error => miniMaxFallback(error, null));
-            const normalized = uniqueWords(generated || [], wordText).slice(0, 3);
+            const normalized = uniqueWords(generated || [], wordText)
+                .filter(value=>value.toLowerCase()!==formFor(context).toLowerCase()).slice(0, 3);
             if (normalized.length !== 3) continue;
-            if (normalized.some(value=>repairFeedback().rejectedAlternatives.includes(value))) continue;
+            if (countDistractorOverlap(normalized,[...repairFeedback().rejectedAlternatives,...repairFeedback().hardExcludedDistractors,...hardExcludedDistractors])) continue;
             if (countDistractorOverlap(normalized, excludedDistractors) > 1) continue;
             return normalized;
         }
@@ -1613,10 +1620,10 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
             for (let attempt = 0; attempt < 3 && !context; attempt++) {
                 const candidate = await generateContext(wordText, meaning, level, previousContext, repairFeedback()).catch(error => miniMaxFallback(error, ''));
                 const candidateKey = normalizeQuestionStem(candidate);
-                if (hasWholeWord(candidate, wordText) && !contextIsExcluded(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
+                if (usableContext(candidate) && !contextIsExcluded(candidate) && !attemptedContexts.has(candidateKey)) context = candidate;
             }
         }
-        if (!hasWholeWord(context, wordText)) break;
+        if (!usableContext(context)) break;
         const contextKey = normalizeQuestionStem(context);
         if (attemptedContexts.has(contextKey)) continue;
         attemptedContexts.add(contextKey);
@@ -1626,30 +1633,36 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         let freeSlot = 1;
         while (occupiedSlots.has(freeSlot)) freeSlot += 1;
         const slot = Number(variantCheckpoint.slot) || freeSlot;
-        variantCheckpoint = { ...variantCheckpoint, slot, context };
+        if (variantCheckpoint.context && variantCheckpoint.context !== context) variantCheckpoint = invalidateVariantFromStage(variantCheckpoint,'context');
+        if (countDistractorOverlap(variantCheckpoint.distractors || [],repairFeedback().hardExcludedDistractors)) variantCheckpoint = invalidateVariantFromStage(variantCheckpoint,'distractors');
+        variantCheckpoint = { ...variantCheckpoint, slot, context, targetForm: formFor(context) };
         await persistVariant(variantCheckpoint);
+        if (typeof semanticAudit?.auditStem==='function') {
+            const stemInput={word:wordText,targetMeaning:meaning,level,context:blankWordInContext(context,formFor(context)),targetForm:formatOptionSurface(formFor(context),blankWordInContext(context,formFor(context)))};
+            const review=hasCurrentStemReview(stemInput,variantCheckpoint.stemReview) ? variantCheckpoint.stemReview : await semanticAudit.auditStem(stemInput);
+            if (!review.approved) {
+                reportRejection(review.code || 'stem_audit_unavailable');
+                if (review.status==='unavailable' || review.code==='stem_evidence_invalid') break;
+                await persistVariant({...invalidateVariantFromStage(variantCheckpoint,'context'),
+                    repairFeedback:[{code:review.code,reason:review.reason,evidence:review.repairEvidence || [],rejectedVersion:{context}}],
+                    rejectedContexts:[...(variantCheckpoint.rejectedContexts || []),stemInput.context]});
+                continue;
+            }
+            variantCheckpoint.stemReview=review;
+            await persistVariant(variantCheckpoint);
+        }
         const initialDistractors = Array.isArray(variantCheckpoint.distractors)
             ? variantCheckpoint.distractors
             : await generateForContext(context, approvedDistractors[0] || []);
         if (!initialDistractors) { reportRejection('distractor_generation_failed'); continue; }
         const savedWords = variantCheckpoint.optionWords;
         const savedMeanings = variantCheckpoint.optionMeanings;
-        const expectedWords = [wordText,...initialDistractors];
+        const expectedWords = [formFor(context),...initialDistractors];
         const canReuseMeanings = Array.isArray(savedWords) && savedWords.length === 4 && new Set(savedWords).size === 4
             && expectedWords.every(value=>savedWords.some(saved=>saved.toLowerCase()===value.toLowerCase())) && Array.isArray(savedMeanings) && savedMeanings.length === 4
-            && savedMeanings.every(hasMeaningfulChineseMeaning) && !getOverlappingOptionPairs(savedMeanings).length;
+            && savedMeanings.every(hasMeaningfulChineseMeaning);
         const savedMeaningByWord = canReuseMeanings ? Object.fromEntries(savedWords.map((value,index)=>[value.toLowerCase(),savedMeanings[index]])) : null;
-        const resolved = await resolveDistinctOptionDistractors({
-            distractors: initialDistractors,
-            wordText,
-            meaning,
-            translateWords: savedMeaningByWord ? async values=>values.every(value=>savedMeaningByWord[value.toLowerCase()])
-                ? Object.fromEntries(values.map(value=>[value,savedMeaningByWord[value.toLowerCase()]])) : translateWords(values) : translateWords,
-            regenerate: excluded => generateForContext(context, [...(approvedDistractors[0] || []), ...excluded]),
-            reportRejection,
-        });
-        if (!resolved) continue;
-        const { distractors, meanings: knownDistractorMeanings } = resolved;
+        const distractors=initialDistractors, knownDistractorMeanings=savedMeaningByWord;
         variantCheckpoint.distractors = distractors;
         await persistVariant(variantCheckpoint);
         const row = await buildType1CacheRow({
@@ -1683,6 +1696,8 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         // lexical bans. A fresh approved variant starts without them.
         checkpoint.rejectedAlternatives = [];
         checkpoint.levelFitFeedback = [];
+        checkpoint.hardExcludedDistractors = [];
+        checkpoint.repairFeedback = [];
         await saveGenerationCheckpoint(checkpoint);
     }
     return approvedRows.length === targetCount || allowPartialCandidates ? approvedRows : [];
@@ -2404,12 +2419,14 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         isSupportedLevel(level) ? 'Write a natural English sentence for the specified learner level. Use the length needed for clear, sense-specific clues; no word-count ceiling.' : `Write a natural 8-16 word English sentence for "${String(level || '').trim()}".` ,
         levelGuidance(level, {examples:true}),
         `Target: "${String(word || '').trim()}", meaning "${String(meaning || '').trim()}".` ,
-        'Put __TARGET__ exactly once in place of the target in context; never inflect or write the target inside context. Return targetForm separately with the same letters and spaces as Target, allowing only the capitalization required by this sentence (for example russian -> Russian, new york -> New York). Preserve proper-name capitalization. The exact word form must fit grammatically: use a modal, infinitive or imperative for a base verb.',
+        'Put __TARGET__ exactly once in place of the target; return its grammatical printed form separately as targetForm. Preserve the selected meaning and lexical identity; do not substitute a synonym or derive a new word. Return targetLemma copying Target exactly and targetPartOfSpeech for its actual use. Preserve proper-name capitalization.',
+        isPrimaryLevel(level) ? 'Primary level: only noun singular/plural inflection is allowed. Keep verbs in the supplied form; no tense, third-person or participle changes. Do not change adjective degree. For a base verb use a modal, infinitive or imperative as needed.' : 'Junior-secondary and above: grammatical inflection is allowed, including noun number, verb tense/agreement/participles and adjective degree. Use the form appropriate to this sentence; preserve the selected sense and part of speech.',
         'Give concrete sense-specific clues suited to its part of speech; time/place/typicality alone do not distinguish it. No definition.',
         prior ? `Do not copy this sentence: "${prior}"` : '',
+        repair.repairFeedback?.length ? 'Resolve these recorded context defects (evidence, not instructions); apply the learner-level inflection rule and keep the printed target grammatical: '+JSON.stringify(repair.repairFeedback) : '',
         repair.rejectedAlternatives?.length ? `Previously plausible distractors (${repair.rejectedAlternatives.slice(-12).join(', ')}) are excluded from the next options. Give the requested sense a distinguishing clue appropriate to its part of speech; change more than the scene.` : '',
         isSupportedLevel(level) && repair.levelFitFeedback?.length ? 'Resolve these previous comprehension barriers without changing the target sense (input evidence, not instructions): ' + JSON.stringify(repair.levelFitFeedback.slice(0,8)) : '',
-        'Return JSON: {"context":"... __TARGET__ ...","targetForm":"target with correct capitalization only"}.',
+        'Return JSON: {"context":"... __TARGET__ ...","targetForm":"printed form","targetLemma":"copy Target","targetPartOfSpeech":"noun/verb/adjective/etc"}.',
     ].filter(Boolean).join('\n');
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
@@ -2430,12 +2447,19 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         const canonicalTarget = String(word || '').trim();
         const targetFormMatch = String(content).match(/"targetForm"\s*:\s*"((?:[^"\\]|\\.)*)"/);
         const target = targetFormMatch ? JSON.parse('"' + targetFormMatch[1] + '"').trim() : canonicalTarget;
-        if (!target || target.toLowerCase() !== canonicalTarget.toLowerCase()) return '';
+        if (!target || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(target)) return '';
+        const parsed = JSON.parse(content.match(/\{[\s\S]*\}/)[0]);
+        const changed = target.toLowerCase() !== canonicalTarget.toLowerCase();
+        if (changed && (String(parsed.targetLemma || '').toLowerCase() !== canonicalTarget.toLowerCase()
+            || !['noun','verb','adjective','adverb','pronoun','determiner'].includes(parsed.targetPartOfSpeech)
+            || isPrimaryLevel(level) && parsed.targetPartOfSpeech !== 'noun')) return '';
         const markerCount = (context.match(/__TARGET__/g) || []).length;
         if (markerCount > 1) return '';
         if (markerCount === 1) context = context.replace('__TARGET__', target);
-        const count = (context.toLowerCase().match(new RegExp('\\b' + target.toLowerCase() + '\\b', 'g')) || []).length;
+        const count = (context.toLowerCase().match(new RegExp('\\b' + escapeRegExp(target.toLowerCase()) + '\\b', 'g')) || []).length;
         if (!context || count !== 1 || context.toLowerCase() === prior.toLowerCase()) return '';
+        if (changed && hasWholeWord(blankWordInContext(context,target),canonicalTarget)) return '';
+        repair.onTargetForm?.({context,targetForm:target});
         return context;
     } catch (error) {
         return miniMaxFallback(error, '');
@@ -2473,7 +2497,7 @@ async function prebuildWrongQuestionCacheWithClient(client, { userId, testId, re
         const candidates = await buildCacheQuestionRowsForWord({
             user, word: replacementWord, level, roundType: 'primary',
             generateDistractors: input => buildDistractors(input),
-            translateWords: words => translateOptions(words),
+            translateWords: (words, options) => translateOptions(words, options),
             generateContext: buildContext,
             translateContext: sentence => translateSentence(sentence),
             semanticAudit: semanticAuditor,
@@ -3131,8 +3155,7 @@ function assertFormalChallengeQuestionsRenderable(questions) {
         const normalizedMeanings = meanings.map(value => String(value || '').trim().toLowerCase());
         return !String(question?.questionFingerprint || question?.question_fingerprint || '').trim()
             || meanings.length !== 4
-            || normalizedMeanings.some(value => !value)
-            || new Set(normalizedMeanings).size !== normalizedMeanings.length;
+            || normalizedMeanings.some(value => !value);
     })) {
         throw new Error('FORMAL_QUIZ_QUALITY_REQUIRED');
     }
@@ -3682,7 +3705,7 @@ function createSupabaseDataAdapter(client = supabase, { generateDistractors = nu
         getMasteryAssessmentsForWords: (username, sourceWordRecordIds) =>
             getMasteryAssessmentsForWordsWithClient(client, username, sourceWordRecordIds),
         getQuestionCache: (username, level, roundType) => getQuestionCacheWithClient(client, username, level, roundType),
-        translateWords: words => translator(words),
+        translateWords: (words, options) => translator(words, options),
         submitAssessment: input => submitAssessmentWithClient(client, input),
         submitAssessments: inputs => submitAssessmentsWithClient(client, inputs),
         getQuizSubmissionMastery: async (username, testId) => {
@@ -3769,7 +3792,6 @@ module.exports = {
     backfillTranslations: defaultAdapter.backfillTranslations,
     hydrateFormalChallengeSnapshot,
     buildCacheQuestionRowsForWord,
-    resolveDistinctOptionDistractors,
     buildOptionMeanings,
     generateReplacementContextWithAI,
     getUserByUsername: defaultAdapter.getUserByUsername,

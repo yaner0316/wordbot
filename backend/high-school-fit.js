@@ -7,7 +7,7 @@ const LEVEL_FIT_POLICY = reference.policyVersion;
 const normalize = value => String(value || '').trim();
 const optionWord = value => normalize(value).replace(/^[A-D]\.\s*/i, '');
 const tokens = value => String(value || '').toLowerCase().match(/[a-zà-öø-ÿ]+(?:['’.-][a-zà-öø-ÿ]+)*/g) || [];
-const references = {'小学': require('./reference/primary-fit-v1.json'), '中学': require('./reference/junior-fit-v1.json'), '高中': reference, 'CET4_6_TOEFL': require('./reference/college-combined-fit-v1.json')};
+const references = {'小学低年级': require('./reference/primary-lower-fit-v2.json'), '小学': require('./reference/primary-upper-fit-v2.json'), '中学': require('./reference/junior-fit-v1.json'), '高中': reference, 'CET4_6_TOEFL': require('./reference/college-combined-fit-v1.json')};
 const listed = new Set(vocabulary.entries.flatMap(tokens));
 const juniorListed = new Set(vocabulary.entries.filter(entry => !entry.includes('*')).flatMap(tokens));
 function isSupportedLevel(level) { return Boolean(references[normalize(level)]); }

@@ -27,7 +27,7 @@ test('resume revalidates a saved row, discards its bad context and preserves an 
     const saved = [];
     const service = createQuestionGenerationService({
         loadWord: async () => word,
-        loadCheckpoint: async () => ({ word: 'be', level: '中学', wordVersion: 1, meaning: '["","是"]', variants: [
+        loadCheckpoint: async () => ({ policyVersion: require('../question-policy').QUESTION_POLICY, word: 'be', level: '中学', wordVersion: 1, meaning: '["","是"]', variants: [
             { slot: 1, context: "The meaning of '是' (be) is fundamental to this language.", contextTranslation: '这个词义对于语言很重要', row: bad },
             { slot: 2, context: 'Please be quiet while the teacher reads the story.', row: good },
         ] }),
@@ -75,7 +75,7 @@ for (const repairedDuringResume of [false, true]) test(`dot resume rebuilds stal
     }] };
     const translated = [];
     let auditCalls = 0;
-    const rows = await buildCacheQuestionRowsForWord({
+    const args = {
         user: { id: 'synthetic-user' },
         word: { id: 'synthetic-dot', word: 'dot', meaning_zh: '圆点' }, level: '中学', requiredCount: 1,
         generationCheckpoint: checkpoint, saveGenerationCheckpoint: async () => {},
@@ -83,19 +83,22 @@ for (const repairedDuringResume of [false, true]) test(`dot resume rebuilds stal
         generateDistractors: async () => ['speck', 'dash', 'mark'],
         translateWords: async words => {
             translated.push([...words]);
-            if (words.includes('spot') && !repairedDuringResume) throw Object.assign(new Error('stale translation'), { code: 'TRANSLATION_RESPONSE_INVALID' });
+
             return Object.fromEntries(words.map(word => [word, { spot: '圆点', point: '地点', speck: '斑粒', dash: '破折号', mark: '记号' }[word]]));
         },
         translateContext: async () => assert.fail('resume must retain context translation'),
         requireSemanticAudit: true,
         semanticAudit: async question => {
             auditCalls += 1;
+            if(question.options.some(o=>o.endsWith('. spot'))) return {approved:false,status:'rejected',code:'surface_distractors',reason:'本测试模拟审核发现这个干扰项词形有错误。'};
             assert.deepEqual(question.options.map(v => v.slice(3)).sort(), ['dash', 'dot', 'mark', 'speck']);
-            return { approved: true, status: 'approved', validLetters: [question.answer] };
+            return require('./current-policy-fixture').approveAudit(question);
         },
-    });
+    };
+    let rows=await buildCacheQuestionRowsForWord(args);
+    if(repairedDuringResume){assert.equal(rows.length,0);rows=await buildCacheQuestionRowsForWord(args);}
     assert.equal(rows.length, 1);
     assert.equal(rows[0].context_zh, contextTranslation);
-    assert.equal(auditCalls, 1);
-    assert.deepEqual(translated, repairedDuringResume ? [['spot', 'speck', 'point'], ['speck', 'dash', 'mark']] : [['speck', 'dash', 'mark']]);
+    assert.equal(auditCalls, repairedDuringResume ? 2 : 1);
+    assert.deepEqual(translated.map(words=>words.sort()), (repairedDuringResume ? [['spot', 'speck', 'point'], ['speck', 'dash', 'mark']] : [['speck', 'dash', 'mark']]).map(words=>words.sort()));
 });

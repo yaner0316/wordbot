@@ -6,7 +6,7 @@ const runtime=require('../question-generation-runtime');
 const word={id:'w',user_id:'u',word:'bank',level:'中学',word_version:1};
 const job={id:'job',word_id:'w',user_id:'u',word_version:1,lease_token:'lease',lease_owner:'worker'};
 const row=(text='She deposited cash at the _____.')=>({question_text:text,options:['bank','shore','desk','road'],answer:'A',question_fingerprint:fingerprintQuestion({question_text:text},'w'),ai_audit_status:'approved'});
-const checkpoint=variant=>({word:'bank',level:'中学',wordVersion:1,meaning:'["",""]',variants:[{slot:1,row:variant}]});
+const checkpoint=variant=>({policyVersion:'context-learning-v3',word:'bank',level:'中学',wordVersion:1,meaning:'["",""]',variants:[{slot:1,row:variant}]});
 
 test('a saved approved first question is published before a second-question provider failure',async()=>{
  const events=[];const first=row();let saved;

@@ -28,7 +28,7 @@ test('rewrites only type-one and type-two question contexts', async () => {
     assert.equal(questions[0].context, 'A simple _____ sentence.');
     assert.equal(questions[1].context, 'a simple explanation');
     assert.equal(questions[2].context, '清楚的');
-    assert.match(prompts[0], /elementary school level/);
+    assert.match(prompts[0], /grades 4–6/);
 });
 
 test('returns true without calling AI when no adaptable questions exist', async () => {

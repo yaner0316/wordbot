@@ -94,6 +94,7 @@ test('migration paths include the versioned hardening migration in order', () =>
       '20261013_custom_practice.sql',
       '20261025_unserved_challenge_demand.sql',
       '20261025_practice_single_publication.sql',
+      '20261115_question_policy_retirement.sql',
     ]
   );
   assert.ok(MIGRATION_PATHS.every(filePath => path.dirname(filePath).endsWith(`${path.sep}migrations`)));
@@ -220,6 +221,7 @@ const COMPLETE_STATE = Object.freeze({
   rpc_invalidate_formal_quiz_question_security_definer: false,
   rpc_replace_formal_quiz_question_security_definer: false,
   job_lease_token_column: true,
+  question_policy_function:true,question_policy_cache_guard:true,question_policy_snapshot_guard:true,question_policy_pair_publisher:true,question_policy_practice_publisher:true,question_policy_coverage:true,question_policy_lower_primary:true,
   job_generation_checkpoint_column: true,
   formal_quality_function: true,
   formal_quality_function_security_invoker: true,
@@ -1182,5 +1184,5 @@ test('current deployment applies only the unserved demand repair', async () => {
 test('current deployment applies only practice single publication',async()=>{
  const harness=createDatabaseHarness({states:[{...COMPLETE_STATE,practice_single_publish_contract:false},COMPLETE_STATE]});const paths=[];
  await applyQuestionGenerationMigrations({env:{DATABASE_URL:'postgresql://postgres:test@db.example.com/postgres'},Client:harness.Client,readFile:async file=>{paths.push(path.basename(file));return '-- practice single';}});
- assert.deepEqual(paths,['20261025_practice_single_publication.sql']);
+ assert.deepEqual(paths,['20261025_practice_single_publication.sql','20261115_question_policy_retirement.sql']);
 });

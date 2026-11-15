@@ -14,7 +14,7 @@ function fixture(count = 12, missing = []) {
     question_text: `Variant ${slot} uses _____ naturally in context.`, context_zh: '这是练习中的完整中文句子。',
     options: [`A. ${w.word}`, `B. alpha${slot}`, `C. bravo${slot}`, `D. charlie${slot}`], answer: 'A',
     option_meanings: ['释义', '阿尔法', '布拉沃', '查理'], correct_meaning: w.meaning_zh, used_count: 0,
-  })));
+  }))).map(row=>require('./current-policy-fixture').attestRow(row));
   const displays = [];
   const queued = [];
   const dataSource = {
@@ -98,8 +98,8 @@ test('practice starts a complete ten-question selection with only one approved a
 for (const mode of ['custom', 'random']) test(`${mode} selects approved teaching snapshots without dropping their audit evidence`, async () => {
   const f = fixture(10);
   f.cache.forEach(row => {
-    row.source_version = 'supabase-contextual-variant-v3|unique-answer-v2|teaching-analysis-v1';
-    row.teaching_analysis = {
+
+    row.teaching_analysis = {...row.teaching_analysis,
       schemaVersion: 1, clue: 'naturally in context', clueReason: '句中说明了目标词的具体使用语境。',
       correctWord: row.word, correctReason: '目标词与句中明确的语境一致。',
       options: row.options.map((option, i) => ({ word: option.slice(3), fits: i === 0,
@@ -164,7 +164,7 @@ for (const patch of [{ai_audit_status:'rejected'}, {source_version:'legacy-unatt
     });
     const f = fixture(10);
     f.cache.splice(0, f.cache.length, ...f.cache.filter(row => row.variant_slot === 1));
-    f.cache.forEach(row => { row.source_version = 'supabase-contextual-variant-v3|unique-answer-v2'; });
+    f.cache.forEach(row => Object.assign(row,require('./current-policy-fixture').attestRow(row)));
     Object.assign(f.cache.find(row => row.word_id === 'word-0'), patch);
     const quiz = await generate(f, f.words.map(word => word.id));
     assert.equal(quiz.pending, true);

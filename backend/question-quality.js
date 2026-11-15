@@ -124,7 +124,7 @@ const CN = {
 
 function isElementaryLevel(level) {
     const value = String(level || '').trim().toLowerCase();
-    return value === ELEMENTARY_LEVEL || value === 'elementary' || value.includes('elementary school');
+    return require('./learning-level').isPrimaryLevel(value) || value === 'elementary' || value.includes('elementary school');
 }
 
 function getOptionWord(option) {
@@ -533,9 +533,7 @@ function hasBadDistractorShape(question) {
     const correct = getCorrectOptionWord(question);
     const distractors = getDistractorWords(question);
     if (!correct || distractors.length < 3) return true;
-    const correctIsSingleWord = /^[a-z]+(?:'[a-z]+)?$/i.test(correct);
-    if (correctIsSingleWord && distractors.some(d => /\s/.test(d))) return true;
-    if (distractors.some(d => d.length < 2 || d.length > 25)) return true;
+    if (distractors.some(d => !/^[a-z]+(?:['’-][a-z]+)*(?: [a-z]+(?:['’-][a-z]+)*)*$/i.test(d) || d.length > 100)) return true;
     return false;
 }
 
@@ -585,12 +583,12 @@ function getQuestionQualityIssues(question) {
             issues.push('non_english_context');
         }
         const context = rawContext.replace(/_{3,}/g, word);
-        const baseContext = rawContext.replace(/_{3,}/g, baseWord);
         if (isBadQuizWord(baseWord) || isBadQuizWord(word)) issues.push('invalid_quiz_word');
         if (hasAnswerRevealedAfterBlank(question)) issues.push('answer_revealed_after_blank');
         if (hasGenericFillInContext(question)) issues.push('generic_fill_in_context');
         if (hasDictionaryFragmentContext(question)) issues.push('dictionary_fragment_context');
-        if (hasInvalidFillInGrammar({ word, context }) || hasInvalidFillInGrammar({ word: baseWord, context: baseContext })) issues.push('invalid_fill_in_grammar');
+        // Judge the completion the learner sees, not a reinserted uninflected entry.
+        if (hasInvalidFillInGrammar({ word, context })) issues.push('invalid_fill_in_grammar');
         if (hasDistractorFormOverlap(word, question)) issues.push('distractor_form_overlap');
         if (hasAmbiguousFillInContext(question)) issues.push('ambiguous_fill_in_context');
         const mismatch = hasSenseMismatchRisk(question);
@@ -611,12 +609,8 @@ function getQuestionQualityIssues(question) {
     if ([1, 2, 3].includes(type) && hasBadOptionInflection(question)) {
         issues.push('bad_option_inflection');
     }
-    if ([1, 2, 3].includes(type) && hasOverlappingOptionMeanings(question)) {
-        issues.push('overlapping_option_meanings');
-    }
     if (isElementaryLevel(question.level)) {
         if (type === 1) {
-            if (hasElementaryContextRisk(question.context)) issues.push('not_elementary_context');
             if (hasAmbiguousElementaryContext(question)) issues.push('ambiguous_elementary_context');
         }
         if (type === 2) {

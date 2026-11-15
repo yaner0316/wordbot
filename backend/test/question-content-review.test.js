@@ -7,7 +7,7 @@ const q = { level:'高中', context:'She opened the _____ to find the book title
     optionMeanings:['目录册','护照','日记','收据'], targetMeaning:'目录册',
     contextCN:'她打开目录册查找书名。' };
 function evidence() {
-    return { targetSense:{providedPartsOfSpeech:['noun'], contextualPartOfSpeech:'noun'},
+    return { targetSense:{providedPartsOfSpeech:['noun'], contextualPartOfSpeech:'noun',matches:true,contextualSense:'目录册',reason:'题干所用目录册与录入的名词义一致。'},
         translation:{text:q.contextCN, accurate:true, reason:'译文保留了打开目录册和查找书名的动作。'},
         optionMeanings:q.options.map((word,i)=>({letter:'ABCD'[i],meaning:q.optionMeanings[i],accurate:true,
             reason:'所给中文释义属于这个英文选项的真实词义。'})) };
@@ -53,41 +53,4 @@ test('cache-shape canonical meanings cannot be replaced by the meaning stored in
     }
 });
 
-function distinctPairs() {
-    return ['AB','AC','AD','BC','BD','CD'].map(pair=>({letters:[...pair],relation:'distinct',reason:'这两个选项所给含义不同，彼此不存在同义或包含关系。'}));
-}
-
-test('fresh review must explicitly compare option meanings, while legacy evidence stays compatible', () => {
-    const e = evidence();
-    assert.equal(parseContentReview(q,e,{requireOptionSeparation:true}).code,'content_review_missing');
-    e.optionPairs=distinctPairs();
-    const result=parseContentReview(q,e,{requireOptionSeparation:true});
-    assert.equal(result.approved,true);
-    assert.equal(hasCurrentContentReview(q,result.contentReview),true);
-    const shuffled={...q,options:['A. passport','B. catalogue','C. diary','D. receipt'],answer:'B',optionMeanings:['护照','目录册','日记','收据']};
-    assert.equal(hasCurrentContentReview(shuffled,result.contentReview),true);
-    assert.equal(parseContentReview(q,evidence()).approved,true);
-});
-
-test('semantic overlap replaces distractors rather than relabeling correct glosses', () => {
-    const {checkpointInvalidationStageForIssues,invalidateVariantFromStage}=require('../question-generation-checkpoint');
-    const e=evidence();
-    e.optionPairs=distinctPairs();
-    e.optionPairs[0]={letters:['A','B'],relation:'includes',reason:'两个选项的真实词义存在包含关系，不能作为独立选项。'};
-    const result=parseContentReview(q,e,{requireOptionSeparation:true});
-    assert.equal(result.code,'content_option_overlap');
-    const stage=checkpointInvalidationStageForIssues([result.code]);
-    assert.equal(stage,'distractors');
-    const repaired=invalidateVariantFromStage({context:q.context,contextTranslation:q.contextCN,options:q.options,optionMeanings:q.optionMeanings,audit:{}},stage);
-    assert.equal(repaired.context,q.context);
-    assert.equal(repaired.contextTranslation,q.contextCN);
-    assert.equal(repaired.options,undefined);
-});
-
-test('malformed pair comparisons cannot approve a fresh review', () => {
-    for(const pairs of [null,{},[],distinctPairs().slice(1),Array(6).fill(distinctPairs()[0]),
-        distinctPairs().map((pair,i)=>i?pair:{...pair,letters:['A','Z']}),
-        distinctPairs().map((pair,i)=>i?pair:{...pair,relation:'unknown'})]) {
-        assert.equal(parseContentReview(q,{...evidence(),optionPairs:pairs},{requireOptionSeparation:true}).approved,false);
-    }
-});
+test('retired pairwise overlap flags cannot veto a valid translation',()=>{for(const optionPairs of [null,[],[{letters:['B','C'],relation:'synonymous',reason:'这两个错误选项是同义词。'}]])assert.equal(parseContentReview(q,{...evidence(),optionPairs}).approved,true);});

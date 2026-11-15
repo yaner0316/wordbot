@@ -22,7 +22,7 @@ async function fixture() {
             alpha: '甲项', bravo: '乙项', charlie: '丙项', delta: '丁项', echo: '戊项', foxtrot: '己项', lucky: '幸运的',
         }[w]])),
         translateContext: async context => { calls.translations.push(context); return '她在比赛前觉得自己很幸运。'; },
-        semanticAudit: async q => { calls.audits.push(q); return { approved: true, status: 'approved', validLetters: [q.answer] }; },
+        semanticAudit: async q => { calls.audits.push(q); return require('./current-policy-fixture').approveAudit(q); },
         requireSemanticAudit: true,
     };
     const initial = await buildCacheQuestionRowsForWord(options);
@@ -85,7 +85,7 @@ test('later candidate retries exclude the retained stem before translation or se
         translateContext: async context => { translated.push(context); return '他们很幸运找到了那本丢失的书。'; },
         semanticAudit: async q => { audits++; return audits === 1
             ? { approved: false, status: 'rejected', validLetters: [] }
-            : { approved: true, status: 'approved', validLetters: [q.answer] }; },
+            : require('./current-policy-fixture').approveAudit(q); },
     });
     assert.equal(rows.length, 1);
     assert.equal(rows[0].question_text, nextContext.replace('lucky', '_____'));

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { auditUniqueAnswer } = require('../question-semantic-audit');
+const { auditOptions: auditUniqueAnswer } = require('../question-semantic-audit');
 
 const question = { context: 'Passengers must pay the bus _____ before sitting down.', options: ['A. fare', 'B. charge', 'C. fee', 'D. route'], optionMeanings: ['票价', '费用', '费用', '路线'], answer: 'A' };
 
@@ -14,15 +14,15 @@ test('semantic reviewer receives a blind question independent of the configured 
 });
 
 test('semantic audit approves only one certain answer matching the configured answer', async () => {
-    const result = await auditUniqueAnswer({...question,context:'We paid the bus _____ with a passenger ticket; it covers this journey.',options:['A. fare','B. bread','C. coat','D. pencil'],optionMeanings:['车费','面包','外套','铅笔']}, { callModel: async p => p.startsWith('WORD SENSE CHECK')?JSON.stringify({matches:true,providedSense:'车费',contextualSense:'车费',reason:'句中支付车票费用，与给定车费词义一致。'}):JSON.stringify({validLetters:['A'],certain:true,clue:'passenger ticket',clueReason:'乘客车票提供了交通费用的线索。',correctReason:'车费指乘坐公共交通工具的费用。',optionJudgments:[
-      {letter:'A',fits:true,suppliedSense:'车费',senseMatches:true,senseReason:'句中费用正是给定车费词义。',exclusion:'none',clue:'passenger ticket',meaning:'车费',reason:'车票支付的是这一趟旅程的车费。'},
-      {letter:'B',fits:false,suppliedSense:'面包',senseMatches:true,senseReason:'该词仍指给定的食物面包。',exclusion:'contradiction',clue:'passenger ticket',meaning:'面包',reason:'面包是食物，不能满足购买车票的费用用途。'},
-      {letter:'C',fits:false,suppliedSense:'外套',senseMatches:true,senseReason:'该词仍指给定的衣物外套。',exclusion:'contradiction',clue:'passenger ticket',meaning:'外套',reason:'外套是衣物，不能满足购买车票的费用用途。'},
-      {letter:'D',fits:false,suppliedSense:'铅笔',senseMatches:true,senseReason:'该词仍指给定的文具铅笔。',exclusion:'contradiction',clue:'passenger ticket',meaning:'铅笔',reason:'铅笔是文具，不能满足购买车票的费用用途。'},
+    const result = await auditUniqueAnswer({...question,context:'We paid the bus _____ with a passenger ticket; it covers this journey.',options:['A. fare','B. bread','C. coat','D. pencil'],optionMeanings:['车费','面包','外套','铅笔']}, { callModel: async p => p.startsWith('WORD SENSE CHECK')?JSON.stringify({matches:true,providedSense:'车费',contextualSense:'车费',reason:'句中支付车票费用，与给定车费词义一致。'}):JSON.stringify({validLetters:['A'],certain:true,semanticDiscrimination:true,clue:'passenger ticket',clueReason:'乘客车票提供了交通费用的线索。',correctReason:'车费指乘坐公共交通工具的费用。',optionJudgments:[
+      {letter:'A',word:'fare',grammatical:true,wordValid:true,levelSuitable:true,addedPremises:[],fits:true,suppliedSense:'车费',senseMatches:true,senseReason:'句中费用正是给定车费词义。',exclusion:'none',clue:'passenger ticket',meaning:'车费',reason:'车票支付的是这一趟旅程的车费。'},
+      {letter:'B',word:'bread',grammatical:true,wordValid:true,levelSuitable:true,addedPremises:[],fits:false,suppliedSense:'面包',senseMatches:true,senseReason:'该词仍指给定的食物面包。',exclusion:'contradiction',clue:'passenger ticket',meaning:'面包',reason:'面包是食物，不能满足购买车票的费用用途。'},
+      {letter:'C',word:'coat',grammatical:true,wordValid:true,levelSuitable:true,addedPremises:[],fits:false,suppliedSense:'外套',senseMatches:true,senseReason:'该词仍指给定的衣物外套。',exclusion:'contradiction',clue:'passenger ticket',meaning:'外套',reason:'外套是衣物，不能满足购买车票的费用用途。'},
+      {letter:'D',word:'pencil',grammatical:true,wordValid:true,levelSuitable:true,addedPremises:[],fits:false,suppliedSense:'铅笔',senseMatches:true,senseReason:'该词仍指给定的文具铅笔。',exclusion:'contradiction',clue:'passenger ticket',meaning:'铅笔',reason:'铅笔是文具，不能满足购买车票的费用用途。'},
     ]}) });
     assert.equal(result.approved, true);
     assert.equal(result.status, 'approved');
-    assert.equal(result.policyVersion, 'unique-answer-v2');
+    assert.equal(result.policyVersion, 'unique-answer-v3');
 });
 
 test('semantic audit rejects multiple valid synonyms and uncertain results', async () => {

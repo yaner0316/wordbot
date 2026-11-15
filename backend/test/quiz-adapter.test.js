@@ -27,7 +27,7 @@ function word(index, extra = {}) {
 }
 
 function cacheRow(index, variantSlot = 1) {
-    return {
+    const result = {
         id: `cache-${index}-${variantSlot}`,
         word_id: `word-${index}`,
         word_record_id: `rec-${index}`,
@@ -42,13 +42,14 @@ function cacheRow(index, variantSlot = 1) {
         question_type: '1',
         question_text: `Variant ${variantSlot} uses _____ naturally in context.`,
         context_zh: `\u8fd9\u662f\u7b2c${index}\u9053\u7ec3\u4e60\u4e2d\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
-        options: [`A. ${WORDS[index - 1]}`, `B. alpha-${variantSlot}`, `C. bravo-${variantSlot}`, `D. charlie-${variantSlot}`],
+        options: [`A. ${WORDS[index - 1]}`, `B. alpha${variantSlot}`, `C. bravo${variantSlot}`, `D. charlie${variantSlot}`],
         answer: 'A',
         option_meanings: ['中文释义', '阿尔法', '布拉沃', '查理'],
         correct_meaning: `中文释义${index}`,
         used_count: 0,
         generated_at: new Date(2026, 1, index).toISOString(),
     };
+    return {...require('./current-policy-fixture').attestRow(result)};
 }
 
 test('Supabase cache projection preserves approved AI audit status', () => {

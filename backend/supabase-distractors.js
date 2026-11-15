@@ -23,7 +23,7 @@ async function callMiniMax(prompt, timeout) {
     }
 }
 
-async function generateSupabaseDistractors({ word, meaning, level, context, candidates = [], excludedDistractors = [], rejectedAlternatives = [], levelFitFeedback = [] }) {
+async function generateSupabaseDistractors({ word, meaning, level, context, candidates = [], excludedDistractors = [], hardExcludedDistractors = [], repairFeedback = [], rejectedAlternatives = [], levelFitFeedback = [] }) {
     const actualContext = String(context || '').trim();
     if (!actualContext) return null;
     return selectContextualDistractors({
@@ -33,6 +33,8 @@ async function generateSupabaseDistractors({ word, meaning, level, context, cand
         context: actualContext,
         candidates,
         excludedDistractors,
+        hardExcludedDistractors,
+        repairFeedback,
         rejectedAlternatives,
         levelFitFeedback,
         callLLM: prompt => callMiniMax(prompt),

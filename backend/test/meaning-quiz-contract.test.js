@@ -24,7 +24,7 @@ function word(index, enteredAt) {
 }
 
 function cache(index, variantSlot = 1) {
-    return {
+    const result = {
         id: `cache-${index}-${variantSlot}`,
         word_id: `word-${index}`,
         source_word_record_id: `rec-${index}`,
@@ -39,11 +39,12 @@ function cache(index, variantSlot = 1) {
         question_type: '1',
         question_text: `Variant ${variantSlot} uses _____ in context number ${index}.`,
         context_zh: `\u8fd9\u662f\u7b2c${index}\u9053\u7ec3\u4e60\u4e2d\u7684\u5b8c\u6574\u4e2d\u6587\u53e5\u5b50\u3002`,
-        options: [`A. ${TERMS[index - 1]}`, `B. alpha-${variantSlot}`, `C. bravo-${variantSlot}`, `D. charlie-${variantSlot}`],
+        options: [`A. ${TERMS[index - 1]}`, `B. alpha${variantSlot}`, `C. bravo${variantSlot}`, `D. charlie${variantSlot}`],
         answer: 'A',
         option_meanings: [`释义${index}`, '甲', '乙', '丙'],
         correct_meaning: `释义${index}`,
     };
+    return {...require('./current-policy-fixture').attestRow(result)};
 }
 
 function cachePair(index) {

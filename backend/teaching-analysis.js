@@ -1,7 +1,7 @@
 'use strict';
 const TEACHING_ANALYSIS_POLICY = 'teaching-analysis-v1';
-const SEMANTIC_AUDIT_METHOD = 'blind-completion-v3';
-const INPUT_BOUND_SEMANTIC_AUDIT_METHODS = ['blind-completion-v2',SEMANTIC_AUDIT_METHOD];
+const SEMANTIC_AUDIT_METHOD = 'blind-completion-v6';
+const INPUT_BOUND_SEMANTIC_AUDIT_METHODS = ['blind-completion-v2','blind-completion-v3','blind-completion-v4','blind-completion-v5',SEMANTIC_AUDIT_METHOD];
 const clean = value => String(value || '').trim();
 const optionWord = value => clean(value).replace(/^[A-D]\.\s*/, '').toLowerCase();
 const chineseReason = value => /[\u3400-\u9fff]/.test(clean(value)) && clean(value).length >= 8 && clean(value).length <= 500;

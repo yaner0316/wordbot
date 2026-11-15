@@ -8,7 +8,7 @@ test('sense-aware jobs cannot restore an old English-only proof or discard its u
  const old={question_text:'She used pure _____ metal.',options:['nickel','copper','silver','gold'],option_meanings:['镍','铜','银','金'],answer:'A',question_fingerprint:'old',teaching_analysis:{}};
  let generated=0;
  const service=createQuestionGenerationService({requiredSenseAudit:true,loadWord:async()=>word,validateCandidate:()=>[],
- loadCheckpoint:async()=>({word:'nickel',level:'小学',meaning:'["","镍"]',variants:[{slot:1,context:'She used pure nickel metal.',contextTranslation:'她用了纯镍金属。',distractors:['copper','silver','gold'],audit:{approved:true},row:old}]}),
+ loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'nickel',level:'小学',meaning:'["","镍"]',variants:[{slot:1,context:'She used pure nickel metal.',contextTranslation:'她用了纯镍金属。',distractors:['copper','silver','gold'],audit:{approved:true},row:old}]}),
  generateCandidates:async request=>{generated++;assert.ok(!request.generationCheckpoint.variants[0].audit&&!request.generationCheckpoint.variants[0].row);assert.equal(request.generationCheckpoint.variants[0].contextTranslation,'她用了纯镍金属。');return [old,{...old,question_text:'The _____ was a pure magnetic metal.',options:['nickel','tin','zinc','lead'],option_meanings:['镍','锡','锌','铅']}].map(r=>({...r,teaching_analysis:{senseVerified:true,senseFingerprint:semanticSenseFingerprint(r)}}));},publishReadyVariants:async()=>{}});
  const result=await service.process({word_id:'w',user_id:'u'});assert.equal(generated,1);assert.equal(result.readyCount,2);
 });
@@ -20,7 +20,7 @@ test('required audit method invalidates only obsolete checkpoint audit and canno
  const oldRows=['She deposited money at the _____.','The _____ approved our loan.'].map(question_text=>({question_text,options:['A. bank','B. shore','C. desk','D. road'],answer:'A',ai_audit_status:'approved',source_version:'old',question_fingerprint:fingerprintQuestion({question_text},'w')}));
  let generated=0;
  const service=createQuestionGenerationService({requiredAuditMethod:SEMANTIC_AUDIT_METHOD,loadWord:async()=>word,validateCandidate:()=>[],
- loadCheckpoint:async()=>({word:'bank',level:'中学',meaning:'["",""]',variants:oldRows.map((row,i)=>({slot:i+1,context:row.question_text.replace('_____','bank'),distractors:['shore','desk','road'],contextTranslation:'银行提供金融服务。',audit:{approved:true,status:'approved'},row}))}),
+ loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'bank',level:'中学',meaning:'["",""]',variants:oldRows.map((row,i)=>({slot:i+1,context:row.question_text.replace('_____','bank'),distractors:['shore','desk','road'],contextTranslation:'银行提供金融服务。',audit:{approved:true,status:'approved'},row}))}),
  generateCandidates:async request=>{generated++;assert.ok(request.generationCheckpoint.variants.every(v=>!v.audit&&!v.row&&v.contextTranslation&&v.distractors.length===3));return oldRows.map((r,i)=>{const next={...r,options:i?['A. bank','B. tree','C. coin','D. sky']:r.options,source_version:SEMANTIC_AUDIT_METHOD};return {...next,teaching_analysis:{auditMethod:SEMANTIC_AUDIT_METHOD,inputFingerprint:semanticAuditInputFingerprint({context:next.question_text,options:next.options,answer:next.answer})}};});},publishReadyVariants:async()=>{}});
  await service.process({word_id:'w',user_id:'u'});assert.equal(generated,1);
 });
@@ -31,7 +31,7 @@ test('importing a cached sibling preserves partial work even when its slot is oc
     const partial={slot:1,context:'The bank approved our loan.',contextTranslation:'银行批准了我们的贷款。',distractors:['tree','coin','sky']};
     const service=createQuestionGenerationService({
         loadWord:async()=>({id:'w',word:'bank',cachedVariants:[{...sibling,question_fingerprint:fingerprintQuestion(sibling,'w')}]}),
-        loadCheckpoint:async()=>({word:'bank',meaning:'["",""]',variants:[partial]}),
+        loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'bank',meaning:'["",""]',variants:[partial]}),
         validateCandidate:()=>[],
         generateCandidates:async request=>{
             const restored=request.generationCheckpoint.variants.find(v=>!v.row);
@@ -65,7 +65,7 @@ test('replenishment cannot republish a checkpoint stem already shown to the chil
     let requests=0;
     const service=createQuestionGenerationService({
         loadWord:async()=>word,
-        loadCheckpoint:async()=>({word:'bank',level:'中学',meaning:'["finance",""]',variants:[old,fresh].map(row=>({...row,question_fingerprint:fingerprintQuestion(row,'w')}))}),
+        loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'bank',level:'中学',meaning:'["finance",""]',variants:[old,fresh].map(row=>({...row,question_fingerprint:fingerprintQuestion(row,'w')}))}),
         validateCandidate:()=>[],
         generateCandidates:async()=>{requests++;return [old,{question_text:'A new _____ opened near school.',options:['bank','tea','sky','cup'],answer:'A'}];},
         publishReadyVariants:async()=>{},
@@ -144,7 +144,7 @@ test('service resumes an approved sibling from a durable checkpoint and saves ne
     const service = createQuestionGenerationService({
         loadWord: async () => word,
         loadCheckpoint: async () => ({
-            schemaVersion: 1,
+            schemaVersion: 1, policyVersion:'context-learning-v3',
             wordVersion: 4,
             level: '小学',
             word: 'bank',
@@ -192,7 +192,7 @@ test('service discards checkpoint variants when only the Chinese meaning changed
             meaning_en: 'a financial institution', meaning_zh: '河岸',
         }),
         loadCheckpoint: async () => ({
-            schemaVersion: 1,
+            schemaVersion: 1, policyVersion:'context-learning-v3',
             wordVersion: 4,
             level: '小学',
             word: 'bank',
@@ -269,7 +269,7 @@ test('high-school checkpoints recheck obsolete fit evidence while preserving exp
  const old={level:'高中',question_text:'The _____ copied an old book by hand.',options:['scribe','farmer','driver','dancer'],option_meanings:['抄写员','农民','司机','舞者'],answer:'A',ai_audit_status:'approved',question_fingerprint:'old',teaching_analysis:{}};
  let generated=0;
  const service=createQuestionGenerationService({requiredLevelFitPolicy:LEVEL_FIT_POLICY,loadWord:async()=>word,validateCandidate:()=>[],
- loadCheckpoint:async()=>({word:'scribe',level:'高中',meaning:'["","抄写员"]',variants:[{slot:1,context:'The scribe copied an old book by hand.',contextTranslation:'抄写员手工抄写了一本旧书。',distractors:['farmer','driver','dancer'],audit:{approved:true},row:old}]}),
+ loadCheckpoint:async()=>({policyVersion:'context-learning-v3',word:'scribe',level:'高中',meaning:'["","抄写员"]',variants:[{slot:1,context:'The scribe copied an old book by hand.',contextTranslation:'抄写员手工抄写了一本旧书。',distractors:['farmer','driver','dancer'],audit:{approved:true},row:old}]}),
  generateCandidates:async request=>{
   generated++;
   const restored=request.generationCheckpoint.variants[0];
@@ -284,11 +284,11 @@ test('high-school checkpoints recheck obsolete fit evidence while preserving exp
 });
 
 
-test('already-published eligible high-school siblings are reused without a release-time rebuild',async()=>{
+test('published siblings without required evidence no longer bypass review',async()=>{
  const {createQuestionGenerationService,fingerprintQuestion}=require('../question-generation-service');
  const cached=['The _____ copied the book by hand.','An old _____ copied every page.'].map((question_text,i)=>({level:'高中',question_text,options:i?['scribe','cook','pilot','singer']:['scribe','driver','farmer','dancer'],answer:'A',option_meanings:i?['抄写员','厨师','飞行员','歌手']:['抄写员','司机','农民','舞者'],question_fingerprint:fingerprintQuestion({question_text},'w')}));
  let generated=0;
  const service=createQuestionGenerationService({requiredLevelFitPolicy:'high-school-fit-v1',loadWord:async()=>({id:'w',word:'scribe',level:'高中',cachedVariants:cached}),validateCandidate:()=>[],generateCandidates:async()=>{generated++;return [];},publishReadyVariants:async()=>{}});
- const result=await service.process({word_id:'w',user_id:'u'});
- assert.equal(generated,0);assert.equal(result.readyCount,2);
+ await assert.rejects(service.process({word_id:'w',user_id:'u'}),/two distinct/);
+ assert.ok(generated>0);
 });

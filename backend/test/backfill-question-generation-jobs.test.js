@@ -24,7 +24,8 @@ function word(overrides = {}) {
 }
 
 function cache(overrides = {}) {
-    return {
+    const result = {
+        level:'中学',
         user_id: 'user-1',
         word_id: 'word-1',
         round_type: 'primary',
@@ -40,10 +41,10 @@ function cache(overrides = {}) {
         option_meanings: ['\u94f6\u884c', '\u6cb3\u6d41', '\u5b66\u6821', '\u82b1\u56ed'],
         answer: 'A',
         ai_audit_status: 'approved',
-        source_version: 'supabase-contextual-variant-v3|unique-answer-v2',
         correct_meaning: '\u94f6\u884c',
         ...overrides,
     };
+    return {...require('./current-policy-fixture').attestRow(result),...overrides};
 }
 function assessment(overrides = {}) {
     return {
@@ -625,6 +626,7 @@ test('uses word records and context_zh when database cache rows omit denormalize
     ];
     rows[1].options = ['A. bank', 'B. river', 'C. bridge', 'D. road'];
     rows[1].option_meanings = ['\u94f6\u884c', '\u6cb3\u6d41', '\u6865', '\u9053\u8def'];
+    Object.assign(rows[1],require('./current-policy-fixture').attestRow(rows[1],'bank'));
     const plan = planQuestionGenerationJobBackfill({ words: [word()], assessments: [], cacheRows: rows, jobs: [] });
 
     assert.deepEqual(plan.jobs, []);

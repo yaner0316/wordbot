@@ -3,7 +3,7 @@
 require('node:test')('semantic rejected contexts survive checkpoint normalization for the same meaning',()=>{
  const {normalizeGenerationCheckpoint}=require('../question-generation-checkpoint');
  const current={word:'bank',level:'中学',meaning:'finance',wordVersion:1};
- const checkpoint=normalizeGenerationCheckpoint({...current,variants:[],rejectedContexts:['She saw a _____ nearby.']},current);
+ const checkpoint=normalizeGenerationCheckpoint({...current,policyVersion:'context-learning-v3',variants:[],rejectedContexts:['She saw a _____ nearby.']},current);
  require('node:assert/strict').deepEqual(checkpoint.rejectedContexts,['She saw a _____ nearby.']);
 });
 
@@ -54,7 +54,7 @@ test('semantic audit invalidation preserves every preceding stage', () => {
 
 test('checkpoint normalization preserves an approved sibling and handles casing as a downstream-only change', () => {
     const checkpoint = {
-        schemaVersion: 1,
+        schemaVersion: 1, policyVersion:'context-learning-v3',
         wordVersion: 1,
         level: '小学',
         word: 'Bank',
@@ -78,7 +78,7 @@ test('checkpoint normalization preserves an approved sibling and handles casing 
 
 test('checkpoint normalization resets variants when level, spelling, or meaning changes materially', () => {
     const checkpoint = {
-        schemaVersion: 1,
+        schemaVersion: 1, policyVersion:'context-learning-v3',
         wordVersion: 1,
         level: '小学',
         word: 'bank',

@@ -22,7 +22,7 @@ function word(overrides = {}) {
 }
 
 function cache(slot, overrides = {}) {
-    return {
+    const result = {
         id: `cache-${slot}`,
         user_id: 'user-1',
         word_id: 'word-1',
@@ -48,9 +48,9 @@ function cache(slot, overrides = {}) {
         correct_meaning: '银行',
         question_fingerprint: `fingerprint-${slot}`,
         ai_audit_status: 'approved',
-        source_version: 'supabase-contextual-variant-v3|unique-answer-v2',
         ...overrides,
     };
+    return {...require('./current-policy-fixture').attestRow(result),...overrides};
 }
 test('coverage treats a displayed stem as consumed even while its cache row remains ready', () => {
     const user={id:'user-1',learning_level:'小学'};
