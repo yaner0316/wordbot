@@ -2,7 +2,7 @@ name: Wake question worker
 
 on:
   schedule:
-    - cron: '7,17,27,37,47,57 * * * *'
+    - cron: '3-59/10 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -38,13 +38,15 @@ jobs:
           }
           const summary = {
             checkedAt: new Date().toISOString(),
+            trigger: process.env.GITHUB_EVENT_NAME,
             workerRunning: worker.running,
             workerStatus: worker.status,
+            workerStartedAt: worker.startedAt,
             lastClaimAt: worker.lastClaimAt,
             lastCompletionAt: worker.lastCompletionAt,
             pending: health.questionGenerationQueue?.counts?.pending,
             retrying: health.questionGenerationQueue?.counts?.retrying,
-            providerRateLimited: health.questionGenerationQueue?.lastErrorCode === 'MINIMAX_RATE_LIMITED',
+            queueStoredError: health.questionGenerationQueue?.lastErrorCode,
           };
           console.log(JSON.stringify(summary));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
