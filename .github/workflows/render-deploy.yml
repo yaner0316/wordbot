@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: yaner0316/wordbot-web
-          ref: c07f3636b7649b04307d685bf11316c8fb7294f9
+          ref: 29ea94a2657792a22fd10b6166bc24e7bbcdf4fa
           path: web-contract
           persist-credentials: false
 
@@ -69,11 +69,12 @@ jobs:
         run: npm ci
         working-directory: backend
 
-      - name: Verify production schema (code-only release; no migrations)
+      - name: Apply authorized question-policy migration and verify schema
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           test -n "$DATABASE_URL"
+          npm run migrate:question-generation
           npm run verify:question-generation-schema
         working-directory: backend
 
