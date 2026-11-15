@@ -1,0 +1,53 @@
+name: Wake question worker
+
+on:
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: question-worker-wakeup
+  cancel-in-progress: false
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake backend and check worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          health_file="$RUNNER_TEMP/wordbot-wakeup-health.json"
+          curl --fail --silent --show-error \
+            --connect-timeout 15 --max-time 60 \
+            --retry 2 --retry-delay 10 --retry-max-time 210 \
+            --output "$health_file" \
+            https://wordbot-1-w9il.onrender.com/api/health
+          node - "$health_file" <<'NODE'
+          const fs = require('node:fs');
+          const health = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const worker = health.questionGenerationWorker;
+          if (health.service !== 'wordbot-backend' || health.database?.ok !== true ||
+              worker?.configured !== true || worker?.running !== true) {
+            console.error('Backend or generation worker is not available.');
+            process.exit(1);
+          }
+          const summary = {
+            checkedAt: new Date().toISOString(),
+            workerRunning: worker.running,
+            workerStatus: worker.status,
+            lastClaimAt: worker.lastClaimAt,
+            lastCompletionAt: worker.lastCompletionAt,
+            pending: health.questionGenerationQueue?.counts?.pending,
+            retrying: health.questionGenerationQueue?.counts?.retrying,
+            providerRateLimited: health.questionGenerationQueue?.lastErrorCode === 'MINIMAX_RATE_LIMITED',
+          };
+          console.log(JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            'Backend responded; its generation worker is running. This does not mean questions are ready.\n\n' +
+            '```json\n' + JSON.stringify(summary, null, 2) + '\n```\n');
+          NODE

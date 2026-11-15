@@ -8,6 +8,14 @@ Execution evidence and remaining work: [implementation plan](plans/2026-11-14-qu
 
 # WordBot Operations
 
+## Scheduled question-worker wake-up (2026-11-15)
+
+`.github/workflows/question-worker-wakeup.yml` requests the public backend health endpoint every ten minutes (UTC minutes 7/17/27/37/47/57). This wakes a sleeping free Render backend and checks that its existing worker is configured and running. It does not call the model directly, reset jobs, shorten retry backoff, or bypass approval gates. Only safe operational counters enter the public workflow log. No frontend change is required.
+
+Manual wake: `gh workflow run question-worker-wakeup.yml --repo yaner0316/wordbot --ref main`. Inspect the run's summary for worker availability, last claim/completion, backlog and rate-limit indication. Success means a running worker was observed, not that new questions completed. Disable via GitHub Actions → Wake question worker → Disable workflow when this temporary measure is no longer needed.
+
+GitHub schedules are best-effort and can be delayed or dropped; public-repository scheduled workflows may be disabled after 60 days without repository activity. Render free-instance monthly limits still apply. The public repository's standard Ubuntu runner does not consume paid private-repository minutes; no artifact upload or paid Render Cron is used. This is temporary availability assistance, not an 18-hour completion guarantee.
+
 ## Level-dependent target inflection (local patch, 2026-11-14)
 
 Primary generation permits noun number changes only; junior-secondary and higher permit grammatical inflection without changing lexical identity or the selected sense. The context generator still returns a string and reports the exact printed `targetForm` to the formal builder; the existing JSON checkpoint retains it with the context, and context invalidation clears it. Blanking, option generation and meanings reuse use this printed form while the learning record remains canonical. Changed forms require `targetInflection` evidence in the stem review; both primary bands require a contextual noun for a changed target. Current-policy migration and validation requirements above supersede the older code-only release assumptions. Historical option spelling remains preserved.
