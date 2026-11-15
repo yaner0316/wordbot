@@ -37,8 +37,18 @@ function deriveSubmissionMasteryFeedback(testId, baseline, records) {
     }).map(({ meaningId, recordId, word, meaningZh }) => ({ meaningId, recordId, word, meaningZh }));
     const newlyIds = new Set(newlyMasteredMeanings.map(m => m.meaningId));
     const spellings = [...new Set(newlyMasteredMeanings.map(m => m.word))];
+    const progressSummary = { newlyMastered: newlyMasteredMeanings.length, consolidating: 0, recognized: 0 };
+    for (const meaning of baseline) {
+        if (meaning.mastered || newlyIds.has(meaning.meaningId)) continue;
+        const belongs = r => String(r.fields?.meaning_id || '') === meaning.meaningId
+            || String(r.fields?.record_id || '') === meaning.recordId;
+        if (!meaning.meaningId || !meaning.recordId || !current.some(belongs)) continue;
+        const stage = evaluateMeaning(records.filter(r => belongs(r) && assessmentTimestamp(r) <= last), correct).stage;
+        if (stage === 'consolidating' || stage === 'recognized') progressSummary[stage]++;
+    }
     return {
         newlyMasteredMeanings,
+        progressSummary,
         masteredWords: spellings.filter(word => baseline.filter(m => m.word === word)
             .every(m => m.mastered || newlyIds.has(m.meaningId))),
     };
