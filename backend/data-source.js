@@ -299,10 +299,10 @@ function loadSupabaseDataSource() {
                         questions: quiz.questions,
                     });
                 } catch (error) {
-                    if (selection && /FORMAL_CHALLENGE_(STEM_REUSED|CACHE_NOT_READY|CACHE_AI_AUDIT_REQUIRED)/.test(String(error?.message || error))) {
+                    if ((selection || quiz.retest) && /FORMAL_CHALLENGE_(STEM_REUSED|CACHE_NOT_READY|CACHE_AI_AUDIT_REQUIRED)/.test(String(error?.message || error))) {
                         const meaningIds = quiz.questions.map(q => q.meaningId);
                         await supabaseData.ensureQuizQuestionSupply?.(user, meaningIds);
-                        return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds,
+                        return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds, retest: quiz.retest,
                             requiredCount: meaningIds.length, readyCount: 0, questions: [], source: 'question_cache' };
                     }
                     const stemCollision = String(error?.code || error?.message || error).includes('FORMAL_CHALLENGE_STEM_REUSED');
@@ -338,7 +338,7 @@ function loadSupabaseDataSource() {
             await saveQuizSessionBestEffort(supabaseData, user, quiz.testId, quiz.questions);
             maybeCleanupExpiredQuizSessions(supabaseData);
             if (quiz.nextSupplyMeaningIds?.length && typeof supabaseData.ensureQuizQuestionSupply === 'function') {
-                try { await supabaseData.ensureQuizQuestionSupply(user, quiz.nextSupplyMeaningIds, { urgent: false }); }
+                try { await supabaseData.ensureQuizQuestionSupply(user, quiz.nextSupplyMeaningIds, { urgent: quiz.mode === 'real' }); }
                 catch { console.warn('[custom-challenge] advance supply enqueue will retry on the next preparation request'); }
             }
             delete quiz.nextSupplyMeaningIds;

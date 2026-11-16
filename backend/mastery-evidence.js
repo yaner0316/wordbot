@@ -116,10 +116,14 @@ function isSubmittedFormalQuiz(record) {
     return isFormalAssessment(record) && fieldValue(fields.is_correct).trim() !== '';
 }
 
+function normalizeMasteryStem(value) {
+    return fieldValue(value).normalize('NFKC')
+        .toLowerCase().replace(/_+/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 function questionStem(record) {
     const fields = record?.fields || {};
-    return fieldValue(fields.context || fields.question_text).normalize('NFKC')
-        .toLowerCase().replace(/_+/g, ' ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    return normalizeMasteryStem(fields.context || fields.question_text);
 }
 
 function evaluateMeaningMastery(records, isCorrectValue) {
@@ -192,5 +196,6 @@ module.exports = {
     isFormalAssessment,
     isSubmittedFormalQuiz,
     normalizeSubmittedAnswer,
+    normalizeMasteryStem,
     parseStoredAnswer,
 };

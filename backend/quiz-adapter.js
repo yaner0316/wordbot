@@ -5,6 +5,8 @@ const {
     buildChallengeCandidates,
     buildActiveDisplayStemsByMeaning,
     buildRecentQuestionTextsByWord,
+    isCorrectField,
+    learningDay,
     selectCachedQuestionsForWordQueue,
 } = require('./quiz-word-queue');
 const { createAssessmentId, getAssessmentMode, isRealAssessment } = require('./assessment-mode');
@@ -16,7 +18,7 @@ const { normalizeLevel } = require('./learning-level');
 const { WORD_QUIZ_COOLDOWN_MS } = require('./quiz-cooldown');
 const { hasMeaningfulChineseMeaning, isBadQuizWord, isQuestionQualityAcceptable, getAmbiguousFillInAnswerLetters } = require('./question-quality');
 const { generateElementaryTemplateContext } = require('./elementary-context');
-const { normalizeSubmittedAnswer } = require('./mastery-evidence');
+const { assessmentTimestamp, isSubmittedFormalQuiz, normalizeMasteryStem, normalizeSubmittedAnswer } = require('./mastery-evidence');
 const { evaluateMeaning } = require('./mastery-service');
 const { emptyFeedback, buildSubmissionMasteryBaseline, deriveSubmissionMasteryFeedback } = require('./submission-mastery-feedback');
 const { getSelectedSenseContextStage, hasSelectedSenseFlowFlag } = require('./selected-sense-flow');
@@ -308,6 +310,56 @@ async function buildMeaningFallbackQuestions({ wordRecords, queue, existingQuest
     }
     return questions;
 }
+function formalAnswerPriority(assessments) {
+    const byMeaning = new Map();
+    for (const record of assessments.filter(isSubmittedFormalQuiz)) {
+        const id = fieldText(record.fields.record_id).trim();
+        const time = assessmentTimestamp(record);
+        const wrong = !isCorrectField(record.fields.is_correct);
+        const item = byMeaning.get(id) || { latestAt: 0, lastWrongAt: 0 };
+        if (time) {
+            item.latestAt = Math.max(item.latestAt, time);
+            if (wrong) item.lastWrongAt = Math.max(item.lastWrongAt, time);
+        }
+        byMeaning.set(id, item);
+    }
+    return id => {
+        const item = byMeaning.get(id);
+        return !item?.lastWrongAt ? 2 : item.lastWrongAt === item.latestAt ? 0 : 1;
+    };
+}
+
+function pendingNextDayRetests(candidates, assessmentRecords, displayEvents, now) {
+    const yesterday = learningDay(now - 24 * 60 * 60 * 1000);
+    const today = learningDay(now);
+    const previous = new Map();
+    const currentAnswers = [];
+    const addPrevious = (id, stem) => {
+        if (!previous.has(id)) previous.set(id, new Set());
+        previous.get(id).add(normalizeMasteryStem(stem));
+    };
+    for (const event of displayEvents) {
+        const time = toMillis(event.displayedAt);
+        if (event.countsForCooldown && time && learningDay(time) === yesterday) addPrevious(event.meaningId, event.stem);
+    }
+    for (const record of assessmentRecords.filter(isSubmittedFormalQuiz)) {
+        const time = assessmentTimestamp(record);
+        if (!time || time > now) continue;
+        const day = learningDay(time);
+        const id = fieldText(record.fields.record_id).trim();
+        const stem = record.fields.context || record.fields.question_text;
+        if (day === yesterday) addPrevious(id, stem);
+        if (day === today) currentAnswers.push({ id, stem: normalizeMasteryStem(stem) });
+    }
+    // A submission that crossed midnight on the original stem is still yesterday's attempt.
+    const completed = new Set(currentAnswers.filter(({ id, stem }) => stem && !previous.get(id)?.has(stem)).map(({ id }) => id));
+    const priority = formalAnswerPriority(assessmentRecords);
+    return candidates.filter(item => previous.has(item.recordId) && !completed.has(item.recordId))
+        .sort((left, right) => priority(left.recordId) - priority(right.recordId)
+            || left.lastDisplayedAt - right.lastDisplayedAt
+            || left.recordId.localeCompare(right.recordId));
+}
+
 async function getChallengeCandidatesWithDataSource({ username, dataSource, now = Date.now(), mode = 'real' }) {
     const [user, words, assessments, displays] = await Promise.all([
         dataSource.getUserByUsername(username),
@@ -318,16 +370,39 @@ async function getChallengeCandidatesWithDataSource({ username, dataSource, now 
     const canonicalUsername = user?.username || username;
     const sourceIds = buildWordSourceIdMap(words);
     const canonicalIds = new Map(words.map(w => [sourceRecordId(w), String(w.id)]));
-    const candidates = buildChallengeCandidates({
+    const assessmentRecords = assessments.map(a => toFeishuAssessmentRecord(a, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds }));
+    const displayEvents = displays.map(d => normalizeFormalDisplayEvent(d, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds }));
+    const candidateRecords = buildChallengeCandidates({
         wordRecords: words.map(w => toFeishuWordRecord(w, { username: canonicalUsername })),
-        assessmentRecords: assessments.map(a => toFeishuAssessmentRecord(a, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
-        displayEvents: displays.map(d => normalizeFormalDisplayEvent(d, { username: canonicalUsername, sourceRecordIdByWordId: sourceIds })),
+        assessmentRecords, displayEvents,
         userId: canonicalUsername, now, ...(mode === 'practice' ? { minAgeMs: 0 } : {}),
-    }).map(({recordId, ...candidate}) => ({ ...candidate, meaningId: canonicalIds.get(recordId) }));
-    return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString() };
+    });
+    const candidates = candidateRecords.map(({recordId, ...candidate}) => ({ ...candidate, meaningId: canonicalIds.get(recordId) }));
+    const retests = mode === 'real' ? pendingNextDayRetests(candidateRecords, assessmentRecords, displayEvents, now) : [];
+    const batch = retests.slice(0, 10);
+    const level = normalizeOptionalLevel(user?.learning_level);
+    let readyCount = null;
+    if (batch.length && level && typeof dataSource.getQuestionCache === 'function') {
+        const cacheRows = await dataSource.getQuestionCache(canonicalUsername, level, 'primary');
+        readyCount = selectCachedQuestionsForWordQueue({
+            cacheRows: cacheRows.map(row => toFeishuCacheRow(row, { username: canonicalUsername })),
+            queue: batch.map(item => item.recordId),
+            userId: canonicalUsername, level, limit: batch.length, now, requireReadyPair: true,
+            recentQuestionTextsByWord: mergeQuestionTextHistory(
+                buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
+                buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
+            ),
+        }).length;
+    }
+    const retest = batch.length ? {
+        requiredCount: batch.length, remainingCount: retests.length, readyCount,
+        availableCount: batch.filter(item => item.eligible).length,
+        cooldownEndsAt: batch.map(item => item.cooldownEndsAt).filter(Boolean).sort().at(-1) || null,
+    } : null;
+    return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString(), retest };
 }
 
-function chooseChallengeQueue({ selection, candidates, wordRows, limit, readyRecordIds = new Set(), now = Date.now() }) {
+function chooseChallengeQueue({ selection, candidates, wordRows, limit, readyRecordIds = new Set(), assessmentRecords }) {
     if (!selection || !['random', 'custom'].includes(selection.mode) || !Array.isArray(selection.meaningIds)
         || selection.meaningIds.length > limit || selection.meaningIds.some(id => typeof id !== 'string' || !id.trim())
         || new Set(selection.meaningIds).size !== selection.meaningIds.length
@@ -342,12 +417,9 @@ function chooseChallengeQueue({ selection, candidates, wordRows, limit, readyRec
         const j = crypto.randomInt(i + 1);
         [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
     }
-    const day = time => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(time));
-    const yesterday = day(now - 24 * 60 * 60 * 1000);
+    const wrongPriority = formalAnswerPriority(assessmentRecords);
     const priorities = new Map(candidates.map(candidate => [candidate.recordId,
-        candidate.lastDisplayedAt && day(candidate.lastDisplayedAt) === yesterday ? 0 : candidate.lastDisplayedAt ? 1 : 2]));
-    // Preserve explicit choices. Use ready supply first, then preserve random
-    // review priority among usable meanings instead of blocking on missing jobs.
+        candidate.lastDisplayedAt ? wrongPriority(candidate.recordId) : 3]));
     remaining.sort((left,right) => Number(readyRecordIds.has(right))-Number(readyRecordIds.has(left))
         || (selection.mode === 'random' ? priorities.get(left)-priorities.get(right) : 0));
     return [...selected, ...remaining].slice(0, limit);
@@ -401,20 +473,24 @@ async function generateQuizWithDataSource({
     const questionCacheRows = cacheRows.map((row) => toFeishuCacheRow(row, { username: canonicalUsername }));
     const wordRowsBySourceId = new Map(wordRows.map(row => [sourceRecordIdByWordId.get(String(row.id || '').trim()) || String(row.feishu_record_id || row.id || '').trim(), row]));
 
-    const challengeCandidates = selection
+    const challengeCandidates = selection || mode === 'real'
         ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now,
             ...(mode === 'practice' ? {minAgeMs: 0} : {}) }) : null;
+    const retestBatch = mode === 'real'
+        ? pendingNextDayRetests(challengeCandidates, assessmentRecords, displayEvents, now).slice(0, limit)
+        : [];
     const recentQuestionTextsByWord = mode === 'practice' ? new Map() : mergeQuestionTextHistory(
         buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
         buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
     );
-    const readyRecordIds = challengeCandidates ? new Set(selectCachedQuestionsForWordQueue({
+    const readyRecordIds = selection && !retestBatch.length ? new Set(selectCachedQuestionsForWordQueue({
         cacheRows: questionCacheRows, queue: challengeCandidates.filter(w=>w.eligible).map(w=>w.recordId),
         userId: canonicalUsername, level: effectiveLevel, roundType, requireReadyPair:mode !== 'practice',
         limit: challengeCandidates.length, recentQuestionTextsByWord, now,
     }).map(question=>question.record_id)) : new Set();
-    const queue = challengeCandidates ? chooseChallengeQueue({ selection, wordRows, limit,
-        candidates: challengeCandidates, readyRecordIds, now
+    const queue = retestBatch.length ? retestBatch.map(item => item.recordId)
+        : selection ? chooseChallengeQueue({ selection, wordRows, limit,
+        candidates: challengeCandidates, readyRecordIds, assessmentRecords
     }) : buildQuizWordQueue({
         wordRecords,
         cacheRows: questionCacheRows,
@@ -427,9 +503,10 @@ async function generateQuizWithDataSource({
         minAgeMs: effectiveMinAgeMs,
     });
 
-    if (challengeCandidates) limit = Math.min(limit, challengeCandidates.length);
+    if (retestBatch.length) limit = retestBatch.length;
+    else if (selection) limit = Math.min(limit, challengeCandidates.length);
     if (selection && !limit) return { code: 'CHALLENGE_NO_ELIGIBLE_WORDS', questions: [], requiredCount: 0 };
-    if (challengeCandidates && queue.length < limit) return {
+    if (selection && queue.length < limit) return {
         code: 'CHALLENGE_COOLDOWN', questions: [], requiredCount: limit, availableCount: queue.length,
     };
 
@@ -447,7 +524,7 @@ async function generateQuizWithDataSource({
         ...question,
         source: 'question_cache',
         correctAnswer: question.answer,
-        ...(selection ? { challengeSize: limit } : {}),
+        ...(selection || retestBatch.length ? { challengeSize: limit } : {}),
         selectedSenseFlow: hasSelectedSenseFlowFlag(wordRowsBySourceId.get(String(question.record_id || question.wordRecordId || '').trim())),
     }));
 
@@ -467,13 +544,19 @@ async function generateQuizWithDataSource({
         excludedMasteredStatusCount: wordRows.length - selectableWordRows.length,
     };
 
-    if (questions.length < limit) {
+    const retestCooling = retestBatch.filter(item => !item.eligible);
+    if (questions.length < limit || retestCooling.length) {
         if (mode !== 'test') {
-            if (selection) {
+            if (selection || retestBatch.length) {
                 const selectedIds = queue.map(id => String(wordRowsBySourceId.get(id)?.id));
                 const readyIds = new Set(questions.map(q => String(q.meaningId || '')));
                 const missingIds = selectedIds.filter(id => !readyIds.has(id));
-                const supply = await dataSource.ensureQuizQuestionSupply?.(username, missingIds);
+                const supply = missingIds.length ? await dataSource.ensureQuizQuestionSupply?.(username, missingIds) : null;
+                if (retestCooling.length) return {
+                    code: 'CHALLENGE_COOLDOWN', retest: true, questions: [], requiredCount: limit,
+                    availableCount: limit - retestCooling.length,
+                    cooldownEndsAt: retestCooling.map(item => item.cooldownEndsAt).filter(Boolean).sort().at(-1) || null,
+                };
                 const states = new Map((supply?.words || []).map(word => [word.meaningId, word]));
                 const missingWords = missingIds.map(meaningId => {
                     const status = states.get(meaningId);
@@ -481,7 +564,7 @@ async function generateQuizWithDataSource({
                         state: ['queued', 'generating', 'retry_wait', 'unavailable'].includes(status?.state) ? status.state : 'queued',
                         retryAt: typeof status?.retryAt === 'string' && Number.isFinite(Date.parse(status.retryAt)) ? status.retryAt : null };
                 });
-                return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds: selectedIds,
+                return { pending: true, code: 'CHALLENGE_PREPARING', meaningIds: selectedIds, retest: Boolean(retestBatch.length),
                     requiredCount: limit, readyCount: questions.length, missingWords, questions: [], source: 'question_cache' };
             }
             const code = queue.length < limit ? 'QUESTION_POOL_EXHAUSTED' : 'QUESTION_CACHE_NOT_READY';
@@ -596,7 +679,7 @@ async function generateQuizWithDataSource({
     }
 
     let nextSupplyMeaningIds;
-    if (selection) {
+    if (selection || mode === 'real') {
         const nextHistory = mergeQuestionTextHistory(
             buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
             buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
@@ -609,7 +692,8 @@ async function generateQuizWithDataSource({
         }
         const nextReady = new Set(selectCachedQuestionsForWordQueue({
             cacheRows: questionCacheRows, queue, userId: canonicalUsername, level: effectiveLevel,
-            roundType, requireReadyPair: true, limit, now, recentQuestionTextsByWord: nextHistory,
+            roundType, requireReadyPair: true, limit,
+            now: mode === 'real' ? now + effectiveMinAgeMs : now, recentQuestionTextsByWord: nextHistory,
         }).map(q => q.meaningId));
         nextSupplyMeaningIds = questions.filter(q => !nextReady.has(q.meaningId)).map(q => q.meaningId);
     }
@@ -617,7 +701,8 @@ async function generateQuizWithDataSource({
         testId,
         mode,
         source: 'question_cache',
-        ...(selection ? { nextSupplyMeaningIds } : {}),
+        ...(nextSupplyMeaningIds ? { nextSupplyMeaningIds } : {}),
+        ...(retestBatch.length ? { retest: true } : {}),
         level: effectiveLevel,
         partialFormalChallenge: mode !== 'test' ? questions.length < 10 : undefined,
         readyCount: mode !== 'test' ? questions.length : undefined,

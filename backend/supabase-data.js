@@ -487,7 +487,10 @@ async function listUserWordsWithClient(client, username, options = {}) {
     const status = requestedStatus === 'optF5P0W3O' ? 'mastered' : requestedStatus.toLowerCase();
     const rows = await getWordsForUserWithClient(client, user.username, null);
     const filtered = rows
-        .filter(row => !status || normalizeMasteryStatus(row.mastery_status) === status)
+        .filter(row => {
+            const stage = normalizeMasteryStatus(row.mastery_status);
+            return !status || stage === status || (status === 'consolidating' && stage === 'recognized');
+        })
         .sort((left, right) => String(left.word || '').localeCompare(String(right.word || '')));
     const total = filtered.length;
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -3586,6 +3589,7 @@ function summarizeSupabaseWordProgress(words, assessments) {
     }
 
     const counts = { mastered: 0, consolidating: 0, recognized: 0, unseen: 0 };
+    const meaningStageCounts = { entered: 0, consolidating: 0, mastered: 0 };
     for (const meaningRows of groups.values()) {
         const evaluations = meaningRows.map(word => {
             const evidence = (assessments || [])
@@ -3595,6 +3599,9 @@ function summarizeSupabaseWordProgress(words, assessments) {
                 .map(statsAssessmentRow);
             return resolveSavedMastery(word.mastery_status, evaluateMeaningMastery(evidence, isCorrectStatsValue));
         });
+        for (const meaning of evaluations) {
+            meaningStageCounts[meaning.mastered ? 'mastered' : meaning.stage === 'unseen' ? 'entered' : 'consolidating']++;
+        }
         const stage = evaluations.every(item => item.mastered)
             ? 'mastered'
             : evaluations.some(item => item.mastered || item.stage === 'consolidating')
@@ -3615,6 +3622,7 @@ function summarizeSupabaseWordProgress(words, assessments) {
         unseenWords: counts.unseen,
         pendingWords: totalWords - counts.mastered,
         masteryStageCounts: counts,
+        meaningStageCounts,
     };
 }
 
@@ -3639,6 +3647,7 @@ async function getStatsWithClient(client, username) {
             unseenWords: 0,
             pendingWords: 0,
             masteryStageCounts: { mastered: 0, consolidating: 0, recognized: 0, unseen: 0 },
+            meaningStageCounts: { entered: 0, consolidating: 0, mastered: 0 },
             totalTests: 0,
             totalQuestions: 0,
             correctCount: 0,

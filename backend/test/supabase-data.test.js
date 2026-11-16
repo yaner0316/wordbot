@@ -234,6 +234,7 @@ test('Supabase stats use saved progress and immutable assessments for quiz metri
         unseenWords: 1,
         pendingWords: 3,
         masteryStageCounts: { mastered: 1, consolidating: 1, recognized: 1, unseen: 1 },
+        meaningStageCounts: { entered: 1, consolidating: 2, mastered: 1 },
         totalTests: 2,
         totalQuestions: 4,
         correctCount: 3,
@@ -3591,7 +3592,7 @@ test('diagnostics word lookup splits long ID lists without losing blocked jobs',
     assert.deepEqual(batchSizes,[100,21]);
 });
 
-test('parent word status filters and edit-read round trips preserve all four stages', async () => {
+test('parent word library consolidating filter includes both saved learning stages', async () => {
     const stages = ['Pending', 'Recognized', 'Consolidating', 'Mastered'];
     const client = createFakeSupabase({
         users: [{ id: 'user-1', username: 'qiuqiu', username_key: 'qiuqiu' }],
@@ -3600,8 +3601,9 @@ test('parent word status filters and edit-read round trips preserve all four sta
     const adapter = createSupabaseDataAdapter(client);
     for (const status of stages) {
         const page = await adapter.listUserWords('qiuqiu', { status });
-        assert.equal(page.total, 1, `${status} filter`);
-        assert.equal(page.words[0].status, status);
+        const expected = status === 'Consolidating' ? ['Recognized', 'Consolidating'] : [status];
+        assert.equal(page.total, expected.length, `${status} filter`);
+        assert.deepEqual(page.words.map(word => word.status), expected);
     }
     assert.equal((await adapter.listUserWords('qiuqiu', { status: 'optF5P0W3O' })).total, 1);
     for (const status of stages) {

@@ -1,4 +1,4 @@
-const { assessmentTimestamp, evaluateWordMastery, isFormalAssessment, isSubmittedFormalQuiz } = require('./mastery-evidence');
+const { assessmentTimestamp, evaluateWordMastery, isFormalAssessment, isSubmittedFormalQuiz, normalizeMasteryStem } = require('./mastery-evidence');
 const { resolveSavedMastery } = require('./mastery-service');
 const { getTypePolicy, isCacheQuestionReady, normalizeCacheRow } = require('./question-cache');
 const { getReadyPrimaryPairIssues } = require('./question-cache-pair');
@@ -30,13 +30,15 @@ function isCorrectField(value) {
 }
 
 
+const learningDayFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+});
+
 function learningDay(time) {
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-    }).format(new Date(Number(time)));
+    return learningDayFormatter.format(new Date(Number(time)));
 }
 
 function recordTimestamp(record) {
@@ -380,8 +382,8 @@ function selectCachedQuestionsForWordQueue({
         isCacheRowAvailable(row, now));
     const byRecordId = new Map();
     for (const row of normalizedRows) {
-        const excluded = new Set([...(recentQuestionTextsByWord.get(row.wordRecordId) || [])].map(normalizeQuestionText));
-        if (excluded.has(normalizeQuestionText(row.question.context))) continue;
+        const excluded = new Set([...(recentQuestionTextsByWord.get(row.wordRecordId) || [])].map(normalizeMasteryStem));
+        if (excluded.has(normalizeMasteryStem(row.question.context))) continue;
         const current = byRecordId.get(row.wordRecordId);
         if (!current || row.usedCount < current.usedCount) {
             byRecordId.set(row.wordRecordId, row);
@@ -409,6 +411,8 @@ function selectCachedQuestionsForWordQueue({
 }
 
 module.exports = {
+    isCorrectField,
+    learningDay,
     buildChallengeCandidates,
     buildQuizWordQueue,
     summarizeQuizLearningAvailability,
