@@ -94,7 +94,6 @@ function createQuestionGenerationWorker({
     const cancel = requireFunction(clearIntervalFn, 'QUESTION_GENERATION_WORKER_TIMER_CANCEL_REQUIRED');
     let timer = null;
     let inFlight = null;
-    let providerFailures = 0;
     let providerCooldownUntil = 0;
     let providerCooldownCode = null;
     const observability = {
@@ -126,11 +125,9 @@ function createQuestionGenerationWorker({
             .then(result => {
                 const completedAt = timestamp();
                 if (result.providerErrorCode) {
-                    providerFailures = Math.min(4, providerFailures + 1);
-                    providerCooldownUntil = Date.parse(completedAt) + Math.min(300000, 60000 * 2 ** (providerFailures - 1));
+                    providerCooldownUntil = Date.parse(completedAt) + 60000;
                     providerCooldownCode = result.providerErrorCode;
                 } else if (result.claimed > 0) {
-                    providerFailures = 0;
                     providerCooldownUntil = 0;
                     providerCooldownCode = null;
                 }

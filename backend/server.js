@@ -337,6 +337,7 @@ async function getServerRuntimeHealth(state) {
         ...health,
         ok: health.ok && database.ok && workerHealth.ok,
         database,
+        modelCalls: require('./minimax-call-log').getMiniMaxCallSummary(),
         questionGenerationWorker: workerHealth,
         questionGenerationQueue,
         questionCoverage,

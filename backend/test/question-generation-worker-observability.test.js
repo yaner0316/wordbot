@@ -5,6 +5,11 @@ const assert = require('node:assert/strict');
 
 const { createQuestionGenerationWorker } = require('../question-generation-worker');
 
+test('continuing rate limits keep one-minute probes rather than extending to five minutes',async()=>{
+ let time=Date.parse('2026-11-16T00:00:00Z'),calls=0;const worker=createQuestionGenerationWorker({workerId:'probe',now:()=>new Date(time),jobStore:{claim:async()=>[{}],fail:async()=>{},complete:async()=>{}},generationService:{process:async()=>{calls++;throw Object.assign(new Error('limited'),{code:'MINIMAX_RATE_LIMITED'});}}});
+ for(let i=0;i<4;i++){await worker.runOnce();assert.equal(calls,i+1);assert.equal(Date.parse(worker.getObservability().providerCooldownUntil)-time,60000);time+=30000;await worker.runOnce();assert.equal(calls,i+1);time+=30000;}
+});
+
 test('provider outage pauses claims across jobs and resumes automatically without discarding work',async()=>{
  let time=Date.parse('2026-11-15T16:00:00Z'),claims=0,attempts=0,failed=0,completed=0;
  const worker=createQuestionGenerationWorker({workerId:'worker',runImmediately:false,batchSize:1,now:()=>new Date(time),

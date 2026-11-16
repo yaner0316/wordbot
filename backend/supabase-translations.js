@@ -1,3 +1,4 @@
+const {startMiniMaxCall}=require('./minimax-call-log');
 const https = require('https');
 const { isConciseChineseMeaning } = require('./chinese-meaning');
 const { CONTEXTUAL_GLOSS_RULES } = require('./question-content-review');
@@ -29,7 +30,10 @@ async function retryInvalidTranslationResponse(operation, attempts = 2) {
 }
 
 function callMiniMax(prompt, timeout) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolveResult, rejectResult) => {
+        let callLog;
+        const resolve=value=>{callLog?.finish();resolveResult(value);};
+        const reject=error=>{callLog?.finish(error);rejectResult(error);};
         const apiKey = process.env.MINIMAX_API_KEY;
         if (!apiKey) {
             reject(translationError('TRANSLATION_CONFIG_MISSING', 'MiniMax translation is not configured'));
@@ -37,6 +41,7 @@ function callMiniMax(prompt, timeout) {
         }
         const settings = getMiniMaxSettings();
         const body = JSON.stringify(buildMiniMaxRequestBody(prompt));
+        callLog=startMiniMaxCall('translation_generation',settings.model);
         const request = https.request({
             hostname: 'api.minimax.chat',
             path: '/v1/text/chatcompletion_v2',
@@ -47,6 +52,7 @@ function callMiniMax(prompt, timeout) {
                 'Content-Length': Buffer.byteLength(body),
             },
         }, response => {
+            callLog.http(response.statusCode);
             const chunks = [];
             response.on('data', chunk => chunks.push(chunk));
             response.on('end', () => {
@@ -56,6 +62,7 @@ function callMiniMax(prompt, timeout) {
                 }
                 try {
                     const result = JSON.parse(Buffer.concat(chunks).toString());
+                    callLog.payload(result);
                     assertMiniMaxResponse(result);
                     const content = result.choices?.[0]?.message?.content;
                     if (!content) {

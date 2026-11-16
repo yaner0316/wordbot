@@ -1,3 +1,4 @@
+const {startMiniMaxCall}=require('./minimax-call-log');
 const { selectContextualDistractors } = require('./generate-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxHttpStatus, isMiniMaxProviderError, assertMiniMaxResponse } = require('./minimax-settings');
 
@@ -7,6 +8,7 @@ async function callMiniMax(prompt, timeout) {
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout || settings.timeoutMs);
+    const callLog=startMiniMaxCall('distractor_generation',settings.model);
     try {
         const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
@@ -14,11 +16,17 @@ async function callMiniMax(prompt, timeout) {
             body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
+        callLog.http(response.status);
         if (!response.ok) assertMiniMaxHttpStatus(response.status);
         const result = await response.json();
+        callLog.payload(result);
         assertMiniMaxResponse(result);
         return result.choices?.[0]?.message?.content || '';
+    } catch(error) {
+        callLog.finish(error);
+        throw error;
     } finally {
+        callLog.finish();
         clearTimeout(timer);
     }
 }

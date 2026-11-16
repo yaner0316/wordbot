@@ -1,3 +1,4 @@
+const {startMiniMaxCall}=require('./minimax-call-log');
 const {QUESTION_POLICY,stemInput,stemFingerprint,optionFingerprint,hasCurrentStemReview}=require('./question-policy');
 const {isPrimaryLevel}=require('./learning-level');
 const {levelGuidance,isSupportedLevel}=require('./high-school-fit');
@@ -25,6 +26,7 @@ async function callMiniMax(prompt) {
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+    const callLog=startMiniMaxCall(prompt.startsWith('STEM REVIEW') ? 'stem_review' : prompt.startsWith('TRANSLATION REVIEW') ? 'translation_review' : prompt.startsWith('LEXICAL') ? 'gloss_review' : 'options_review',settings.model);
     try {
         const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
@@ -32,11 +34,17 @@ async function callMiniMax(prompt) {
             body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
+        callLog.http(response.status);
         if (!response.ok) assertMiniMaxHttpStatus(response.status);
         const payload = await response.json();
+        callLog.payload(payload);
         assertMiniMaxResponse(payload);
         return payload?.choices?.[0]?.message?.content || '';
+    } catch(error) {
+        callLog.finish(error);
+        throw error;
     } finally {
+        callLog.finish();
         clearTimeout(timer);
     }
 }

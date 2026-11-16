@@ -1,3 +1,4 @@
+const {startMiniMaxCall}=require('./minimax-call-log');
 const {QUESTION_POLICY,hasCurrentStemReview,optionFingerprint}=require('./question-policy');
 const { formatOptionSurface, targetSurface, hasCurrentSurfaceEvidence } = require('./question-surface');
 const { CONTENT_REVIEW_POLICY, hasCurrentContentReview } = require('./question-content-review');
@@ -2431,6 +2432,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
     const settings = getMiniMaxSettings();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+    const callLog=startMiniMaxCall('context_generation',settings.model);
     try {
         const response = await fetch('https://api.minimax.chat/v1/text/chatcompletion_v2', {
             method: 'POST',
@@ -2438,8 +2440,10 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
             body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
+        callLog.http(response.status);
         if (!response.ok) assertMiniMaxHttpStatus(response.status);
         const payload = await response.json();
+        callLog.payload(payload);
         assertMiniMaxResponse(payload);
         const content = payload?.choices?.[0]?.message?.content || '';
         const match = String(content).match(/"context"\s*:\s*"((?:[^"\\]|\\.)*)"/);
@@ -2462,8 +2466,10 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
         repair.onTargetForm?.({context,targetForm:target});
         return context;
     } catch (error) {
+        callLog.finish(error);
         return miniMaxFallback(error, '');
     } finally {
+        callLog.finish();
         clearTimeout(timer);
     }
 }
