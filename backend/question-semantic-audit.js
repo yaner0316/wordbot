@@ -3,7 +3,7 @@ const {isPrimaryLevel}=require('./learning-level');
 const {levelGuidance,isSupportedLevel}=require('./high-school-fit');
 const {admitsGrammarDefect}=require('./audit-reason-consistency');
 const { CONTENT_REVIEW_POLICY, contentReviewPrompt, parseContentReview } = require('./question-content-review');
-const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxHttpStatus, isMiniMaxProviderError, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { teachingAnalysisFromAudit, SEMANTIC_AUDIT_METHOD, semanticAuditInputFingerprint, semanticSenseFingerprint } = require('./teaching-analysis');
 
 
@@ -32,7 +32,7 @@ async function callMiniMax(prompt) {
             body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
-        if (!response.ok) throw new Error('semantic_audit_http_' + response.status);
+        if (!response.ok) assertMiniMaxHttpStatus(response.status);
         const payload = await response.json();
         assertMiniMaxResponse(payload);
         return payload?.choices?.[0]?.message?.content || '';

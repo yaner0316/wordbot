@@ -3,7 +3,7 @@ const { isConciseChineseMeaning } = require('./chinese-meaning');
 const { CONTEXTUAL_GLOSS_RULES } = require('./question-content-review');
 const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
-const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxHttpStatus, isMiniMaxProviderError, assertMiniMaxResponse } = require('./minimax-settings');
 
 class TranslationError extends Error {
     constructor(code, message, options = {}) {
@@ -51,7 +51,7 @@ function callMiniMax(prompt, timeout) {
             response.on('data', chunk => chunks.push(chunk));
             response.on('end', () => {
                 if (response.statusCode < 200 || response.statusCode >= 300) {
-                    reject(translationError('TRANSLATION_PROVIDER_UNAVAILABLE', `MiniMax translation request failed with status ${response.statusCode}`));
+                    try { assertMiniMaxHttpStatus(response.statusCode); } catch (error) { reject(error); }
                     return;
                 }
                 try {
@@ -64,7 +64,7 @@ function callMiniMax(prompt, timeout) {
                     }
                     resolve(content);
                 } catch (error) {
-                    if (['MINIMAX_RATE_LIMITED','MINIMAX_PROVIDER_UNAVAILABLE'].includes(error?.code)) { reject(error); return; }
+                    if (isMiniMaxProviderError(error)) { reject(error); return; }
                     reject(translationError('TRANSLATION_RESPONSE_INVALID', 'MiniMax translation response was not valid JSON', error));
                 }
             });

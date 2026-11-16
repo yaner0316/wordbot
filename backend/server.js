@@ -302,6 +302,10 @@ async function getServerRuntimeHealth(state) {
         now: state?.workerHealthNow?.() || new Date().toISOString(),
         stallAfterMs: state?.workerStallAfterMs,
     });
+    if (observed.providerCooldownUntil) {
+        workerHealth.providerCooldownUntil = observed.providerCooldownUntil;
+        workerHealth.providerCooldownCode = observed.providerCooldownCode;
+    }
     const coverageController = runtime?.coverageController;
     const coverageObserved = typeof coverageController?.getObservability === 'function'
         ? coverageController.getObservability()

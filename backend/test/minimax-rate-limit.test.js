@@ -2,6 +2,14 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {auditUniqueAnswer}=require('../question-semantic-audit');
 const {generateSupabaseDistractors}=require('../supabase-distractors');
 const {generateReplacementContextWithAI,buildCacheQuestionRowsForWord}=require('../supabase-data');
+
+test('HTTP overload and rate limiting escape quality fallback after one request per stage',async()=>{
+ const previousFetch=global.fetch,previousKey=process.env.MINIMAX_API_KEY;process.env.MINIMAX_API_KEY='test-only';let calls=0;
+ try{for(const [status,code] of [[529,'MINIMAX_PROVIDER_OVERLOADED'],[429,'MINIMAX_RATE_LIMITED'],[503,'MINIMAX_PROVIDER_UNAVAILABLE']]){
+  global.fetch=async()=>{calls++;return {ok:false,status};};
+  for(const operation of [()=>auditUniqueAnswer({context:'He plays _____.',options:['A. guitar','B. drum','C. flute','D. piano'],answer:'A'}),()=>generateReplacementContextWithAI('guitar','吉他','高中',''),()=>generateSupabaseDistractors({word:'guitar',meaning:'吉他',context:'He plays _____.'})]){calls=0;await assert.rejects(operation(),e=>e.code===code);assert.equal(calls,1);}
+ }}finally{global.fetch=previousFetch;if(previousKey===undefined)delete process.env.MINIMAX_API_KEY;else process.env.MINIMAX_API_KEY=previousKey;}
+});
 test('HTTP 200 Token Plan rejection stops each model stage after one request',async()=>{
  const previousFetch=global.fetch,previousKey=process.env.MINIMAX_API_KEY;process.env.MINIMAX_API_KEY='test-only';let calls=0;
  global.fetch=async()=>{calls++;return {ok:true,json:async()=>({base_resp:{status_code:2062,status_msg:'Token Plan rate limit'},usage:{total_tokens:0}})};};

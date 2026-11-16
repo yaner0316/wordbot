@@ -24,6 +24,7 @@ function summarizeQuestionGenerationQueue(rows, { now = new Date().toISOString()
     const counts = { pending: 0, running: 0, retrying: 0, failed: 0, blockedInvalidWord: 0 };
     let oldestPendingAt = null;
     let lastErrorCode = null;
+    let lastErrorAt = -Infinity;
 
     for (const row of classifyGenerationJobs(rows, words)) {
         if (row.generationBlockReason === 'INVALID_GENERATION_WORD') {
@@ -44,7 +45,11 @@ function summarizeQuestionGenerationQueue(rows, { now = new Date().toISOString()
         }
 
         const code = safeQuestionGenerationErrorCode(row?.last_error_code);
-        if (code) lastErrorCode = code;
+        const errorAt = toTimestamp(row?.updated_at) ?? 0;
+        if (code && !RUNNING_STATUSES.has(status) && errorAt >= lastErrorAt) {
+            lastErrorCode = code;
+            lastErrorAt = errorAt;
+        }
     }
 
     const oldestPendingAgeMs = oldestPendingAt !== null && nowMs !== null

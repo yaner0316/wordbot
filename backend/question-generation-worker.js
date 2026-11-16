@@ -1,4 +1,5 @@
 'use strict';
+const {isMiniMaxProviderError} = require('./minimax-settings');
 
 function requireFunction(value, code) {
     if (typeof value !== 'function') throw new Error(code);
@@ -33,13 +34,16 @@ async function runQuestionGenerationBatch({
     let failedCount = 0;
     let abandonedCount = 0;
     let lostLeaseCount = 0;
+    let providerError = null;
 
     for (const job of jobs) {
         try {
+            if (providerError) throw providerError;
             const result = await process(job);
             await complete(job, { workerId: owner, result });
             completedCount += 1;
         } catch (error) {
+            if (isMiniMaxProviderError(error)) providerError = error;
             try {
                 await fail(job, error, { workerId: owner });
                 failedCount += 1;
@@ -59,6 +63,7 @@ async function runQuestionGenerationBatch({
         failed: failedCount,
         abandoned: abandonedCount,
         lostLease: lostLeaseCount,
+        ...(providerError ? {providerErrorCode:providerError.code} : {}),
     };
 }
 
@@ -89,6 +94,9 @@ function createQuestionGenerationWorker({
     const cancel = requireFunction(clearIntervalFn, 'QUESTION_GENERATION_WORKER_TIMER_CANCEL_REQUIRED');
     let timer = null;
     let inFlight = null;
+    let providerFailures = 0;
+    let providerCooldownUntil = 0;
+    let providerCooldownCode = null;
     const observability = {
         startedAt: null,
         lastAttemptAt: null,
@@ -107,6 +115,7 @@ function createQuestionGenerationWorker({
     function trigger() {
         if (inFlight) return inFlight;
         observability.lastAttemptAt = timestamp();
+        if (Date.parse(observability.lastAttemptAt) < providerCooldownUntil) return Promise.resolve(null);
         inFlight = Promise.resolve()
             .then(() => runQuestionGenerationBatch({
                 jobStore,
@@ -116,6 +125,15 @@ function createQuestionGenerationWorker({
             }))
             .then(result => {
                 const completedAt = timestamp();
+                if (result.providerErrorCode) {
+                    providerFailures = Math.min(4, providerFailures + 1);
+                    providerCooldownUntil = Date.parse(completedAt) + Math.min(300000, 60000 * 2 ** (providerFailures - 1));
+                    providerCooldownCode = result.providerErrorCode;
+                } else if (result.claimed > 0) {
+                    providerFailures = 0;
+                    providerCooldownUntil = 0;
+                    providerCooldownCode = null;
+                }
                 observability.lastSuccessAt = completedAt;
                 if (Number(result?.claimed) > 0) observability.lastClaimAt = completedAt;
                 if (Number(result?.completed) > 0) observability.lastCompletionAt = completedAt;
@@ -164,7 +182,9 @@ function createQuestionGenerationWorker({
         },
 
         getObservability() {
-            return { ...observability };
+            return { ...observability, ...(providerCooldownUntil > Date.parse(timestamp()) ? {
+                providerCooldownUntil:new Date(providerCooldownUntil).toISOString(), providerCooldownCode,
+            } : {}) };
         },
     };
 }

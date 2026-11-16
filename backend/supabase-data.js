@@ -27,7 +27,7 @@ const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { normalizeChineseMeaning } = require('./chinese-meaning');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
-const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
+const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxHttpStatus, isMiniMaxProviderError, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
 const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
 const { buildInitialVariantMetadata } = require('./cache-lifecycle');
@@ -2438,7 +2438,7 @@ async function generateReplacementContextWithAI(word, meaning, level, previousCo
             body: JSON.stringify(buildMiniMaxRequestBody(prompt)),
             signal: controller.signal,
         });
-        if (!response.ok) return '';
+        if (!response.ok) assertMiniMaxHttpStatus(response.status);
         const payload = await response.json();
         assertMiniMaxResponse(payload);
         const content = payload?.choices?.[0]?.message?.content || '';

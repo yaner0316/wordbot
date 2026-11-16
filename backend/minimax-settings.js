@@ -39,17 +39,30 @@ function assertMiniMaxResponse(payload) {
     const status = Number(payload?.base_resp?.status_code || 0);
     if (!status) return;
     const error = new Error(status === 2062 ? 'MiniMax Token Plan rate limit' : 'MiniMax provider rejected request');
-    error.code = status === 2062 ? 'MINIMAX_RATE_LIMITED' : 'MINIMAX_PROVIDER_UNAVAILABLE';
+    error.code = status === 2062 ? 'MINIMAX_RATE_LIMITED' : status === 2064 ? 'MINIMAX_PROVIDER_OVERLOADED' : 'MINIMAX_PROVIDER_UNAVAILABLE';
     throw error;
 }
 
+function assertMiniMaxHttpStatus(status) {
+    if (status >= 200 && status < 300) return;
+    const error = new Error('MiniMax HTTP request failed');
+    error.code = status === 429 ? 'MINIMAX_RATE_LIMITED' : status === 529 ? 'MINIMAX_PROVIDER_OVERLOADED' : 'MINIMAX_PROVIDER_UNAVAILABLE';
+    throw error;
+}
+
+function isMiniMaxProviderError(error) {
+    return ['MINIMAX_RATE_LIMITED','MINIMAX_PROVIDER_UNAVAILABLE','MINIMAX_PROVIDER_OVERLOADED'].includes(error?.code);
+}
+
 function miniMaxFallback(error, value) {
-    if (['MINIMAX_RATE_LIMITED','MINIMAX_PROVIDER_UNAVAILABLE'].includes(error?.code)) throw error;
+    if (isMiniMaxProviderError(error)) throw error;
     return value;
 }
 
 module.exports = {
     assertMiniMaxResponse,
+    assertMiniMaxHttpStatus,
+    isMiniMaxProviderError,
     miniMaxFallback,
     DEFAULT_MINIMAX_MODEL,
     DEFAULT_MINIMAX_MAX_TOKENS,

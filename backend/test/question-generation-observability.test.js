@@ -8,6 +8,14 @@ const {
 
 const NOW = '2026-08-30T12:00:00.000Z';
 
+test('queue error summary follows failure timestamps and ignores stale errors on claimed jobs',()=>{
+ const rows=[{status:'retry_wait',updated_at:'2026-08-30T11:59:00Z',last_error_code:'INSUFFICIENT_DISTINCT_READY_VARIANTS'},
+ {status:'retry_wait',updated_at:'2026-08-30T10:00:00Z',last_error_code:'MINIMAX_RATE_LIMITED'},
+ {status:'generating',updated_at:NOW,last_error_code:'MINIMAX_RATE_LIMITED'}];
+ assert.equal(summarizeQuestionGenerationQueue(rows).lastErrorCode,'INSUFFICIENT_DISTINCT_READY_VARIANTS');
+ assert.equal(summarizeQuestionGenerationQueue([...rows].reverse()).lastErrorCode,'INSUFFICIENT_DISTINCT_READY_VARIANTS');
+});
+
 test('queue summary separates pending, running, retrying, and failed jobs without exposing error detail', () => {
     const summary = summarizeQuestionGenerationQueue([
         { status: 'pending', created_at: '2026-08-30T11:20:00.000Z' },
