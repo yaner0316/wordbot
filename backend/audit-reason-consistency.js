@@ -3,6 +3,9 @@
 // Keep negated claims out of positive matching; contradictory positive claims still reject.
 function positiveClaims(reason) {
     return String(reason || '')
+        // Negation can govern an explicit list, e.g. "无残句或语法错误".
+        // Match only named defects and list conjunctions, never a later clause.
+        .replace(/(?:不存在|没有|并无|无)(?:任何|明显的?)?(?:(?:句子残缺|残句|语法错误|语法问题|词形问题)(?:或|和|及|、)(?:任何|明显的?)?)+(?:句子残缺|残句|语法错误|语法问题|词形问题)/g, '')
         .replace(/(?:不存在|没有|并无|并非|不是|不构成|不属于|无)(?:任何|明显的?)?(?:互相|相互|彼此)包含(?:关系)?/g, '')
         .replace(/(?:不存在|没有|并无|无|不是|并非|不构成|不属于|不存在任何)(?:任何|明显的?)?(?:语法错误|语法问题|词形问题|包含关系|同义关系|同义词)/g, '')
         .replace(/(?:无需|不必|不需要)(?:改为|改成|修改|纠正)[^，。；;]*/g, '')

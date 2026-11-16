@@ -288,7 +288,7 @@ test('local option-quality rejection keeps the context but discards the bad dist
         slot: 1,
         context: word.context_en,
         contextTranslation: '这个孩子放学后吃了一个苹果。',
-        distractors: ['agree to', 'banana', 'orange'],
+        distractors: ['agree 2', 'banana', 'orange'],
     }] };
     const rows = await buildCacheQuestionRowsForWord({
         user, word, level: LEVEL, roundType: 'primary', requiredCount: 1,

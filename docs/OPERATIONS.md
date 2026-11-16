@@ -8,6 +8,12 @@ Execution evidence and remaining work: [implementation plan](plans/2026-11-14-qu
 
 # WordBot Operations
 
+## Generation throughput repair (2026-11-16)
+
+The active question/content/audit policy versions remain unchanged. Existing approved cache rows and input-bound checkpoints remain reusable. Stem evidence contradiction detection recognizes explicit negated defect lists (for example, “无残句或语法错误”) without suppressing affirmative defects in a later clause. Candidate normalization uses the same word/phrase surface contract as the distractor selector; English uniqueness, real-word/phrase, level and translation reviews still apply.
+
+The existing three distractor attempts carry deterministic rejection feedback to the next call, with collision bans repeated after historical examples and forbidden candidates removed from the reference list. Exhausting these attempts preserves the approved stem for the next durable retry instead of generating another context without evidence that the stem is defective. This is a code-only correction: no cache purge, policy retirement, database migration or frontend change.
+
 ## Scheduled question-worker wake-up (2026-11-16)
 
 Supabase's existing `pg_cron` / `pg_net` now own the single automatic wake-up schedule. Job `wordbot-worker-wakeup` runs `*/10 * * * *` and sends an unauthenticated GET to the fixed public backend health endpoint, with a 90-second network timeout to accommodate cold start. The operator-only registration SQL is `backend/scripts/schedule-worker-wakeup.sql`; do not add it to automatic schema migrations. No extra extension, service, credential, frontend change or paid Render Cron is needed. It leaves model backoff, question quality gates and saved learning data unchanged.

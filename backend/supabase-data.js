@@ -28,6 +28,7 @@ const { hasMeaningfulChineseMeaning } = require('./question-quality');
 const { normalizeChineseMeaning } = require('./chinese-meaning');
 const { isContextSentenceTranslationAcceptable } = require('./context-sentence-translation');
 const { generateSupabaseDistractors } = require('./supabase-distractors');
+const { isDistractorSurface } = require('./generate-distractors');
 const { buildMiniMaxRequestBody, getMiniMaxSettings, assertMiniMaxHttpStatus, isMiniMaxProviderError, assertMiniMaxResponse, miniMaxFallback } = require('./minimax-settings');
 const { auditUniqueAnswer, buildAttestedQuestionSourceVersion } = require('./question-semantic-audit');
 const { TEACHING_ANALYSIS_POLICY, getTeachingAnalysisIssues } = require('./teaching-analysis');
@@ -229,7 +230,7 @@ function uniqueWords(values, correctWord) {
         const word = String(value || '').trim();
         const key = word.toLowerCase();
         if (!word || key === correct || seen.has(key)) continue;
-        if (!/^[a-z]+(?:'[a-z]+)?$/i.test(word)) continue;
+        if (!isDistractorSurface(word)) continue;
         seen.add(key);
         result.push(word);
     }
@@ -1579,6 +1580,8 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
     const generateForContext = async (context, excludedDistractors = [], hardExcludedDistractors = []) => {
         if (typeof generateDistractors !== 'function') return null;
         const questionStem = blankWordInContext(context, formFor(context));
+        const retryFeedback = [];
+        const onRejected = feedback => { retryFeedback.push(feedback); };
         for (let attempt = 0; attempt < 3; attempt++) {
             const generated = await generateDistractors({
                 word: formFor(context),
@@ -1589,12 +1592,21 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
                 excludedDistractors: [...excludedDistractors],
                 ...repairFeedback(),
                 hardExcludedDistractors: [...new Set([...repairFeedback().hardExcludedDistractors,...hardExcludedDistractors])],
+                retryFeedback: [...retryFeedback],
+                onRejected,
             }).catch(error => miniMaxFallback(error, null));
             const normalized = uniqueWords(generated || [], wordText)
                 .filter(value=>value.toLowerCase()!==formFor(context).toLowerCase()).slice(0, 3);
-            if (normalized.length !== 3) continue;
-            if (countDistractorOverlap(normalized,[...repairFeedback().rejectedAlternatives,...repairFeedback().hardExcludedDistractors,...hardExcludedDistractors])) continue;
-            if (countDistractorOverlap(normalized, excludedDistractors) > 1) continue;
+            if (normalized.length !== 3) {
+                if (generated) onRejected({code:'distractor_surface_invalid',options:generated});
+                continue;
+            }
+            if (countDistractorOverlap(normalized,[...repairFeedback().rejectedAlternatives,...repairFeedback().hardExcludedDistractors,...hardExcludedDistractors])) {
+                onRejected({code:'forbidden_distractor',options:normalized});continue;
+            }
+            if (countDistractorOverlap(normalized, excludedDistractors) > 1) {
+                onRejected({code:'sibling_distractor_overlap',options:normalized,maximumOverlap:1});continue;
+            }
             return normalized;
         }
         return null;
@@ -1655,7 +1667,7 @@ async function buildCacheQuestionRowsForWord({ client, user, word, level, roundT
         const initialDistractors = Array.isArray(variantCheckpoint.distractors)
             ? variantCheckpoint.distractors
             : await generateForContext(context, approvedDistractors[0] || []);
-        if (!initialDistractors) { reportRejection('distractor_generation_failed'); continue; }
+        if (!initialDistractors) { reportRejection('distractor_generation_failed'); break; }
         const savedWords = variantCheckpoint.optionWords;
         const savedMeanings = variantCheckpoint.optionMeanings;
         const expectedWords = [formFor(context),...initialDistractors];
