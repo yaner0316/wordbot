@@ -209,7 +209,20 @@ async function auditOptions(question,{callModel=callMiniMax}={}) {
 }
 async function auditTranslation(question,{callModel=callMiniMax}={}) {
     try {
-        const parsed=extractJson(await callModel(contentReviewPrompt(question))),e=parsed?.contentReview;
+        const prompt=contentReviewPrompt(question);
+        let parsed=extractJson(await callModel(prompt)),e=parsed?.contentReview;
+        // A gloss rejection can confuse an incorrect answer with an incorrect
+        // translation. Recheck the evidence once before destroying valid work.
+        // The same strict parser still validates every field in the new review.
+        if (parseContentReview(question,e).code==='content_option_meanings') {
+            const glosses=extractJson(await callModel([
+                'LEXICAL TRANSLATION VERIFICATION. Verify Chinese vocabulary labels only. These labels include deliberately wrong answer choices. Do not judge whether an English word can answer the exercise. A correctly translated wrong option must have accurate=true.',
+                require('./question-content-review').CONTEXTUAL_GLOSS_RULES,
+                'For accurate=false identify an actual English-to-Chinese mistranslation (wrong lexical sense, voice or part of speech). Contradiction with the situation is an answer-choice issue, not a mistranslation. Return JSON {optionMeanings:[{letter,meaning:copy supplied Chinese exactly,accurate:boolean,reason:Chinese evidence of at least 8 characters}]} for all four labels. If uncertain, do not approve.',
+                JSON.stringify({sentence:question.context || question.question_text,labels:(question.options || []).map((word,i)=>({letter:'ABCD'[i],word:String(word).replace(/^[A-D]\.\s*/,''),meaning:(question.optionMeanings || question.option_meanings || [])[i]}))}),
+            ].join('\n')));
+            e={...e,optionMeanings:glosses?.optionMeanings};
+        }
         if (typeof e?.targetSense?.matches!=='boolean' || !validReason(e.targetSense.reason) || !/[\u3400-\u9fff]/.test(e.targetSense.contextualSense || ''))
             return {approved:false,status:'rejected',code:'content_review_missing',reason:'词义核对证据不完整。'};
         if (!e.targetSense.matches) return {approved:false,status:'rejected',code:'semantic_expected_sense_mismatch',reason:e.targetSense.reason,repairEvidence:[e.targetSense]};
