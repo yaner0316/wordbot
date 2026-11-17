@@ -103,7 +103,7 @@ test('child login rate limit returns a generic 429 before the account adapter is
         assert.equal(blocked.status, 429);
         assert.equal(blocked.headers.get('retry-after'), '900');
         assert.deepEqual(await blocked.json(), {
-            error: 'Too many attempts. Try again later.',
+            error: '登录尝试过于频繁，请在 15 分钟后重试。',
             code: 'AUTH_RATE_LIMITED',
         });
     });

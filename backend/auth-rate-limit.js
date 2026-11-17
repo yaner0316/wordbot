@@ -20,6 +20,7 @@ function retryAfterSeconds(timestamps, windowMs, now) {
 
 function createAuthRateLimiter({ now = () => Date.now(), maxKeys = DEFAULT_MAX_KEYS } = {}) {
     const entries = new Map();
+    const pendingAttempts = new WeakMap();
     const limit = Math.max(1, Number(maxKeys) || DEFAULT_MAX_KEYS);
 
     function keyFor(request) {
@@ -100,11 +101,13 @@ function createAuthRateLimiter({ now = () => Date.now(), maxKeys = DEFAULT_MAX_K
         }
         if (!entries.has(keys.account)) entries.set(keys.account, []);
         entries.set(keys.ip, [...ipAttempts, currentNow]);
+        pendingAttempts.set(request, { key: keys.ip, timestamp: currentNow, refundable: !keys.isRegistration });
         if (keys.isRegistration) entries.set(keys.registration, [...registrationAttempts, currentNow]);
         return { allowed: true };
     }
 
     function recordFailure(request) {
+        pendingAttempts.delete(request);
         const currentNow = Number(now());
         const key = keyFor(request).account;
         const active = trim(key, ACCOUNT_FAILURE_WINDOW_MS, currentNow);
@@ -114,6 +117,15 @@ function createAuthRateLimiter({ now = () => Date.now(), maxKeys = DEFAULT_MAX_K
 
     function recordSuccess(request) {
         entries.delete(keyFor(request).account);
+        const attempt = pendingAttempts.get(request);
+        pendingAttempts.delete(request);
+        if (!attempt?.refundable) return;
+        const active = trim(attempt.key, IP_AUTH_ATTEMPT_WINDOW_MS, Number(now()));
+        const index = active.indexOf(attempt.timestamp);
+        if (index < 0) return;
+        active.splice(index, 1);
+        if (active.length) entries.set(attempt.key, active);
+        else entries.delete(attempt.key);
     }
 
     return {

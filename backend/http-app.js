@@ -145,9 +145,10 @@ function authRateLimitRequest(req, route, account) {
 }
 
 function rejectRateLimitedAuth(res, outcome) {
-    res.set('Retry-After', String(Math.max(1, Number(outcome?.retryAfterSeconds) || 1)));
+    const retryAfter = Math.max(1, Number(outcome?.retryAfterSeconds) || 1);
+    res.set('Retry-After', String(retryAfter));
     return res.status(429).json({
-        error: 'Too many attempts. Try again later.',
+        error: `登录尝试过于频繁，请在 ${Math.ceil(retryAfter / 60)} 分钟后重试。`,
         code: 'AUTH_RATE_LIMITED',
     });
 }

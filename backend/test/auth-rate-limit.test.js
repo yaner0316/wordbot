@@ -106,3 +106,40 @@ test('refuses unseen limiter keys at capacity without retaining the new key', ()
     assert.equal(blocked.reason, 'capacity');
     assert.deepEqual(limiter.getStats(), { keyCount: 2 });
 });
+
+test('successful logins do not exhaust a shared IP budget', () => {
+    const limiter = createAuthRateLimiter({ now: () => 0 });
+    for (let i = 0; i < IP_AUTH_ATTEMPT_LIMIT * 2; i++) {
+        const request = authRequest({ account: `student-${i % 2}` });
+        assert.equal(limiter.consume(request).allowed, true);
+        limiter.recordSuccess(request);
+    }
+});
+
+test('success refunds only its own attempt, preserving failures and pending requests', () => {
+    const limiter = createAuthRateLimiter({ now: () => 0 });
+    const success = authRequest({ account: 'valid-student' });
+    assert.equal(limiter.consume(success).allowed, true);
+    for (let i = 1; i < IP_AUTH_ATTEMPT_LIMIT; i++) {
+        const request = authRequest({ account: `other-${i}` });
+        assert.equal(limiter.consume(request).allowed, true);
+        limiter.recordFailure(request);
+    }
+    limiter.recordSuccess(success);
+    limiter.recordSuccess(success);
+    assert.equal(limiter.consume(authRequest({ account: 'next' })).allowed, true);
+    assert.equal(limiter.consume(authRequest({ account: 'blocked' })).allowed, false);
+});
+
+test('late success cannot refund a newer request after its own attempt expires', () => {
+    const clock = createClock();
+    const limiter = createAuthRateLimiter({ now: clock.now });
+    const old = authRequest();
+    limiter.consume(old);
+    clock.advance(ACCOUNT_FAILURE_WINDOW_MS + 1);
+    for (let i = 0; i < IP_AUTH_ATTEMPT_LIMIT; i++) {
+        assert.equal(limiter.consume(authRequest({ account: `new-${i}` })).allowed, true);
+    }
+    limiter.recordSuccess(old);
+    assert.equal(limiter.consume(authRequest({ account: 'blocked' })).allowed, false);
+});
