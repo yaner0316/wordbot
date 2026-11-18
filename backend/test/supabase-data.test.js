@@ -702,6 +702,32 @@ test('submitAssessment resolves username and source word record to Supabase fore
     assert.equal(row.source_question_id, 'cache-1');
 });
 
+test('formal submission and history preserve matching Chinese glosses for two wrong options', async () => {
+    const adapter = createSupabaseDataAdapter(seededClient());
+    const optionMeanings = ['苹果', '小凳子', '小凳子', '书桌'];
+    const [row] = await adapter.submitAssessments([{
+        username: 'qiuqiu',
+        word: 'apple',
+        sourceWordRecordId: 'rec-word-1',
+        testId: 'real-shared-distractor-glosses',
+        questionType: 1,
+        correctness: 'wrong',
+        yourAnswer: 'B',
+        confidence: 'sure',
+        source: 'question_cache',
+        questionText: 'I ate a juicy _____ for lunch.',
+        options: ['A. apple', 'B. stool', 'C. footstool', 'D. desk'],
+        correctAnswer: 'A',
+        contextZh: '午饭时我吃了一个多汁的苹果。',
+        optionMeanings,
+    }]);
+
+    assert.deepEqual(row.option_meanings, optionMeanings);
+    const [result] = await adapter.getQuizHistory('qiuqiu', 'real');
+    assert.deepEqual(result.questions[0].optionMeanings, optionMeanings);
+    assert.equal(result.questions[0].contentState, 'complete');
+});
+
 test('formal type-1 assessment rejects an incomplete Chinese analysis snapshot', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);

@@ -8,6 +8,12 @@ Execution evidence and remaining work: [implementation plan](plans/2026-11-14-qu
 
 # WordBot Operations
 
+## Login rate-limit recovery (2026-11-17)
+
+Successful non-registration authentication refunds only that request's IP attempt. Failed and in-flight attempts retain the shared 20-attempt / 15-minute IP budget, and five credential failures still block the same route/account for 15 minutes. Registration keeps its original limits. A successful request cannot clear another request's IP history. Rate-limit responses keep HTTP 429 and Retry-After and show a Chinese wait duration.
+
+Limiter state is process-local and expires automatically; a normal backend release starts with empty counters. No password or learner-data changes are needed. Verify the affected user can log in after release; health alone does not establish recovery.
+
 ## Generation throughput repair (2026-11-16)
 
 The active question/content/audit policy versions remain unchanged. Existing approved cache rows and input-bound checkpoints remain reusable. Stem evidence contradiction detection recognizes explicit negated defect lists (for example, “无残句或语法错误”) without suppressing affirmative defects in a later clause. Candidate normalization uses the same word/phrase surface contract as the distractor selector; English uniqueness, real-word/phrase, level and translation reviews still apply.
