@@ -560,7 +560,7 @@ function validChineseMeanings(values) {
     if (!Array.isArray(values) || values.length !== 4) return null;
     const normalized = values.map(value => String(value || '').trim());
     if (!normalized.every(hasMeaningfulChineseMeaning)) return null;
-    if (new Set(normalized.map(value => value.toLowerCase())).size !== normalized.length) return null;
+    // Distinct wrong English options may have the same Chinese gloss.
     return normalized;
 }
 
