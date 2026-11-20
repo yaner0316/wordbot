@@ -329,6 +329,73 @@ function formalAnswerPriority(assessments) {
     };
 }
 
+function formalRoundBucket(assessmentRecords) {
+    const byMeaning = new Map();
+    for (const record of (assessmentRecords || []).filter(isSubmittedFormalQuiz)) {
+        const id = fieldText(record.fields?.record_id).trim();
+        const time = assessmentTimestamp(record);
+        if (!id || !time) continue;
+        const wrong = !isCorrectField(record.fields.is_correct);
+        const item = byMeaning.get(id) || { latestAt: 0, latestWrong: false, wrong: false };
+        if (time >= item.latestAt) {
+            item.latestAt = time;
+            item.latestWrong = wrong;
+        }
+        if (wrong) item.wrong = true;
+        byMeaning.set(id, item);
+    }
+    return id => {
+        const item = byMeaning.get(id);
+        if (!item) return 3;
+        if (item.latestWrong) return 0;
+        if (item.wrong) return 1;
+        return 2;
+    };
+}
+
+function yesterdayPreferenceIds(assessmentRecords, displayEvents, now) {
+    const day = learningDay(now - 24 * 60 * 60 * 1000);
+    const ids = new Set();
+    for (const event of displayEvents || []) {
+        const time = toMillis(event.displayedAt);
+        if (event.countsForCooldown === false || !time || learningDay(time) !== day) continue;
+        if (event.meaningId) ids.add(event.meaningId);
+    }
+    for (const record of (assessmentRecords || []).filter(isSubmittedFormalQuiz)) {
+        const time = assessmentTimestamp(record);
+        const id = fieldText(record.fields?.record_id).trim();
+        if (time && id && learningDay(time) === day) ids.add(id);
+    }
+    return ids;
+}
+
+function planSystemFormalRound({ candidates, assessmentRecords, displayEvents, issuableRecordIds, now, limit = 10 }) {
+    const intended = Math.min(limit, candidates.length);
+    const cooldownReady = candidates.filter(item => item.eligible);
+    const issuable = new Set(issuableRecordIds);
+    const bucket = formalRoundBucket(assessmentRecords);
+    const yesterday = yesterdayPreferenceIds(assessmentRecords, displayEvents, now);
+    const ranked = [...cooldownReady].sort((left, right) =>
+        bucket(left.recordId) - bucket(right.recordId)
+        || Number(yesterday.has(right.recordId)) - Number(yesterday.has(left.recordId))
+        || left.recordId.localeCompare(right.recordId));
+    const selected = ranked.filter(item => issuable.has(item.recordId)).slice(0, intended);
+    const cooling = candidates
+        .filter(item => !item.eligible && item.cooldownEndsAt)
+        .sort((left, right) => Date.parse(left.cooldownEndsAt) - Date.parse(right.cooldownEndsAt));
+    const stillCooling = intended - cooldownReady.length;
+    return {
+        intended,
+        cooldownReadyCount: cooldownReady.length,
+        issuableCount: ranked.filter(item => issuable.has(item.recordId)).length,
+        selectedRecordIds: selected.map(item => item.recordId),
+        rankedRecordIds: ranked.map(item => item.recordId),
+        cooldownShort: intended > 0 && cooldownReady.length < intended,
+        supplyShort: intended > 0 && cooldownReady.length >= intended && selected.length < intended,
+        cooldownEndsAt: stillCooling > 0 ? cooling[stillCooling - 1]?.cooldownEndsAt || null : null,
+    };
+}
+
 function pendingNextDayRetests(candidates, assessmentRecords, displayEvents, now) {
     const yesterday = learningDay(now - 24 * 60 * 60 * 1000);
     const today = learningDay(now);
@@ -378,27 +445,31 @@ async function getChallengeCandidatesWithDataSource({ username, dataSource, now 
         userId: canonicalUsername, now, ...(mode === 'practice' ? { minAgeMs: 0 } : {}),
     });
     const candidates = candidateRecords.map(({recordId, ...candidate}) => ({ ...candidate, meaningId: canonicalIds.get(recordId) }));
-    const retests = mode === 'real' ? pendingNextDayRetests(candidateRecords, assessmentRecords, displayEvents, now) : [];
-    const batch = retests.slice(0, 10);
     const level = normalizeOptionalLevel(user?.learning_level);
-    let readyCount = null;
-    if (batch.length && level && typeof dataSource.getQuestionCache === 'function') {
-        const cacheRows = await dataSource.getQuestionCache(canonicalUsername, level, 'primary');
-        readyCount = selectCachedQuestionsForWordQueue({
-            cacheRows: cacheRows.map(row => toFeishuCacheRow(row, { username: canonicalUsername })),
-            queue: batch.map(item => item.recordId),
-            userId: canonicalUsername, level, limit: batch.length, now, requireReadyPair: true,
-            recentQuestionTextsByWord: mergeQuestionTextHistory(
-                buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
-                buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
-            ),
-        }).length;
+    let retest = null;
+    if (mode === 'real' && level && typeof dataSource.getQuestionCache === 'function') {
+        const recentQuestionTextsByWord = mergeQuestionTextHistory(
+            buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
+            buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
+        );
+        const cacheRows = (await dataSource.getQuestionCache(canonicalUsername, level, 'primary'))
+            .map(row => toFeishuCacheRow(row, { username: canonicalUsername }));
+        const eligibleIds = candidateRecords.filter(item => item.eligible).map(item => item.recordId);
+        const issuable = selectCachedQuestionsForWordQueue({
+            cacheRows, queue: eligibleIds, userId: canonicalUsername, level, now, requireReadyPair: true,
+            limit: Math.max(eligibleIds.length, 1), recentQuestionTextsByWord,
+        });
+        const plan = planSystemFormalRound({
+            candidates: candidateRecords, assessmentRecords, displayEvents,
+            issuableRecordIds: issuable.map(question => question.record_id), now,
+        });
+        retest = {
+            requiredCount: plan.intended,
+            availableCount: plan.cooldownReadyCount,
+            readyCount: Math.min(plan.issuableCount, plan.intended),
+            cooldownEndsAt: plan.cooldownEndsAt,
+        };
     }
-    const retest = batch.length ? {
-        requiredCount: batch.length, remainingCount: retests.length, readyCount,
-        availableCount: batch.filter(item => item.eligible).length,
-        cooldownEndsAt: batch.map(item => item.cooldownEndsAt).filter(Boolean).sort().at(-1) || null,
-    } : null;
     return { candidates, availableCount: candidates.filter(w => w.eligible).length, serverTime: new Date(now).toISOString(), retest };
 }
 
@@ -476,19 +547,79 @@ async function generateQuizWithDataSource({
     const challengeCandidates = selection || mode === 'real'
         ? buildChallengeCandidates({ wordRecords, assessmentRecords, displayEvents, userId: canonicalUsername, now,
             ...(mode === 'practice' ? {minAgeMs: 0} : {}) }) : null;
-    const retestBatch = mode === 'real'
-        ? pendingNextDayRetests(challengeCandidates, assessmentRecords, displayEvents, now).slice(0, limit)
-        : [];
     const recentQuestionTextsByWord = mode === 'practice' ? new Map() : mergeQuestionTextHistory(
         buildRecentQuestionTextsByWord(assessmentRecords, { userId: canonicalUsername, now }),
         buildActiveDisplayStemsByMeaning(displayEvents, { userId: canonicalUsername, now })
     );
-    const readyRecordIds = selection && !retestBatch.length ? new Set(selectCachedQuestionsForWordQueue({
+    const systemRandom = selection?.mode === 'random';
+    let formalPlan = null;
+    if (systemRandom) {
+        const eligibleIds = challengeCandidates.filter(item => item.eligible).map(item => item.recordId);
+        const issuable = selectCachedQuestionsForWordQueue({
+            cacheRows: questionCacheRows,
+            queue: eligibleIds,
+            userId: canonicalUsername,
+            level: effectiveLevel,
+            roundType,
+            requireReadyPair: true,
+            limit: Math.max(eligibleIds.length, 1),
+            recentQuestionTextsByWord,
+            now,
+        });
+        formalPlan = planSystemFormalRound({
+            candidates: challengeCandidates,
+            assessmentRecords,
+            displayEvents,
+            issuableRecordIds: issuable.map(question => question.record_id),
+            now,
+            limit,
+        });
+        if (!formalPlan.intended) return { code: 'CHALLENGE_NO_ELIGIBLE_WORDS', questions: [], requiredCount: 0 };
+        if (formalPlan.cooldownShort) {
+            return {
+                code: 'CHALLENGE_COOLDOWN', questions: [],
+                requiredCount: formalPlan.intended, availableCount: formalPlan.cooldownReadyCount,
+                cooldownEndsAt: formalPlan.cooldownEndsAt,
+            };
+        }
+        if (formalPlan.supplyShort) {
+            const meaningId = recordId => String(wordRowsBySourceId.get(recordId)?.id || '');
+            const issuableSet = new Set(formalPlan.selectedRecordIds);
+            const holesNeeded = formalPlan.intended - formalPlan.selectedRecordIds.length;
+            const missingRecordIds = formalPlan.rankedRecordIds
+                .filter(id => !issuableSet.has(id))
+                .slice(0, holesNeeded);
+            const roundSet = new Set([...formalPlan.selectedRecordIds, ...missingRecordIds]);
+            const selectedIds = formalPlan.rankedRecordIds.filter(id => roundSet.has(id)).map(meaningId);
+            const missingIds = missingRecordIds.map(meaningId);
+            const supply = missingIds.length ? await dataSource.ensureQuizQuestionSupply?.(username, missingIds) : null;
+            const states = new Map((supply?.words || []).map(word => [word.meaningId, word]));
+            const missingWords = missingIds.map(id => {
+                const status = states.get(id);
+                return {
+                    meaningId: id,
+                    word: wordRows.find(word => String(word.id) === id)?.word || '',
+                    state: ['queued', 'generating', 'retry_wait', 'unavailable'].includes(status?.state) ? status.state : 'queued',
+                    retryAt: typeof status?.retryAt === 'string' && Number.isFinite(Date.parse(status.retryAt)) ? status.retryAt : null,
+                };
+            });
+            return {
+                pending: true, code: 'CHALLENGE_PREPARING', meaningIds: selectedIds,
+                requiredCount: formalPlan.intended, readyCount: formalPlan.selectedRecordIds.length,
+                missingWords, questions: [], source: 'question_cache',
+            };
+        }
+    }
+    const retestBatch = !systemRandom && mode === 'real'
+        ? pendingNextDayRetests(challengeCandidates, assessmentRecords, displayEvents, now).slice(0, limit)
+        : [];
+    const readyRecordIds = selection && !formalPlan && !retestBatch.length ? new Set(selectCachedQuestionsForWordQueue({
         cacheRows: questionCacheRows, queue: challengeCandidates.filter(w=>w.eligible).map(w=>w.recordId),
         userId: canonicalUsername, level: effectiveLevel, roundType, requireReadyPair:mode !== 'practice',
         limit: challengeCandidates.length, recentQuestionTextsByWord, now,
     }).map(question=>question.record_id)) : new Set();
-    const queue = retestBatch.length ? retestBatch.map(item => item.recordId)
+    const queue = formalPlan ? formalPlan.selectedRecordIds
+        : retestBatch.length ? retestBatch.map(item => item.recordId)
         : selection ? chooseChallengeQueue({ selection, wordRows, limit,
         candidates: challengeCandidates, readyRecordIds, assessmentRecords
     }) : buildQuizWordQueue({
@@ -503,10 +634,11 @@ async function generateQuizWithDataSource({
         minAgeMs: effectiveMinAgeMs,
     });
 
-    if (retestBatch.length) limit = retestBatch.length;
+    if (formalPlan) limit = formalPlan.selectedRecordIds.length;
+    else if (retestBatch.length) limit = retestBatch.length;
     else if (selection) limit = Math.min(limit, challengeCandidates.length);
     if (selection && !limit) return { code: 'CHALLENGE_NO_ELIGIBLE_WORDS', questions: [], requiredCount: 0 };
-    if (selection && queue.length < limit) return {
+    if (selection && !formalPlan && queue.length < limit) return {
         code: 'CHALLENGE_COOLDOWN', questions: [], requiredCount: limit, availableCount: queue.length,
     };
 
@@ -524,7 +656,7 @@ async function generateQuizWithDataSource({
         ...question,
         source: 'question_cache',
         correctAnswer: question.answer,
-        ...(selection || retestBatch.length ? { challengeSize: limit } : {}),
+        ...(selection || systemRandom || retestBatch.length ? { challengeSize: limit } : {}),
         selectedSenseFlow: hasSelectedSenseFlowFlag(wordRowsBySourceId.get(String(question.record_id || question.wordRecordId || '').trim())),
     }));
 

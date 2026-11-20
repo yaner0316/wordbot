@@ -286,60 +286,89 @@ test('pending challenge names only missing words with safe generation status and
  assert.ok(!JSON.stringify(result).includes('private-provider-details'));assert.ok(!JSON.stringify(result.missingWords).includes('释义'));
 });
 
-test('random waits for the exact next-day batch when some review questions are missing', async () => {
+test('eight ready meanings in a ten-question formal round request supply for only the two missing meanings', async () => {
+  const missing = ['word-0', 'word-1', 'word-10', 'word-11', 'word-12', 'word-13', 'word-14', 'word-15', 'word-16', 'word-17'];
+  const ready = ['word-2', 'word-3', 'word-4', 'word-5', 'word-6', 'word-7', 'word-8', 'word-9'];
+  const f = fixture(18, missing);
+  const quiz = await generate(f, [], 'random');
+  assert.equal(quiz.pending, true);
+  assert.equal(quiz.readyCount, 8);
+  assert.equal(quiz.requiredCount, 10);
+  assert.deepEqual(quiz.questions, []);
+  assert.deepEqual(f.queued, ['word-0', 'word-1']);
+  assert.deepEqual(new Set(quiz.meaningIds), new Set([...ready, ...f.queued]));
+});
+
+test('random fills past yesterday meanings whose questions are missing', async () => {
   const f=fixture(25,Array.from({length:5},(_,i)=>'word-'+i));
   for(const w of f.words.slice(0,10)) f.displays.push({meaning_id:w.id,displayed_at:new Date(NOW-20*HOUR).toISOString(),counts_for_cooldown:true});
   const quiz=await generate(f,[],'random');
-  assert.equal(quiz.pending,true);
+  assert.equal(quiz.pending,undefined);
   assert.equal(quiz.requiredCount,10);
-  assert.equal(quiz.readyCount,5);
-  assert.deepEqual(quiz.questions,[]);
-  assert.deepEqual(new Set(quiz.meaningIds),new Set(f.words.slice(0,10).map(w=>w.id)));
-  assert.deepEqual(new Set(f.queued),new Set(f.words.slice(0,5).map(w=>w.id)));
+  assert.equal(quiz.questions.length,10);
+  assert.deepEqual(quiz.questions.map(q=>q.meaningId),[
+    'word-5','word-6','word-7','word-8','word-9','word-10','word-11','word-12','word-13','word-14',
+  ]);
+  assert.deepEqual(f.queued,[]);
 });
 
-test('the rest of the next-day batch uses distinct stems, puts recent wrong answers first and never adds new words', async()=>{
+test('exhausted yesterday stems stay out while the latest wrong meaning leads and new meanings fill the round', async()=>{
   const f=fixture(30);
   const yesterday=new Date(NOW-20*HOUR).toISOString();
   const today=new Date(NOW-HOUR).toISOString();
   const assessment=(word,time,is_correct, variant=1)=>({
-    id:word.id+time,word_id:word.id,test_id:'real-'+time,assessed_at:time,is_correct,
+    id:word.id+time+variant,word_id:word.id,test_id:'real-'+time,assessed_at:time,is_correct,
     question_text:`Variant ${variant} uses _____ naturally in context.`,
   });
   const assessed=f.words.slice(0,13).map((w,i)=>assessment(w,yesterday,i===12?'wrong':'correct'));
   assessed.push(...f.words.slice(0,10).map(w=>assessment(w,today,'correct',2)));
   f.dataSource.getAssessmentsForUser=async()=>assessed;
   const quiz=await generate(f,[],'random');
-  assert.equal(quiz.requiredCount,3);
-  assert.equal(quiz.questions.length,3);
-  assert.equal(quiz.questions[0].meaningId,'word-12');
-  assert.deepEqual(new Set(quiz.questions.map(q=>q.meaningId)), new Set(['word-10','word-11','word-12']));
-  assert.ok(quiz.questions.every(q=>q.challengeSize===3 && q.context.startsWith('Variant 2')));
+  assert.equal(quiz.requiredCount,10);
+  assert.equal(quiz.questions.length,10);
+  assert.deepEqual(quiz.questions.map(q=>q.meaningId),[
+    'word-12','word-10','word-11','word-13','word-14','word-15','word-16','word-17','word-18','word-19',
+  ]);
+  assert.ok(quiz.questions.slice(0,3).every(q=>q.context.startsWith('Variant 2')));
+  assert.ok(quiz.questions.slice(3).every(q=>q.context.startsWith('Variant 1')));
   assessed.push(...f.words.slice(10,13).map(w=>assessment(w,today,'wrong',2)));
-  assert.equal((await generate(f,[],'random')).questions.length,10);
+  const next=await generate(f,[],'random');
+  assert.deepEqual(next.questions.map(q=>q.meaningId),Array.from({length:10},(_,i)=>`word-${i+13}`));
+  assert.ok(next.questions.every(q=>Number(q.meaningId.slice(5))>=13 && q.context.startsWith('Variant 1')));
 });
 
-test('yesterday’s cooling batch blocks new words and requests advance supply for a missing meaning', async()=>{
+test('one cooling yesterday meaning does not shrink the round or block other eligible meanings', async()=>{
   const f=fixture(20,['word-0']);
   f.displays.push({meaning_id:'word-0',displayed_at:new Date(NOW-15*HOUR).toISOString()});
   const quiz=await generate(f,[],'random');
-  assert.equal(quiz.code,'CHALLENGE_COOLDOWN');
-  assert.equal(quiz.requiredCount,1);
-  assert.deepEqual(quiz.questions,[]);
-  assert.deepEqual(f.queued,['word-0']);
+  assert.equal(quiz.code,undefined);
+  assert.equal(quiz.requiredCount,10);
+  assert.equal(quiz.questions.length,10);
+  assert.ok(quiz.questions.every(q=>q.meaningId!=='word-0'));
+  assert.deepEqual(f.queued,[]);
 });
 
-test('submitting yesterday’s original question after midnight does not count as today’s retest', async () => {
+test('an overnight answer on yesterday’s original stem does not shrink the round and the later retest changes the stem', async () => {
   const f=fixture(20);
   const yesterday=new Date(NOW-13*HOUR).toISOString();
   const today=new Date(NOW-11*HOUR).toISOString();
   const stem='Variant 1 uses _____ naturally in context.';
-  f.displays.push({meaning_id:'word-0',stem,displayed_at:yesterday,history_expires_at:new Date(NOW+HOUR).toISOString()});
+  f.displays.push({meaning_id:'word-0',stem,displayed_at:yesterday,history_expires_at:new Date(NOW+HOUR).toISOString(),counts_for_cooldown:true});
   f.dataSource.getAssessmentsForUser=async()=>[{
-    id:'overnight-answer',word_id:'word-0',test_id:'real-overnight',assessed_at:today,is_correct:'correct',question_text:stem,
+    id:'overnight-answer',word_id:'word-0',source_word_record_id:'rec-0',test_id:'real-overnight',assessed_at:today,is_correct:'correct',question_text:stem,
   }];
   const quiz=await generate(f,[],'random');
-  assert.equal(quiz.retest,true);
-  assert.equal(quiz.code,'CHALLENGE_COOLDOWN');
-  assert.equal(quiz.requiredCount,1);
+  assert.equal(quiz.requiredCount,10);
+  assert.equal(quiz.questions.length,10);
+  assert.ok(quiz.questions.every(q=>q.meaningId!=='word-0'));
+  const later=NOW+8*HOUR;
+  f.displays[0].displayed_at=new Date(NOW-19*HOUR).toISOString();
+  f.displays[0].history_expires_at=new Date(later+24*HOUR).toISOString();
+  const next=await generateQuizWithDataSource({username:'child',level:'中学',mode:'real',now:later,
+    dataSource:f.dataSource,selection:{mode:'random',meaningIds:[]},createId:()=>'custom-test'});
+  assert.equal(next.questions[0].meaningId,'word-0');
+  assert.equal(next.questions[0].context,'Variant 2 uses _____ naturally in context.');
+  assert.equal(next.requiredCount,10);
+  assert.equal(next.questions.length,10);
+  assert.equal(new Set(next.questions.map(q=>q.meaningId)).size,10);
 });
