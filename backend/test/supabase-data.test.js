@@ -1109,6 +1109,20 @@ test('addWords inserts multiple words through Supabase addWord path', async () =
     ]);
 });
 
+test('Russian uses its standard spelling in storage and retries match either saved casing', async () => {
+    const client = seededClient();
+    const adapter = createSupabaseDataAdapter(client);
+    const language = {word:'russian', meaning:'the language', cnMeaning:'俄语'};
+    const person = {word:'Russian', meaning:'a person from Russia', cnMeaning:'俄国人'};
+    const options = {selectedSenseFlow:true, confirmNewMeanings:true};
+    assert.equal((await adapter.addWords('qiuqiu',[language],options)).count,1);
+    assert.equal(client.db.words.at(-1).word,'Russian');
+    client.db.words.at(-1).word='russian'; // Simulate a pre-fix row.
+    assert.equal((await adapter.addWords('qiuqiu',[language,person],options)).count,1);
+    assert.equal(client.db.words.at(-1).word,'Russian');
+    assert.equal((await adapter.addWords('qiuqiu',[person],options)).count,0);
+});
+
 test('retrying selected entries skips an already saved meaning and adds the remaining word', async () => {
     const client = seededClient();
     const adapter = createSupabaseDataAdapter(client);

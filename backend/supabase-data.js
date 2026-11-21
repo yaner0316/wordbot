@@ -237,6 +237,11 @@ function uniqueWords(values, correctWord) {
     return result;
 }
 
+function storedWordSpelling(value) {
+    const spelling = normalizeGenerationWord(value);
+    return spelling.toLowerCase() === 'russian' ? 'Russian' : spelling;
+}
+
 function normalizeWordInput(input) {
     if (typeof input === 'string') {
         const [wordPart, ...meaningParts] = input.split('|');
@@ -2787,7 +2792,7 @@ async function updateWordWithClient(client, username, word, fields = {}) {
     if (questionGenerationChanged) await fenceWordQuestionGeneration(client, user.id, row.id);
 
     const payload = { updated_at: new Date().toISOString() };
-    if (has('word')) payload.word = normalizeGenerationWord(fields.word);
+    if (has('word')) payload.word = storedWordSpelling(fields.word);
     if (has('meaning')) payload.meaning_en = fields.meaning;
     if (has('cnMeaning')) payload.meaning_zh = normalizedCnMeaning;
     if (has('context')) payload.context_en = fields.context;
@@ -2980,7 +2985,7 @@ async function addWordWithClient(client, input) {
     if (!normalizeGenerationWord(input.word) || !String(input.meaning || '').trim()) throw new Error('WORD_AND_MEANING_REQUIRED');
     if (!isValidGenerationWord(input.word)) throw invalidGenerationWordError();
     const user = await requireUserByUsername(client, input.username);
-    const word = normalizeGenerationWord(input.word);
+    const word = storedWordSpelling(input.word);
     const meaning = String(input.meaning || '').trim();
     if (!word || !meaning) throw new Error('WORD_AND_MEANING_REQUIRED');
 
@@ -3080,7 +3085,7 @@ async function addWordsWithClient(client, targetUser, words, options = {}) {
     // create a second record for the same selected meaning.
     if (options.selectedSenseFlow) {
         const saved = existingRows.filter(row => entriesToAdd.some(entry =>
-            row.word === entry.word && row.meaning_en === entry.meaning && row.meaning_zh === entry.meaningZh));
+            row.word.toLowerCase() === entry.word && row.meaning_en === entry.meaning && row.meaning_zh === entry.meaningZh));
         if (saved.length) {
             const { data: jobs, error } = await client.from('question_generation_jobs').select('word_id')
                 .eq('user_id', user.id).in('word_id', saved.map(row => row.id));
@@ -3094,7 +3099,7 @@ async function addWordsWithClient(client, targetUser, words, options = {}) {
                 ensureNoError(jobError, 'addWords.recoverGenerationJobs');
             }
         }
-        entriesToAdd = entriesToAdd.filter(entry => !saved.some(row => row.word === entry.word
+        entriesToAdd = entriesToAdd.filter(entry => !saved.some(row => row.word.toLowerCase() === entry.word
             && row.meaning_en === entry.meaning && row.meaning_zh === entry.meaningZh));
     }
     const errors = [];
