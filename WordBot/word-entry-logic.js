@@ -10,7 +10,7 @@ function selectedEntryPayload(items) {
   return items.flatMap(item => {
     const chosen = (item.selected || []).map(index => item.senses[index]).filter(sense => sense?.selectionToken);
     if (!chosen.length) throw new Error('请为 ' + item.word + ' 选择至少一个具体词义');
-    return chosen.map(sense => ({ word: item.word, selectionToken: sense.selectionToken }));
+    return chosen.map(sense => ({ word: item.suggestedWord || item.word, selectionToken: sense.selectionToken }));
   });
 }
 module.exports = { parseEntryWords, selectedEntryPayload };

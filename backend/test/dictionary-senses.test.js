@@ -75,6 +75,23 @@ test('English-only output never becomes a selectable sense and retries are bound
 test('unknown words return a distinct not-found error', async () => {
     await assert.rejects(lookupDictionarySenses('zzqqxx', { request: async () => '[]' }), /DICTIONARY_SENSES_NOT_FOUND/);
 });
+
+test('a misspelling offers the corrected dictionary entry without issuing senses for the typo', async () => {
+    const prompts = [];
+    const request = async prompt => {
+        prompts.push(prompt);
+        return prompts.length === 1 ? '{"suggestedWord":"nightmare"}'
+            : JSON.stringify([{partOfSpeech:'noun',definition:'a frightening dream',cnMeaning:'噩梦'}]);
+    };
+    await assert.rejects(lookupDictionarySenses('ninghtmare', {request}), error => {
+        assert.equal(error.code, 'DICTIONARY_SPELLING_SUGGESTION');
+        assert.equal(error.suggestion.word, 'nightmare');
+        assert.equal(error.suggestion.senses[0].cnMeaning, '噩梦');
+        return true;
+    });
+    assert.equal(prompts.length, 2);
+    assert.ok(prompts[1].includes('"nightmare"'));
+});
 test('sense lookup retains distinct real example sentences and rejects a missing-target example', async () => {
   const senses = await lookupDictionarySenses('take care of', { request: async () => JSON.stringify([
     {partOfSpeech:'phrase',definition:'look after a person',cnMeaning:'照顾',example:'I take care of my little sister after school.',exampleCN:'放学后我照顾妹妹。'},

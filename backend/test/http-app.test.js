@@ -16,6 +16,29 @@ test('authenticated dictionary lookup issues receipts accepted only for that lea
 });
 const { ACCOUNT_FAILURE_LIMIT, createAuthRateLimiter } = require('../auth-rate-limit');
 
+test('a correction issues a selection receipt only for the suggested spelling', async () => {
+    const sense = { partOfSpeech: 'noun', definition: 'a frightening dream', cnMeaning: '噩梦' };
+    const app = createApp({
+        submitAnswers: async () => ({}),
+        requireUserSession: (req, res, next) => { req.wordbotSession = {user:'learner'}; next(); },
+        lookupDictionarySenses: async () => {
+            throw Object.assign(new Error('correction'), {code:'DICTIONARY_SPELLING_SUGGESTION',
+                suggestion:{word:'nightmare', senses:[sense]}});
+        },
+    });
+    await withServer(app, async base => {
+        const response = await fetch(base + '/api/word-senses?word=ninghtmare');
+        assert.equal(response.status, 200);
+        const data = await response.json();
+        assert.deepEqual(data.senses, []);
+        assert.equal(data.suggestion.word, 'nightmare');
+        const {selectedEntries} = require('../dictionary-selection');
+        const selectionToken = data.suggestion.senses[0].selectionToken;
+        assert.equal(selectedEntries('learner', [{word:'nightmare',selectionToken}])[0].cnMeaning, '噩梦');
+        assert.throws(() => selectedEntries('learner', [{word:'ninghtmare',selectionToken}]), {code:'SELECTED_SENSE_REQUIRED'});
+    });
+});
+
 async function withServer(app, run) {
     const server = app.listen(0, '127.0.0.1');
     await new Promise(resolve => server.once('listening', resolve));

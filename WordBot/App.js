@@ -233,11 +233,17 @@ export default function App() {
         try {
           const res = await fetch(API + '/api/word-senses?word=' + encodeURIComponent(item.word), { credentials: 'include' });
           const data = await res.json();
-          if (!res.ok) throw new Error('词义查询失败');
-          item.senses = (data.senses || []).filter(sense => sense.selectionToken && sense.cnMeaning);
+          if (!res.ok) throw new Error(data.code === 'DICTIONARY_SENSES_NOT_FOUND'
+            ? '未找到可靠的词义或拼写建议，请检查输入' : '词义查询失败，请重试');
+          item.suggestedWord = data.suggestion?.word || '';
+          const senses = item.suggestedWord ? data.suggestion.senses : data.senses;
+          item.senses = (senses || []).filter(sense => sense.selectionToken && sense.cnMeaning);
           if (!item.senses.length) throw new Error('暂未查到词义');
           item.error = '';
-        } catch (e) { item.error = '词义查询失败，请重试'; }
+        } catch (e) {
+          item.suggestedWord = '';
+          item.error = e.message === '未找到可靠的词义或拼写建议，请检查输入' ? e.message : '词义查询失败，请重试';
+        }
         if (entryOwner.current !== owner) return;
       }
       if (entryOwner.current !== owner) return;
@@ -473,6 +479,7 @@ export default function App() {
       {message ? <Text style={s.message}>{message}</Text> : null}
       {senseBatch?.user === user && senseBatch.items.map((item, wi) => <View key={item.word} style={s.card}>
         <Text style={s.bigText}>{item.word}</Text>
+        {item.suggestedWord ? <Text accessibilityRole="alert">你想录入的是 {item.suggestedWord} 吗？如是，请选择下面的词义并确认。</Text> : null}
         {item.error ? <Text style={s.message}>{item.error}</Text> : null}
         {item.senses.map((sense, si) => <TouchableOpacity key={si} disabled={loading}
           accessibilityRole="checkbox" accessibilityState={{ checked: item.selected.includes(si) }}

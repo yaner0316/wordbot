@@ -60,6 +60,8 @@ This is the sole active generation and approval policy. It supersedes blind-comp
 
 ## Word and phrase entry
 
+- When the dictionary identifies a likely typo, both entry forms show the suggested spelling and its independently looked-up senses. Choosing a sense and confirming saves the suggested spelling. Ambiguous input stays editable. Selection receipts bind to the offered spelling.
+
 - Child and parent entry preserve complete English words and phrases, including internal spaces. Entry separators are newlines, commas and semicolons; spaces inside a phrase never silently split it into separate words. Consecutive whitespace within a phrase is normalized to one space.
 - A line using “word or phrase | Chinese meaning” remains one entry and preserves punctuation in its Chinese meaning. Both entry forms use the same parsing rule and pass the full phrase through lookup, submission and persistence. Explicit individual words such as “the” and “to” remain valid; the parser does not add stop-word filtering or guess the original phrase.
 

@@ -39,14 +39,15 @@ function normalizeDictionarySenses(entries, word = '') {
     return senses;
 }
 
-async function lookupDictionarySenses(word, { request = requestChineseSenses } = {}) {
+async function lookupDictionarySenses(word, { request = requestChineseSenses, allowSuggestion = true } = {}) {
     const normalized = normalizeLookupWord(word);
     if (normalized.length > 80) throw new Error('DICTIONARY_WORD_REQUIRED');
     const prompt = [
         '你是严谨的英汉学习词典。为以下英文单词或短语返回真实、常用、不同的义项，按常用程度排序。',
         JSON.stringify(normalized),
-        '只返回JSON数组，最多8项，不要凑数。每项包含cnMeaning（简体中文短语，通常2至8字，最多20字）、definition（对应英文释义）、partOfSpeech（英文词性全称，小写）。',
-        '中文只写简洁释义，不加英文、词性、编号、例句或解释句。合并重复义项。不是有效英文词或无法确定含义时返回空数组，不要猜测或纠正拼写。',
+        '有效拼写（包括英美变体、屈折形式和短语）返回JSON数组，最多8项。每项包含cnMeaning（简体中文短语，通常2至8字，最多20字）、definition（对应英文释义）、partOfSpeech（英文词性全称，小写）。',
+        allowSuggestion ? '如果输入明显拼错且有可信的目标词，只返回对象 {"suggestedWord":"正确英文拼写"}。切勿给错拼直接附上正确词的义项。无法判断目标词则返回 []。' : '如果输入拼写无效或无法确定义项，只返回 []。',
+        '中文只写简洁释义，不加英文、词性、编号、例句或解释句。合并重复义项。',
         '同一个概念的近义中文译法只保留一项，不得把同义译词拆成多个义项；指人和指能力等真正不同的概念仍要区分。中文必须独立可懂，避免脱离搭配就不清楚的泛化译词；必要时用简短限定词，不列罕见或仅固定搭配才成立的孤立释义。',
         '每项另提供usageNote：全中文的简短用法提示，最多60字，解释这个意思指什么、与相近义项有何不同。不要重复中文释义，不包含英文。',
         '每项提供example和exampleCN：真实自然的英文完整例句（含原词或短语）和准确中文翻译，体现该义项与相近义项的区别。不使用占位句或定义模板；无法确定自然用法时省略例句。',
@@ -57,6 +58,15 @@ async function lookupDictionarySenses(word, { request = requestChineseSenses } =
         let parsed;
         try { parsed = JSON.parse(String(raw).replace(/^```(?:json)?\s*|\s*```$/gi, '').trim()); } catch { continue; }
         if (Array.isArray(parsed) && !parsed.length) throw new Error('DICTIONARY_SENSES_NOT_FOUND');
+        if (typeof parsed?.suggestedWord === 'string') {
+            const candidate = parsed.suggestedWord.trim();
+            if (!allowSuggestion || candidate.toLowerCase() === normalized || candidate.length > 80
+                || !/^[a-z]+(?:[ '-][a-z]+)*$/i.test(candidate)) throw new Error('DICTIONARY_SENSES_NOT_FOUND');
+            const senses = await lookupDictionarySenses(candidate, { request, allowSuggestion: false });
+            throw Object.assign(new Error('DICTIONARY_SPELLING_SUGGESTION'), {
+                code: 'DICTIONARY_SPELLING_SUGGESTION', suggestion: { word: candidate, senses },
+            });
+        }
         const senses = normalizeDictionarySenses(parsed, normalized);
         if (senses.length) return senses;
     }

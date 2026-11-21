@@ -381,11 +381,22 @@ function createApp({
             try {
                 const word = String(req.query.word || '').trim();
                 if (!word) return res.status(400).json({ error: '缺少单词' });
-                const senses = await lookupDictionarySenses(word);
                 const user = req.wordbotSession?.user;
-                res.json({ word, senses: senses.map(sense => user
-                    ? { ...sense, selectionToken: issueSenseSelection(word, sense, user) } : sense) });
+                const offer = (headword, senses) => senses.map(sense => user
+                    ? { ...sense, selectionToken: issueSenseSelection(headword, sense, user) } : sense);
+                try {
+                    const senses = await lookupDictionarySenses(word);
+                    return res.json({ word, senses: offer(word, senses) });
+                } catch (error) {
+                    if (error.code !== 'DICTIONARY_SPELLING_SUGGESTION') throw error;
+                    const suggestion = error.suggestion;
+                    return res.json({ word, senses: [], suggestion: { word: suggestion.word,
+                        senses: offer(suggestion.word, suggestion.senses) } });
+                }
             } catch (error) {
+                if (error.message === 'DICTIONARY_SENSES_NOT_FOUND') {
+                    return res.status(404).json({ code: error.message, error: '未找到可靠的词义或拼写建议，请检查输入' });
+                }
                 const status = isClientError(error) || error.message === 'DICTIONARY_WORD_REQUIRED' ? 400 : 502;
                 res.status(status).json({ error: error.message });
             }
